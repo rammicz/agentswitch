@@ -2,7 +2,7 @@
 
 ## Boundaries
 
-The CLI coordinates a session catalog, query service, terminal UI, continuation planner, handoff builder, delivery journal, and provider adapters. The scaffold implements shared types, synthetic search and a picker with injected asynchronous query, lazy preview and continuation preparation services. Fixture-tested read-only Codex and Claude Code adapters exist separately. A private persistent query component is also available; CLI integration, real continuation planning and launch are pending. The default CLI still prints scaffold help; `--demo` supplies only synthetic services.
+The CLI coordinates a session catalog, query service, terminal UI, continuation planner, handoff builder, delivery journal, and provider adapters. The scaffold implements shared types, synthetic search and a picker with injected asynchronous query, lazy preview and continuation preparation services. Fixture-tested read-only Codex and Claude Code adapters exist separately. A private persistent query component is also available. A separate [runtime component](runtime.md) implements pinned continuation planning and inherited-terminal launch against offline fake providers; CLI composition and durable delivery remain pending. The default CLI still prints scaffold help; `--demo` supplies only synthetic services.
 
 TypeScript on Node >=22.15 keeps installation straightforward for CLI users while allowing native subprocess launch. Avoid runtime dependencies until a concrete feature warrants them.
 

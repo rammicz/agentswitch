@@ -4,7 +4,7 @@
 
 Find a coding conversation, choose the agent you want to continue with, and get back to work. The first target is **Codex ↔ Claude Code**: when one quota runs out, your task should not have to start over.
 
-> **Status: early development scaffold.** The CLI, shared types, in-memory search, a private persistent search component, injected-service picker, and an interactive demo exist. Read-only Codex and Claude Code readers have offline compatibility fixtures. CLI integration, native resume, and cross-agent handoffs are tracked in [GitHub Issues](https://github.com/rammicz/agentswitch/issues). The default CLI does not yet use native readers or launch providers. The package has not been published to npm.
+> **Status: early development scaffold.** The CLI, shared types, in-memory search, a private persistent search component, injected-service picker, and an interactive demo exist. Read-only Codex and Claude Code readers have offline compatibility fixtures. A separately tested [interactive runtime component](docs/runtime.md) supports pinned launch planning with bounded user prompts and fake-provider PTY checks. CLI integration and cross-agent handoffs are tracked in [GitHub Issues](https://github.com/rammicz/agentswitch/issues). The default CLI does not yet use native readers or launch providers. The package has not been published to npm.
 
 ## The intended experience
 
@@ -122,6 +122,7 @@ src/domain.ts        Sessions, history items, queries, handoff state
 src/adapters/        Read-only Codex/Claude readers, contract and planned agent catalog
 src/search.ts        In-memory demo search baseline
 src/search-index.ts  Private persistent offline query component
+src/runtime.ts       Pinned planner and inherited-terminal launch component
 src/tui/             Synthetic data and keyboard interaction prototype
 test/                Search, CLI, offline PTY and terminal lifecycle checks
 docs/                Architecture, research references, contribution guidance

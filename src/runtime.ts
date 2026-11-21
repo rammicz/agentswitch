@@ -1,0 +1,259 @@
+import { spawn, spawnSync } from 'node:child_process';
+import { constants } from 'node:fs';
+import { access, realpath, stat } from 'node:fs/promises';
+import { delimiter, isAbsolute, join } from 'node:path';
+import type { AgentId } from './domain.js';
+import type { ContinuationRequest, PreparedContinuation, SessionSource } from './tui/contracts.js';
+
+/** Conservative transport limit, not a model context window or an OS argv guarantee. */
+export const MAX_INITIAL_PROMPT_BYTES = 16 * 1024;
+export class RuntimeError extends Error {
+  constructor(readonly code: string, message: string) { super(message); this.name = 'RuntimeError'; }
+}
+export interface RuntimeSource extends SessionSource {
+  workspace: string;
+  /** Supplied by the trusted adapter/catalog, never by the picker choice. */
+  nativeResume: 'compatible' | 'incompatible' | 'unknown';
+}
+/** #8 supplies the complete serialized user prompt, including the distinct current request. */
+export interface PreparedPrompt {
+  prompt: string;
+  includedItemIds: readonly string[];
+  omittedItemIds: readonly string[];
+}
+export interface RuntimeInput {
+  mode?: 'auto' | 'fresh';
+  handoff?: PreparedPrompt;
+  /** Native resume receives only this new request, never replayed history. */
+  currentRequest?: string;
+}
+export interface OwnedSessionGuard {
+  check(source: SessionSource): 'idle' | 'active' | 'unknown';
+  /** Must acquire atomically or throw. Release only this acquisition. */
+  acquire(source: SessionSource): () => void;
+}
+/** Detects this runtime's writers only; not arbitrary external native clients. */
+export function createOwnedSessionGuard(): OwnedSessionGuard {
+  const owned = new Set<string>();
+  const key = (source: SessionSource) => JSON.stringify([source.agent, source.nativeId]);
+  return {
+    check: source => owned.has(key(source)) ? 'active' : 'idle',
+    acquire(source) {
+      const id = key(source);
+      if (owned.has(id)) throw new RuntimeError('ACTIVE_SESSION', 'Native session is active in this runtime. Stop its owner or explicitly choose a fresh handoff.');
+      owned.add(id);
+      let released = false;
+      return () => { if (!released) { released = true; owned.delete(id); } };
+    },
+  };
+}
+const processOwnedSessionGuard = createOwnedSessionGuard();
+let terminalOwned = false;
+
+export interface RuntimeOptions {
+  executables?: Partial<Record<AgentId, string>>;
+  /** Defaults to native inherited environment. Values are never included in diagnostics. */
+  env?: NodeJS.ProcessEnv;
+  getSource(source: SessionSource, signal?: AbortSignal): Promise<RuntimeSource>;
+  guard?: OwnedSessionGuard;
+  promptByteLimit?: number;
+  probeTimeoutMs?: number;
+}
+export interface LaunchPlan {
+  readonly mode: 'native-resume' | 'fresh-handoff';
+  readonly target: AgentId;
+  readonly executable: string;
+  readonly args: readonly string[];
+  readonly workspace: string;
+  readonly version: string;
+}
+export interface LaunchResult {
+  launched: true;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  /** Process exit is not an acknowledgment of history consumption. */
+  consumption: 'unknown';
+  recovery?: string;
+}
+interface Snapshot {
+  source: SessionSource;
+  workspacePath: string;
+  workspaceIdentity: string;
+  executableIdentity: string;
+  used: boolean;
+}
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const fail = (code: string, message: string): never => { throw new RuntimeError(code, message); };
+function cancelled(signal?: AbortSignal): void {
+  if (signal?.aborted) fail('CANCELLED', 'Continuation cancelled before launch.');
+}
+async function directory(path: string): Promise<{ path: string; identity: string }> {
+  try {
+    if (!isAbsolute(path) || path.includes('\0')) throw Error();
+    const canonical = await realpath(path);
+    const info = await stat(canonical);
+    if (!info.isDirectory()) throw Error();
+    await access(canonical, constants.R_OK | constants.X_OK);
+    return { path: canonical, identity: `${info.dev}:${info.ino}` };
+  } catch { return fail('WORKSPACE_UNAVAILABLE', 'Workspace is unavailable or inaccessible. Restore it or explicitly choose a valid override.'); }
+}
+async function executableIdentity(path: string): Promise<string> {
+  try {
+    const info = await stat(path);
+    if (!info.isFile()) throw Error();
+    await access(path, constants.X_OK);
+    return `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+  } catch { return fail('EXECUTABLE_UNAVAILABLE', 'Target executable is unavailable or not executable. Install the target independently and prepare again.'); }
+}
+async function resolveExecutable(command: string, env: NodeJS.ProcessEnv): Promise<string> {
+  if (command.includes('\0')) return fail('EXECUTABLE_UNAVAILABLE', 'Invalid target executable.');
+  const candidates = isAbsolute(command) ? [command] : command.includes('/') ? [] : (env.PATH ?? '').split(delimiter).filter(isAbsolute).map(path => join(path, command));
+  for (const candidate of candidates) {
+    try { const path = await realpath(candidate); await executableIdentity(path); return path; } catch { /* Try the next PATH entry. */ }
+  }
+  return fail('EXECUTABLE_UNAVAILABLE', 'Target executable was not found or is not executable. Install it independently and prepare again.');
+}
+/** Only --version/--help are permitted probes; bound time and combined output. */
+function probe(executable: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, timeout: number, signal?: AbortSignal): Promise<string> {
+  cancelled(signal);
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, args, { cwd, env, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = ''; let bytes = 0; let failure: RuntimeError | undefined;
+    const stop = (error: RuntimeError) => { failure ??= error; child.kill('SIGKILL'); };
+    const abort = () => stop(new RuntimeError('CANCELLED', 'Capability preparation cancelled.'));
+    const timer = setTimeout(() => stop(new RuntimeError('CAPABILITY_TIMEOUT', 'Target capability probe timed out. Check the executable and prepare again.')), timeout);
+    signal?.addEventListener('abort', abort, { once: true });
+    for (const stream of [child.stdout, child.stderr]) stream.on('data', (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > 64 * 1024) stop(new RuntimeError('CAPABILITY_OUTPUT', 'Target capability output exceeds the supported limit.'));
+      else output += chunk.toString('utf8');
+    });
+    child.on('error', () => { failure ??= new RuntimeError('EXECUTABLE_UNAVAILABLE', 'Cannot run target executable. Check installation and permissions, then prepare again.'); });
+    child.on('close', (code, exitSignal) => {
+      clearTimeout(timer); signal?.removeEventListener('abort', abort);
+      if (failure) reject(failure);
+      else if (code !== 0 || exitSignal) reject(new RuntimeError('CAPABILITY_FAILED', 'Target capability probe failed. Check the executable and prepare again.'));
+      else resolve(output.trim());
+    });
+    if (signal?.aborted) abort();
+  });
+}
+async function capabilities(target: AgentId, executable: string, cwd: string, env: NodeJS.ProcessEnv, timeout: number, signal?: AbortSignal): Promise<string> {
+  const version = await probe(executable, ['--version'], cwd, env, timeout, signal);
+  const expected = target === 'codex' ? 'codex-cli 0.171.0' : '2.1.330 (Claude Code)';
+  if (version !== expected) return fail('UNSUPPORTED_VERSION', 'Target version is unsupported. Supported versions: Codex 0.171.0 and Claude Code 2.1.330. Prepare with a tested version.');
+  const help = await probe(executable, ['--help'], cwd, env, timeout, signal);
+  if (target === 'codex') {
+    const resume = await probe(executable, ['resume', '--help'], cwd, env, timeout, signal);
+    if (!help.includes('Usage: codex [OPTIONS] [PROMPT]') || !/--cd\s+<DIR>/.test(help) || !resume.includes('Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]') || !/--cd\s+<DIR>/.test(resume))
+      return fail('UNSUPPORTED_CAPABILITY', 'Codex interactive prompt, resume or workspace capability is missing.');
+  } else if (!/Usage: claude \[options\](?: \[command\])? \[prompt\]/.test(help) || !/--resume\s+\[value\]/.test(help)) {
+    return fail('UNSUPPORTED_CAPABILITY', 'Claude interactive prompt or exact resume capability is missing.');
+  }
+  return expected;
+}
+function available(guard: OwnedSessionGuard, source: SessionSource): void {
+  const state = guard.check(source);
+  if (state !== 'idle') fail(state === 'active' ? 'ACTIVE_SESSION' : 'UNKNOWN_OWNER', `Native session ownership is ${state}. Stop the owner or explicitly choose a fresh handoff; no takeover was attempted.`);
+}
+function terminalState(): string {
+  // stty is a system utility on supported Linux/macOS hosts; argv is constant, no shell.
+  const result = spawnSync('stty', ['-g'], { stdio: [0, 'pipe', 'ignore'], encoding: 'utf8', timeout: 1000, maxBuffer: 4096 });
+  if (result.status !== 0 || !result.stdout.trim()) return fail('TERMINAL_STATE', 'Cannot snapshot terminal state with stty. Check terminal availability before launching.');
+  return result.stdout.trim();
+}
+
+export function createRuntime(options: RuntimeOptions) {
+  const env = { ...(options.env ?? process.env) };
+  const guard = options.guard ?? processOwnedSessionGuard;
+  const limit = options.promptByteLimit ?? MAX_INITIAL_PROMPT_BYTES;
+  const timeout = options.probeTimeoutMs ?? 2000;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_INITIAL_PROMPT_BYTES) fail('INVALID_LIMIT', 'Prompt byte limit must be between 1 and 16384.');
+  if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 10000) fail('INVALID_LIMIT', 'Probe timeout must be between 1 and 10000 milliseconds.');
+  const snapshots = new WeakMap<LaunchPlan, Snapshot>();
+  return {
+    async prepare(request: ContinuationRequest, input: RuntimeInput = {}, signal?: AbortSignal): Promise<PreparedContinuation<LaunchPlan>> {
+      cancelled(signal);
+      const source = await options.getSource(request.source, signal);
+      if (source.id !== request.source.id || source.nativeId !== request.source.nativeId || source.agent !== request.source.agent)
+        return fail('SOURCE_IDENTITY', 'Source identity changed. Refresh the catalog and prepare again.');
+      if (!['codex', 'claude'].includes(request.target) || !['codex', 'claude'].includes(source.agent)) return fail('UNSUPPORTED_TARGET', 'Unsupported source or target agent.');
+      if (!['source', 'override'].includes(request.workspace.kind)) return fail('WORKSPACE_CHOICE', 'An explicit source or override workspace choice is required.');
+      const workspace = await directory(request.workspace.path);
+      if (request.workspace.kind === 'source' && workspace.path !== (await directory(source.workspace)).path)
+        return fail('WORKSPACE_CHOICE', 'Workspace does not match the recorded source workspace. Choose an explicit override.');
+      if (input.mode !== undefined && !['auto', 'fresh'].includes(input.mode)) return fail('INVALID_MODE', 'Continuation mode must be auto or explicitly fresh.');
+      const native = source.agent === request.target && input.mode !== 'fresh';
+      if (native && !uuid.test(source.nativeId)) return fail('INVALID_NATIVE_ID', 'Native resume requires the exact source UUID. Refresh or explicitly choose a fresh handoff.');
+      if (native && source.nativeResume !== 'compatible') return fail('INCOMPATIBLE_NATIVE', 'Native session compatibility is unavailable. Explicitly choose a fresh handoff or use the native client.');
+      if (native) available(guard, source);
+      if (!native && !input.handoff) return fail('HANDOFF_REQUIRED', 'A prepared historical user prompt and distinct current request are required for a fresh handoff.');
+      const prompt = native ? input.currentRequest ?? '' : input.handoff!.prompt;
+      if (prompt.includes('\0')) return fail('INVALID_PROMPT', 'Initial user prompt contains NUL and cannot be transported.');
+      if (Buffer.byteLength(prompt, 'utf8') > limit) return fail('PROMPT_TOO_LARGE', `Complete initial user prompt exceeds the ${limit} byte transport limit. Reduce the prepared selection before confirming.`);
+      const executable = await resolveExecutable(options.executables?.[request.target] ?? request.target, env);
+      const identity = await executableIdentity(executable);
+      const version = await capabilities(request.target, executable, workspace.path, env, timeout, signal);
+      if (await executableIdentity(executable) !== identity) return fail('EXECUTABLE_CHANGED', 'Target executable changed during preparation. Prepare and confirm again.');
+      cancelled(signal);
+      const args = request.target === 'codex'
+        ? native ? ['resume', '-C', workspace.path, '--', source.nativeId, ...(prompt ? [prompt] : [])] : ['-C', workspace.path, '--', prompt]
+        : native ? [`--resume=${source.nativeId}`, ...(prompt ? ['--', prompt] : [])] : ['--', prompt];
+      const plan: LaunchPlan = Object.freeze({ mode: native ? 'native-resume' : 'fresh-handoff', target: request.target, executable, args: Object.freeze(args), workspace: workspace.path, version });
+      const identitySource = Object.freeze({ id: source.id, agent: source.agent, nativeId: source.nativeId });
+      snapshots.set(plan, { source: identitySource, workspacePath: request.workspace.path, workspaceIdentity: workspace.identity, executableIdentity: identity, used: false });
+      return { plan, summary: { source: identitySource, target: request.target, mode: plan.mode, workspace: plan.workspace,
+        includedItemIds: native ? [] : [...input.handoff!.includedItemIds], omittedItemIds: native ? [] : [...input.handoff!.omittedItemIds] } };
+    },
+    async launch(plan: LaunchPlan, { signal }: { signal?: AbortSignal } = {}): Promise<LaunchResult> {
+      cancelled(signal);
+      const snapshot = snapshots.get(plan);
+      if (!snapshot || snapshot.used) return fail('INVALID_PLAN', 'Expected an unused plan prepared by this runtime. Prepare and confirm again; never blindly retry delivery.');
+      const workspace = await directory(snapshot.workspacePath);
+      if (workspace.path !== plan.workspace || workspace.identity !== snapshot.workspaceIdentity) return fail('WORKSPACE_CHANGED', 'Workspace changed since confirmation. Prepare and confirm again.');
+      if (await executableIdentity(plan.executable) !== snapshot.executableIdentity) return fail('EXECUTABLE_CHANGED', 'Target executable changed since preparation. Prepare and confirm again.');
+      cancelled(signal);
+      if (plan.mode === 'native-resume') available(guard, snapshot.source);
+      if (!process.stdin.isTTY || !process.stdout.isTTY || !process.stderr.isTTY || process.stdin.isRaw)
+        return fail('TERMINAL_REQUIRED', 'Launch requires inherited stdin/stdout/stderr terminals after picker cleanup.');
+      if (terminalOwned) return fail('TERMINAL_BUSY', 'Another interactive child owns this process terminal. Wait for it to finish before launching.');
+      const state = terminalState();
+      terminalOwned = true;
+      let releaseNative: () => void;
+      try { releaseNative = plan.mode === 'native-resume' ? guard.acquire(snapshot.source) : () => {}; }
+      catch (error) { terminalOwned = false; throw error; }
+      const release = () => { try { releaseNative(); } finally { terminalOwned = false; } };
+      if (signal?.aborted) { release(); return fail('CANCELLED', 'Continuation cancelled before launch.'); }
+      snapshot.used = true;
+      return new Promise<LaunchResult>((resolve, reject) => {
+        let child: ReturnType<typeof spawn>;
+        try { child = spawn(plan.executable, [...plan.args], { cwd: plan.workspace, env, shell: false, stdio: 'inherit' }); }
+        catch { release(); return reject(new RuntimeError('LAUNCH_FAILED', 'Target launch failed before process creation. Check installation, workspace and OS argument limits; prepare again.')); }
+        let launched = false; let error = false;
+        const timers = new Set<ReturnType<typeof setTimeout>>();
+        const forward = (name: NodeJS.Signals, delay = 75) => {
+          // Foreground Ctrl+C already reaches both processes. Give native exit priority.
+          const timer = setTimeout(() => { timers.delete(timer); if (child.exitCode === null && child.signalCode === null) child.kill(name); }, delay);
+          timers.add(timer);
+        };
+        const interrupt = () => forward('SIGINT');
+        const terminate = () => forward('SIGTERM');
+        const abort = () => forward('SIGTERM', 0);
+        process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
+        signal?.addEventListener('abort', abort, { once: true });
+        child.on('spawn', () => { launched = true; if (signal?.aborted) abort(); });
+        child.on('error', () => { error = true; });
+        child.on('close', (code, exitSignal) => {
+          for (const timer of timers) clearTimeout(timer);
+          process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate);
+          signal?.removeEventListener('abort', abort); release();
+          const restored = spawnSync('stty', [state], { stdio: [0, 'ignore', 'ignore'], timeout: 1000 }).status === 0;
+          process.stdout.write('\x1b[?25h\x1b[?1049l');
+          if (!restored) return reject(new RuntimeError('TERMINAL_RESTORE', 'Target stopped but terminal restoration failed. Restore your terminal manually; delivery remains uncertain.'));
+          if (error || !launched) return reject(new RuntimeError('LAUNCH_FAILED', 'Cannot launch target executable. Check installation, permissions, workspace and OS argument limits. No automatic retry was attempted.'));
+          resolve({ launched: true, code, signal: exitSignal, consumption: 'unknown', ...((code !== 0 || exitSignal) ? { recovery: 'Read the native diagnostic above. Check target authentication and workspace access in its own client; confirm delivery before any retry.' } : {}) });
+        });
+      });
+    },
+  };
+}
