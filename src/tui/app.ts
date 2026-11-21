@@ -10,13 +10,24 @@ export type * from './contracts.js';
 const filters = ['all', 'codex', 'claude'] as const;
 const targets: readonly AgentId[] = ['codex', 'claude'];
 const sourceOf = ({ id, nativeId, agent }: SessionHit): SessionSource => ({ id, nativeId, agent });
-// Strip complete escape sequences as well as remaining controls from all untrusted text.
-const clean = (text: string): string => text.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
-  .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
+// Untrusted controls stay visible as text and never reach the terminal as instructions.
+const clean = (text: string): string => text.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]|\p{Bidi_Control}/gu,
+  character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
 const wrap = (lines: readonly string[], width: number): string[] => lines.flatMap(line => {
-  const characters = Array.from(clean(line));
+  // Count every non-ASCII code point conservatively as two terminal cells. This
+  // overestimates combining/ZWJ sequences rather than allowing terminal overflow.
+  // Exact wire previews are JSON strings with unsafe controls visibly escaped.
+  const characters = Array.from(clean(line)).flatMap(character => width === 1 && character.codePointAt(0)! > 0x7f
+    ? Array.from(JSON.stringify(character).slice(1, -1).replace(/[^\x20-\x7e]/g,
+      unit => `\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`)) : [character]);
   const chunks: string[] = [];
-  do { chunks.push(characters.splice(0, width).join('')); } while (characters.length);
+  let chunk = ''; let cells = 0;
+  for (const character of characters) {
+    const size = character.codePointAt(0)! > 0x7f ? 2 : 1;
+    if (cells + size > width) { chunks.push(chunk); chunk = ''; cells = 0; }
+    chunk += character; cells += size;
+  }
+  chunks.push(chunk);
   return chunks;
 });
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -125,7 +136,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     const lines = [options.label ?? 'agentswitch', `Search: ${query.text || 'type to search history…'}`,
       `← → Agent: ${query.agent}     Tab Scope: ${query.scope}`, '', ...body, '',
       busy ? 'Loading… · Esc back' : footer, [...(options.notices?.() ?? []), notice].filter(Boolean).join(' · ') + (retry ? (stage === 'list' ? ' · Ctrl+R retry' : ' · R retry') : '')];
-    output.write('\x1b[2J\x1b[H' + lines.slice(0, height).map(line => clean(line).slice(0, width)).join('\n'));
+    output.write('\x1b[2J\x1b[H' + lines.slice(0, height).map(line => wrap([line], width)[0]!).join('\n'));
   };
   const redraw = (): void => { try { draw(); } catch (error) { finish(error); } };
   const request = <T>(work: (signal: AbortSignal) => Promise<T>, accept: (value: T) => void, again: () => void): void => {

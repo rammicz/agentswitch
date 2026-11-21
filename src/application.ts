@@ -36,6 +36,9 @@ export async function applicationPaths(env: NodeJS.ProcessEnv=process.env): Prom
 interface SourceSnapshot { runtime: RuntimeSource; items: readonly HistoryItem[]; complete: boolean; fingerprint: string; sourceKey: string }
 interface Dispatch { launch: LaunchPlan; handoff: HandoffPlan | null; intent: TransferIntent; fingerprint: string; source: SessionSource }
 export interface ApplicationOptions { workspace: string; scope?: Scope; env?: NodeJS.ProcessEnv; retry?: string }
+// A JSON string gives an unambiguous, lossless representation even when the wire
+// contains controls or ambiguous-width Unicode. JSON.parse reconstructs the exact bytes.
+const encodedPrompt=(prompt:string):string=>JSON.stringify(prompt).replace(/[\x7f-\x9f\u2028\u2029]|\p{Bidi_Control}/gu,unit=>`\\u${unit.charCodeAt(0).toString(16).padStart(4,'0')}`);
 const publicIdentity=(source:SessionSource):SessionSource=>({agent:source.agent,id:source.id,nativeId:source.nativeId});
 
 /** Real native readers, index, reusable picker, pure consent preview, journal and runtime. */
@@ -99,7 +102,10 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
           'Hidden reasoning, credentials and native permissions do not transfer. No historical commands are replayed.',
           'Process launch/exit is not proof of prompt consumption. Delivery remains uncertain without a trusted receipt.',
           `Archive: ${handoff?handoff.prepared.archive.directory+'/'+handoff.prepared.archive.id:'none (native resume sends only the new request)'}`,
-          `Exact ${fresh?'initial user prompt':'current request'} (${Buffer.byteLength(prompt)} UTF-8 bytes):`,prompt,
+          `Exact ${fresh?'initial user prompt':'current request'} (${Buffer.byteLength(prompt)} UTF-8 bytes):`,
+          'Preview is a JSON string: decode once for the exact wire value.',
+          'Unsafe controls are escaped; printable Unicode stays visible.',
+          'BEGIN EXACT PROMPT JSON STRING',encodedPrompt(prompt),'END EXACT PROMPT JSON STRING',
         ]}};
       },
       continue:async dispatch=>{

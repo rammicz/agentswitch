@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, stat, rename, symlink, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, stat, rename, symlink, access, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -26,8 +26,8 @@ async function setup(target='claude') {
  const env={CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:state,RUNTIME_TARGET:target,RUNTIME_LOG:join(root,'launches'),RUNTIME_SCENARIO:'interactive',PATH:bin+':'+process.env.PATH,NODE_NO_WARNINGS:'1'};
  return {root,cwd,other,child,codex,claude,state,files,env,before:await Promise.all(files.map(hash))};
 }
-function pty(f,actions,args=[]) {
- const child=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args}),timeout:40000,maxBuffer:8*1024*1024});
+function pty(f,actions,args=[],terminal={}) {
+ const child=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,...terminal}),timeout:40000,maxBuffer:8*1024*1024});
  assert.equal(child.status,0,child.stderr);return JSON.parse(child.stdout);
 }
 const list=[{wait:'Enter preview'}];
@@ -43,11 +43,11 @@ for(const [source,target]of [['codex','claude'],['claude','codex']]) test(`real 
  assert.equal(result.code,0);assert.equal(result.restored,true);assert.equal(result.sampledWhileAlive,true);
  assert.match(result.output,/under its own account and data policies/);
  const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());
- assert.equal(launch.cwd,f.cwd);assert.deepEqual(launch.tty,[true,true,true]);
+ assert.equal(launch.cwd,await realpath(f.cwd));assert.deepEqual(launch.tty,[true,true,true]);
  const prompt=launch.args.at(-1);const parsed=JSON.parse(prompt);
  assert.equal(parsed.currentRequest,'Do next [REDACTED]');assert.equal(parsed.history.length,2);assert.match(parsed.history[0].text,/\[REDACTED\]/);assert.doesNotMatch(prompt,/NEEDLE_SECRET/);
  // With a tall PTY the compact exact JSON prompt is on the final preview screen.
- assert.ok(result.output.replace(/\r?\n/g,'').includes(prompt),'target receives the exact previewed JSON');
+ assert.ok(result.output.replace(/\r?\n/g,'').includes(JSON.stringify(prompt)),'target receives the exact previewed JSON');
  assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
  const records=JSON.parse(spawnSync(process.execPath,[join(repo,'dist/cli.js'),'transfers','list'],{env:{...process.env,...f.env},encoding:'utf8'}).stdout);
  assert.equal(records.length,1);assert.equal(records[0].state,'uncertain');assert.equal(records[0].targetNativeId,null);assert.equal(records[0].writer,'stopped');
@@ -60,7 +60,7 @@ test('same-agent resume receives native UUID plus only current request',async()=
  const [result]=pty(f,[...list,...select('codex'),...request,...redact,{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
  assert.equal(result.restored,true);
  const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());
- assert.deepEqual(launch.args,['resume','-C',f.cwd,'--',codexIds[0],'Do next [REDACTED]']);
+ assert.deepEqual(launch.args,['resume','-C',await realpath(f.cwd),'--',codexIds[0],'Do next [REDACTED]']);
  assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
 });
 
@@ -109,7 +109,7 @@ test('deliberate recovery is a new confirmed fresh attempt; abort/delete removes
 test('real picker folder scope is exact; global message search defaults to the recorded source workspace',async()=>{
  const f=await setup();
  const [result]=pty(f,[...list,{send:'other-folder-only'},{wait:'Enter preview'},{send:'\t'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\u001b[C'},{wait:'Target: claude'},...finish]);
- const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());assert.equal(launch.cwd,f.other);
+ const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());assert.equal(launch.cwd,await realpath(f.other));
  const initial=result.output.slice(0,result.output.indexOf('other-folder-only'));assert.ok(!initial.includes(codexIds[1]));assert.ok(!initial.includes(codexIds[2]));
  assert.match(result.output,/No matching sessions/);assert.match(result.output,/Scope: global/);assert.equal(JSON.parse(launch.args.at(-1)).history[0].text,'other-folder-only');
 });
@@ -118,7 +118,7 @@ test('source filter and missing recorded workspace require an explicit valid ove
  const f=await setup('codex');const missing=join(f.root,'missing-workspace');
  await writeRollout(f.codex,rollout(missing,codexIds[3],[completed('UserMessage','u','missing source workspace',1)]));
  const [result]=pty(f,[...list,{send:'\u001b[C'},{wait:'Enter preview'},{send:'\t'},{wait:'Enter preview'},{send:'missing source workspace'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\r'},{wait:'Workspace unavailable:'},{send:'w'},{wait:'Explicit workspace override'},{send:f.cwd+'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
- assert.match(result.output,/Agent: codex/);const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());assert.equal(launch.cwd,f.cwd);assert.ok(launch.args.includes(codexIds[3]));
+ assert.match(result.output,/Agent: codex/);const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());assert.equal(launch.cwd,await realpath(f.cwd));assert.ok(launch.args.includes(codexIds[3]));
 });
 
 test('changed executable after preview fails before spawn and retains the consented redacted recovery record',async()=>{
@@ -159,4 +159,26 @@ test('fresh retry of a native-resume attempt rereads source history and never si
  const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));const [prior]=journal.list();journal.close();
  pty(f,[...list,{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},...redact,{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}],['transfers','retry',prior.id]);
  const launches=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(launches.length,2);assert.equal(launches[1].args[0],'-C');const prompt=JSON.parse(launches[1].args.at(-1));assert.equal(prompt.history.length,2);assert.equal(prompt.currentRequest,'Do next [REDACTED]');assert.doesNotMatch(launches[1].args.at(-1),/NEEDLE_SECRET/);
+});
+
+
+test('80-column exact preview reconstructs every wire byte with 400 emoji and safely escaped C1 controls',async()=>{
+ const f=await setup();
+ const original='public source VISIBLE_A\u0085VISIBLE_B '+('😀'.repeat(400))+' literal \\u0085 and escape \u001b[31m Žluťoučký 日本語 \u202e\u200e';
+ await writeRollout(f.codex,rollout(f.cwd,codexIds[0],[completed('UserMessage','u',original,1)]));
+ const [result]=pty(f,[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Mode: fresh-handoff'},{collectPreview:true},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}],[],{columns:80,rows:24});
+ const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());const wire=launch.args.at(-1);
+ const begin=result.preview.indexOf('BEGIN EXACT PROMPT JSON STRING'),end=result.preview.indexOf('END EXACT PROMPT JSON STRING');
+ assert.ok(begin>=0&&end>begin,'the complete encoded prompt must be scrollable through its end marker');
+ const encoded=result.preview.slice(begin+1,end).join('');
+ assert.equal(JSON.parse(encoded),wire);assert.match(encoded,/Žluťoučký 日本語/u);assert.doesNotMatch(result.output,/\x1b\[31m|\p{Bidi_Control}/u);assert.equal(JSON.parse(wire).history[0].text,original);
+ assert.equal((JSON.parse(encoded).match(/😀/gu)??[]).length,400);assert.ok(encoded.includes('\\u0085'));assert.doesNotMatch(encoded,/[\x00-\x1f\x7f-\x9f]/u);assert.doesNotMatch(result.output,/\u0085|\ufffd/u);
+ assert.ok(result.preview.every(row=>row.length<=79),'encoded preview rows fit the actual terminal width');
+});
+
+
+test('native selection through a true workspace alias launches in its canonical directory',async()=>{
+ const f=await setup('codex');const originalWorkspace=f.cwd;const alias=join(f.root,'workspace-alias');await symlink(originalWorkspace,alias,'dir');f.cwd=alias;
+ pty(f,[...list,...select('codex'),{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());assert.equal(launch.cwd,await realpath(alias));assert.notEqual(launch.cwd,alias);assert.equal(launch.args[2],await realpath(originalWorkspace));
 });
