@@ -135,7 +135,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     }
     const lines = [options.label ?? 'agentswitch', `Search: ${query.text || 'type to search history…'}`,
       `← → Agent: ${query.agent}     Tab Scope: ${query.scope}`, '', ...body, '',
-      busy ? 'Loading… · Esc back' : footer, [...(options.notices?.() ?? []), notice].filter(Boolean).join(' · ') + (retry ? (stage === 'list' ? ' · Ctrl+R retry' : ' · R retry') : '')];
+      busy ? 'Loading… · Esc back' : footer, [notice + (retry ? (stage === 'list' ? ' · Ctrl+R retry' : ' · R retry') : ''), ...(options.notices?.() ?? [])].filter(Boolean).join(' · ')];
     output.write('\x1b[2J\x1b[H' + lines.slice(0, height).map(line => wrap([line], width)[0]!).join('\n'));
   };
   const redraw = (): void => { try { draw(); } catch (error) { finish(error); } };
