@@ -1,6 +1,6 @@
 # Bounded public-history handoffs and local archives
 
-These offline components prepare public history for the [runtime](runtime.md). They never invoke a model, provider executable or native-history importer. The default picker is still synthetic; confirmation and the durable launch journal belong to CLI integration.
+These offline components prepare public history for the [runtime](runtime.md). They never invoke a model, provider executable or native-history importer. The default native picker composes these APIs with exact confirmation and a durable journal; see [integration and recovery](integration.md).
 
 ## Preparation and confirmation
 
@@ -31,3 +31,5 @@ Each JSON page defaults to 8,192 bytes and has a 65,536-byte maximum, including 
 Storage uses 0700 directories and 0600 files even under a permissive umask. Existing foreign entries, symbolic-link leaves/files, nonregular files, public permissions and foreign ownership are rejected rather than chmodded or adopted. Existing parent aliases such as macOS `/var` are allowed. Safe random UUIDs are the only archive filename inputs. A private temporary file is fully written and synced, then atomically hard-linked to the exclusive final name without replacing an existing reference. The temporary name is removed and the directory synced before returning. Linux directory fsync is required; macOS tolerates unsupported directory fsync after the file has been synced. Filesystems without hard-link publication fail cleanly. Crashes can leave private `.tmp` files; these are never readable as completed archives.
 
 Deletion removes the chosen archive and its matching temporary crash artifacts; it never recursively removes the caller's directory. Fresh API/CLI reads fail afterward. Already returned data or an in-flight read cannot be recalled, and deletion does not promise physical disk erasure. Delivery journal/lineage cleanup is the integrating caller's responsibility. There is no implicit expiry of references already sent to a target.
+
+The integrated launcher protects a published archive with a durable per-attempt use pin before spawn. `deleteArchive` and the direct CLI refuse pinned references; a normal supervised close releases the pin, while a crashed unknown writer keeps it. Recovery uses a validated redacted snapshot through `readArchiveSnapshot`, never a stored executable launch plan.

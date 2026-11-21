@@ -4,7 +4,7 @@
 
 Find a coding conversation, choose the agent you want to continue with, and get back to work. The first target is **Codex ↔ Claude Code**: when one quota runs out, your task should not have to start over.
 
-> **Status: early development scaffold.** The CLI, shared types, in-memory search, a private persistent search component, injected-service picker, and an interactive demo exist. Read-only Codex and Claude Code readers have offline compatibility fixtures. A separately tested [interactive runtime component](docs/runtime.md) supports pinned launch planning with bounded user prompts and fake-provider PTY checks. A [bounded handoff/archive component](docs/handoff.md) provides redacted preparation and explicit local retrieval commands. CLI integration and cross-agent handoffs are tracked in [GitHub Issues](https://github.com/rammicz/agentswitch/issues). The default CLI does not yet use native readers or launch providers. The package has not been published to npm.
+> **Status: early integration.** The default terminal CLI now reads supported local Codex/Claude sessions, searches public text and offers confirmed native resume or a fresh cross-agent handoff. Private archives and a durable delivery journal support explicit recovery. Offline PTY tests use fake providers; real provider consumption is not certified. See [native integration and recovery](docs/integration.md). The package has not been published to npm.
 
 ## The intended experience
 
@@ -31,7 +31,7 @@ Search: fix the retry logic
 
 The picker is inspired by native resume commands, with one shared view across agents. Source filtering and target selection are separate: finding a Codex session should still let you continue it in Claude Code.
 
-## Try the scaffold today
+## Try it locally
 
 Requires Node.js **22.15 or later** and npm. Linux and macOS are the initial platform targets; Windows support needs validation. The demo does not require either agent.
 
@@ -47,7 +47,7 @@ agentswitch --demo
 agentswitch --demo --global
 ```
 
-`npm link` installs the local development command. You can also run `node dist/cli.js --demo` without linking. Use `npm uninstall -g agentswitch` to remove the link. Running `agentswitch` without options currently prints the scaffold status and help.
+`npm link` installs the local development command. You can also run `node dist/cli.js --demo` without linking. Use `npm uninstall -g agentswitch` to remove the link. Running `agentswitch` without options opens the native picker in an interactive terminal. Set `CODEX_HOME`, `CODEX_SQLITE_HOME`, `CLAUDE_CONFIG_DIR` or `AGENTSWITCH_STATE_DIR` to choose isolated roots; see [integration and recovery](docs/integration.md).
 
 The demo uses three synthetic sessions, including one in a different workspace. It reads no agent history, writes no history store, makes no network or model calls, and launches no agent.
 
@@ -62,13 +62,13 @@ The demo uses three synthetic sessions, including one in a different workspace. 
 | Esc | Exit | Return to previous view |
 | Ctrl+C | Exit | Exit |
 
-The demo uses the same injected-service picker as future integrations. Its final summary is synthetic; confirming exits with a demo notice and **does not transfer a conversation**. A global selection starts with its recorded folder. Missing folders require an explicit valid override before preparing the summary.
+The demo uses the same injected-service picker as the native integration. Its final summary is synthetic; confirming exits with a demo notice and **does not transfer a conversation**. A global selection starts with its recorded folder. Missing folders require an explicit valid override before preparing the summary.
 
 ## What “transfer” means
 
 Agents have different private session formats, tool protocols, and permission models. A handoff cannot promise identical runtime state.
 
-The planned first release will:
+The fresh-context handoff flow will:
 
 1. Read public conversation content from the source agent without rewriting its native session files.
 2. Normalize messages, paths, plans, and relevant tool outcomes with source attribution.
@@ -80,7 +80,7 @@ Same-agent continuation will use native resume when supported. Cross-agent conti
 
 Hidden reasoning, live processes, in-flight tool calls, authentication, permissions, and model internals do not transfer. Context limits may require omitting whole messages. Conversation text is historical data; it must not become system instructions or replay old commands. Code changes remain on disk: switching agents does not move a checkout, copy files, or recreate another workspace.
 
-For a global result, the planned default is its recorded source workspace. The picker must show that path and require an explicit choice before using a different folder. Missing folders and active sessions need clear recovery paths.
+For a global result, the default is its recorded source workspace. The picker must show that path and require an explicit choice before using a different folder. Missing folders and active sessions need clear recovery paths.
 
 ## Privacy and agent access
 
@@ -88,7 +88,7 @@ The design is local first. Session reading and indexing should require no model 
 
 Codex and Claude Code will need to be installed and authenticated independently for real continuation. agentswitch will not pool quotas, copy credentials, or bypass provider limits. Each target keeps its normal workspace instructions and approval behavior.
 
-The programmatic readers accept explicit native roots; see [Codex reader](docs/codex-reader.md) and [Claude Code reader](docs/claude-reader.md). The [programmatic search index](docs/search-index.md) supports private persistence, refresh, derived-session deletion, full rebuild and purge over explicitly configured adapters. The [handoff component](docs/handoff.md) supports explicit public-text redaction before preparation and private archive retention; interactive integration remains planned. The scaffold has no telemetry. Only the explicit archive utility accesses a caller-selected application data directory.
+The programmatic readers accept explicit native roots; see [Codex reader](docs/codex-reader.md) and [Claude Code reader](docs/claude-reader.md). The [programmatic search index](docs/search-index.md) supports private persistence, refresh, derived-session deletion, full rebuild and purge over explicitly configured adapters. The [handoff component](docs/handoff.md) supports explicit public-text redaction before preparation and private archive retention; the native CLI previews and confirms the exact payload before publication. The CLI has no telemetry. Native discovery indexes public text under the private application state directory; approved transfers use separate archives and a durable journal.
 
 ## Roadmap
 
@@ -117,9 +117,9 @@ The offline PTY tests require Python 3 with its standard library on Linux or mac
 There are no runtime npm dependencies. TypeScript and Node type definitions are development dependencies.
 
 ```text
-src/cli.ts           CLI entry point and honest scaffold status
+src/cli.ts           CLI entry point, native picker and explicit recovery commands
 src/domain.ts        Sessions, history items, queries, handoff state
-src/adapters/        Read-only Codex/Claude readers, contract and planned agent catalog
+src/adapters/        Read-only Codex/Claude readers and adapter contracts
 src/search.ts        In-memory demo search baseline
 src/search-index.ts  Private persistent offline query component
 src/runtime.ts       Pinned planner and inherited-terminal launch component
@@ -137,3 +137,5 @@ See [architecture](docs/architecture.md), [research notes](docs/research.md), an
 The handoff architecture draws on a supplied source investigation of [T3 Code](https://github.com/pingdotgg/t3code), particularly canonical history, deterministic message selection, and durable delivery state. [Research notes](docs/research.md) pin the inspected revision and distinguish source evidence from future agentswitch behavior. No upstream implementation code is bundled.
 
 [MIT](LICENSE).
+
+The native picker also offers **C** to edit the current request, **X** to add a literal redaction, and **F** to choose a fresh context. Review the exact final prompt before confirming. Use `agentswitch transfers list|show|retry|abort|delete` for deliberate recovery, and `agentswitch cache purge` to remove derived search data separately. A provider exit leaves delivery uncertain without a trusted consumption receipt.

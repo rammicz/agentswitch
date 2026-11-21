@@ -9,7 +9,7 @@ else if(args.includes('--help'))console.log(claude?'Usage: claude [options] [com
  : 'Usage: codex [OPTIONS] [PROMPT]\n-C, --cd <DIR>');
 else {
  const scenario=process.env.RUNTIME_SCENARIO;
- appendFileSync(process.env.RUNTIME_LOG,JSON.stringify({args,cwd:process.cwd(),tty:[process.stdin.isTTY,process.stdout.isTTY,process.stderr.isTTY]})+'\n');
+ appendFileSync(process.env.RUNTIME_LOG,JSON.stringify({pid:process.pid,args,cwd:process.cwd(),tty:[process.stdin.isTTY,process.stdout.isTTY,process.stderr.isTTY]})+'\n');
  console.log('CHILD '+JSON.stringify({tty:[process.stdin.isTTY,process.stdout.isTTY,process.stderr.isTTY],raw:process.stdin.isRaw===true}));
  if(scenario==='auth'){console.error('SYNTHETIC AUTH REFUSAL: authenticate independently');process.exit(1);}
  else if(scenario==='exit7'||scenario==='overlap')process.exit(7);

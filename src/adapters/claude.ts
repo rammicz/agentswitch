@@ -145,10 +145,13 @@ export class ClaudeSessionAdapter implements SessionAdapter {
     return [...sessions.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
   }
   async readHistory(nativeId: string): Promise<readonly HistoryItem[]> { return (await this.readHistoryDetailed(nativeId)).items; }
-  readHistoryDetailed(nativeId: string): Promise<ClaudeHistory> {
+  readHistoryDetailed(nativeId: string): Promise<ClaudeHistory> { return this.readDetailed(nativeId, true); }
+  /** Read the preceding catalog generation without rescanning sibling sessions. For refresh composition only. */
+  readCatalogHistoryDetailed(nativeId: string): Promise<ClaudeHistory> { return this.readDetailed(nativeId, false); }
+  private readDetailed(nativeId: string, rediscover: boolean): Promise<ClaudeHistory> {
     return this.run(async () => {
       const discovery = this.context();
-      await this.catalog(discovery);
+      if (rediscover) await this.catalog(discovery);
       const ctx = discovery.fork();
       const file = this.selected.get(nativeId.toLowerCase());
       if (!file) { ctx.add('selected-rollout-unavailable'); return { items: [], complete: false, diagnostics: ctx.diagnostics }; }

@@ -1,0 +1,73 @@
+import { realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { CodexSessionAdapter, ClaudeSessionAdapter } from './adapters/index.js';
+import type { CodexDiagnostic, CodexHistory, CodexSession, ClaudeSession } from './adapters/index.js';
+import type { AgentId, HistoryItem, Session } from './domain.js';
+import type { SessionSource } from './tui/contracts.js';
+import { SearchIndex } from './search-index.js';
+import type { RuntimeSource } from './runtime.js';
+import { digest } from './transfer-journal.js';
+
+const agents: readonly AgentId[] = ['codex','claude'];
+const canonical = async (path: string): Promise<string> => realpath(resolve(path)).catch(()=>resolve(path));
+const harmless = new Set(['workspace-unavailable','metadata-unavailable','metadata-schema','metadata-unstable','untested-producer']);
+export interface NativeSnapshot { session: CodexSession | ClaudeSession; history: CodexHistory; fingerprint: string; runtime: RuntimeSource; sourceKey: string }
+
+/** Captures native quality before committing generations; healthy siblings remain searchable. */
+export class NativeCatalog {
+  private readonly diagnostics: Record<AgentId, CodexDiagnostic[]> = {codex:[],claude:[]};
+  private readonly warnings: Record<AgentId,string> = {codex:'',claude:''};
+  private readonly adapters: { codex: CodexSessionAdapter; claude: ClaudeSessionAdapter };
+  private readonly staged = new Map<AgentId, Map<string,Session>>();
+  private constructor(private readonly roots: Record<AgentId,string>, private readonly rootKeys: Record<AgentId,string>, sqliteRoot: string) {
+    const onDiagnostic=(agent:AgentId)=>(diagnostic:CodexDiagnostic)=>{if(this.diagnostics[agent].length<100)this.diagnostics[agent].push(diagnostic);};
+    this.adapters={codex:new CodexSessionAdapter({root:roots.codex,sqliteRoot,onDiagnostic:onDiagnostic('codex')}),claude:new ClaudeSessionAdapter({root:roots.claude,onDiagnostic:onDiagnostic('claude')})};
+  }
+  static async create(env:NodeJS.ProcessEnv=process.env):Promise<NativeCatalog> {
+    const roots={codex:await canonical(env.CODEX_HOME?.trim()||join(homedir(),'.codex')),claude:await canonical(env.CLAUDE_CONFIG_DIR?.trim()||join(homedir(),'.claude'))};
+    const sqlite=await canonical(env.CODEX_SQLITE_HOME?.trim()||roots.codex);
+    return new NativeCatalog(roots,{codex:JSON.stringify([roots.codex,sqlite]),claude:roots.claude},sqlite);
+  }
+  sources() { return agents.map(agent=>({sourceId:digest(this.rootKeys[agent]),adapter:{id:agent,discover:async()=>[...(this.staged.get(agent)?.values()??[])],readHistory:async(nativeId:string)=>this.staged.get(agent)?.get(nativeId)?.messages??[]}})); }
+  notices():readonly string[] {return agents.map(agent=>this.warnings[agent]).filter(Boolean);}
+  private report(agent:AgentId, extra=''):void {
+    const codes=[...new Set(this.diagnostics[agent].map(diagnostic=>diagnostic.code))];
+    this.warnings[agent]=codes.length||extra ? `${agent}: ${extra||'source warnings'}${codes.length?' ('+codes.slice(0,5).join(', ')+(codes.length>5?', …':'')+')':''}` : '';
+  }
+  async refresh(index:SearchIndex):Promise<void> {
+    for(const agent of agents) {
+      this.diagnostics[agent]=[];
+      try {
+        const managed=agent==='codex'?[join(this.roots.codex,'sessions'),join(this.roots.codex,'archived_sessions')]:[join(this.roots.claude,'projects')];
+        if(!(await Promise.all(managed.map(async path=>(await stat(path).catch(()=>undefined))?.isDirectory()))).some(Boolean)) {
+          this.warnings[agent]=`${agent}: history root unavailable; previous search data retained`;continue;
+        }
+        const sessions=await this.adapters[agent].discover();
+        let degraded=this.diagnostics[agent].some(diagnostic=>!harmless.has(diagnostic.code));
+        const healthy:Session[]=[];
+        for(const session of sessions) {
+          const history=await this.adapters[agent].readCatalogHistoryDetailed(session.nativeId);
+          if(!history.complete) {degraded=true;continue;}
+          healthy.push({...session,messages:history.items});
+        }
+        degraded ||= this.diagnostics[agent].some(diagnostic=>!harmless.has(diagnostic.code));
+        this.staged.set(agent,new Map(healthy.map(session=>[session.nativeId,session])));
+        await index.refresh(agent,{preserveMissing:degraded});
+        this.report(agent,degraded?'degraded source; earlier entries retained, healthy sessions refreshed':'');
+      } catch {
+        this.warnings[agent]=`${agent}: refresh failed; previous search data retained`;
+      }
+    }
+  }
+  async snapshot(source:SessionSource, signal?:AbortSignal):Promise<NativeSnapshot> {
+    signal?.throwIfAborted();this.diagnostics[source.agent]=[];
+    const session=(await this.adapters[source.agent].discover()).find(session=>session.nativeId===source.nativeId&&session.id===source.id);
+    if(!session) {this.report(source.agent,'selected history unavailable; cached entry may be stale');throw new Error('Selected source is unavailable. Refresh or restore its native history.');}
+    const history=await this.adapters[source.agent].readHistoryDetailed(source.nativeId);
+    this.report(source.agent,history.complete?'':'selected public history incomplete; transfer blocked');signal?.throwIfAborted();
+    const compatible=source.agent==='codex' ? session.producerVersion==='0.171.0' : !session.producerVersion||session.producerVersion==='2.1.330';
+    const runtime:RuntimeSource={agent:session.agent,id:session.id,nativeId:session.nativeId,workspace:session.workspace,nativeResume:compatible?'compatible':'unknown'};
+    return {session,history,runtime,fingerprint:digest(JSON.stringify([runtime,history.items,history.complete])),sourceKey:digest(JSON.stringify([source.agent,this.rootKeys[source.agent],source.nativeId]))};
+  }
+}

@@ -13,6 +13,9 @@ export interface ContinuationRequest {
   source: SessionSource;
   target: AgentId;
   workspace: WorkspaceChoice;
+  currentRequest?: string;
+  redactions?: readonly string[];
+  fresh?: boolean;
 }
 export interface ContinuationSummary {
   source: SessionSource;
@@ -21,6 +24,8 @@ export interface ContinuationSummary {
   workspace: string;
   includedItemIds: readonly string[];
   omittedItemIds: readonly string[];
+  /** Exact final wire value and disclosure supplied by the composition service. */
+  previewLines?: readonly string[];
 }
 export interface PreparedContinuation<Plan> {
   /** Opaque to the picker. The identical value is dispatched after confirmation. */
@@ -37,6 +42,10 @@ export interface PickerOptions<Plan> {
   workspace: string;
   scope?: Scope;
   label?: string;
+  /** Enable request, literal-redaction and explicit fresh-context controls. */
+  compose?: boolean;
+  initialRequest?: string;
+  notices?: () => readonly string[];
   terminal?: PickerTerminal;
   query(query: SessionQuery, signal: AbortSignal): Promise<readonly SessionHit[]>;
   preview(source: SessionSource, signal: AbortSignal): Promise<readonly HistoryItem[]>;

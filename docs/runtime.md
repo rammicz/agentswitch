@@ -102,3 +102,5 @@ native diagnostic, authenticating independently when needed and checking deliver
 before a retry. No install/login command, fallback transport or automatic retry
 runs. Even a completed plan cannot launch a second time. Cancellation before
 spawn prevents launch; interruption after spawn leaves consumption unknown.
+
+CLI composition is now available through [integration and recovery](integration.md). `launch` accepts synchronous `beforeSpawn` and `onSpawn(pid)` observation hooks for durable intent/launch evidence. Neither callback is a provider receipt. Observer failure after process creation stays uncertain; the runtime still restores terminal state. Cross-process journal admission remains distinct from the process-local guard.

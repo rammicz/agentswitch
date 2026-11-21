@@ -215,10 +215,13 @@ export class CodexSessionAdapter implements SessionAdapter {
   }
   async readHistory(nativeId: string): Promise<readonly HistoryItem[]> { return (await this.readHistoryDetailed(nativeId)).items; }
   readHistoryDetailed(nativeId: string): Promise<CodexHistory> { return this.run(() => this.readDetailed(nativeId)); }
-  private async readDetailed(nativeId: string): Promise<CodexHistory> {
-    // Refresh authoritative selection and managed file identities at every read.
+
+  /** Read the preceding catalog generation without rescanning sibling sessions. For refresh composition only. */
+  readCatalogHistoryDetailed(nativeId: string): Promise<CodexHistory> { return this.run(() => this.readDetailed(nativeId, false)); }
+  private async readDetailed(nativeId: string, rediscover = true): Promise<CodexHistory> {
+    // Public selected-session reads refresh authoritative selection; catalog batches use their explicit generation.
     const discovery = this.context();
-    await this.discoverCatalog(discovery);
+    if (rediscover) await this.discoverCatalog(discovery);
     const ctx = discovery.fork(), file = this.selected.get(nativeId);
     if (!file) { ctx.add('selected-rollout-unavailable'); return { items: [], complete: false, diagnostics: ctx.diagnostics }; }
     const leaf = await parseFile(file, this.root, ctx);

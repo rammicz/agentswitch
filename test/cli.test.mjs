@@ -4,11 +4,10 @@ import { spawnSync } from 'node:child_process';
 
 const run = (...args) => spawnSync(process.execPath, ['dist/cli.js', ...args], { encoding: 'utf8' });
 
-test('plain invocation explains development status without claiming integration', () => {
+test('plain invocation requires a terminal without reading native histories', () => {
   const result = run();
-  assert.equal(result.status, 0);
-  assert.match(result.stdout, /development scaffold/);
-  assert.match(result.stdout, /transfer are planned/);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /interactive terminal/);
 });
 
 test('CLI handles version, invalid flags and noninteractive demo explicitly', () => {

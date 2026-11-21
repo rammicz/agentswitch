@@ -158,9 +158,9 @@ export class SearchIndex {
   }
 
   /** Rehydrate and atomically replace selected provider generations, even at unchanged timestamps. */
-  refresh(agent: AgentId | 'all' = 'all'): Promise<void> { return this.regenerate(agent, false); }
+  refresh(agent: AgentId | 'all' = 'all', options: { preserveMissing?: boolean } = {}): Promise<void> { return this.regenerate(agent, false, options.preserveMissing ?? false); }
 
-  private regenerate(agent: AgentId | 'all', replaceAll: boolean): Promise<void> {
+  private regenerate(agent: AgentId | 'all', replaceAll: boolean, preserveMissing = false): Promise<void> {
     return this.enqueue(async () => {
       const selected = this.sources.filter((source) => agent === 'all' || source.adapter.id === agent);
       if (agent !== 'all' && selected.length === 0) throw new Error('Provider is not configured');
@@ -184,9 +184,9 @@ export class SearchIndex {
       this.transaction(() => {
         if (replaceAll) this.database.exec('DELETE FROM sessions');
         const remove = this.database.prepare('DELETE FROM sessions WHERE source=?');
-        const insert = this.database.prepare('INSERT INTO sessions(source, native_id, data) VALUES (?, ?, ?)');
+        const insert = this.database.prepare('INSERT OR REPLACE INTO sessions(source, native_id, data) VALUES (?, ?, ?)');
         for (const generation of staged) {
-          remove.run(generation.source);
+          if (!preserveMissing) remove.run(generation.source);
           for (const session of generation.sessions) insert.run(generation.source, session.nativeId, JSON.stringify(session));
         }
       });

@@ -22,7 +22,7 @@ export const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 export const MAX_PAGE_BYTES = 64 * 1024;
 const marker = 'agentswitch-public-archive-v1\n';
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const filenamePattern = /^[0-9a-f-]{36}\.json$|^[0-9a-f-]{36}\.[0-9a-f-]{36}\.tmp$/;
+const filenamePattern = /^[0-9a-f-]{36}\.json$|^[0-9a-f-]{36}\.[0-9a-f-]{36}\.tmp$|^[0-9a-f-]{36}\.pin$/;
 function failure(code: string, message: string): never { throw new ArchiveError(code, message); }
 export function wellFormed(value: string): boolean { return !/[\uD800-\uDFFF]/u.test(value); }
 export function archiveId(id: string): string {
@@ -197,9 +197,32 @@ export async function readArchiveItem(options: ItemPageOptions) {
 export async function deleteArchive(reference: ArchiveReference): Promise<void> {
   return controlled(async () => {
     const id = archiveId(reference.id); const { directory, identity } = await root(reference.directory, false);
+    if ((await readdir(directory)).includes(`${id}.pin`)) failure('ACTIVE_ARCHIVE', 'Archive is reserved by a transfer whose writer may still be active. Use transfer recovery after its supervised writer stops.');
     const entries = (await readdir(directory)).filter(name => name === `${id}.json` || (name.startsWith(`${id}.`) && name.endsWith('.tmp')));
     if (!entries.length) failure('MISSING_ARCHIVE', 'Archive is missing or deleted.');
     for (const name of entries) { await unchanged(directory, identity); privateEntry(await lstat(join(directory, name)), false); await unlink(join(directory, name)); }
     await syncDirectory(directory);
   });
+}
+
+/** Durable archive use reservation. A crashed launcher never loses this protection automatically. */
+export async function protectArchive(reference: ArchiveReference, token: string): Promise<void> {
+  return controlled(async () => {
+    archiveId(token); const id=archiveId(reference.id); const {directory}=await root(reference.directory,false);
+    const handle=await open(join(directory,`${id}.pin`),'wx',0o600);
+    try { await handle.writeFile(token);await handle.sync(); } finally {await handle.close();}
+    await syncDirectory(directory);
+  });
+}
+/** Only the owning transfer can release a reservation after proving its supervised writer stopped. */
+export async function releaseArchive(reference: ArchiveReference, token: string): Promise<void> {
+  return controlled(async () => {
+    archiveId(token);const id=archiveId(reference.id);const {directory}=await root(reference.directory,false);
+    if(await privateRead(join(directory,`${id}.pin`),128)!==token) failure('ACTIVE_ARCHIVE','Archive reservation belongs to another transfer.');
+    await unlink(join(directory,`${id}.pin`));await syncDirectory(directory);
+  });
+}
+/** Validated redacted snapshot for deliberate recovery, never an executable launch plan. */
+export async function readArchiveSnapshot(reference: ArchiveReference): Promise<ArchiveSnapshot> {
+  return controlled(async()=>publicSnapshot(await load(reference)));
 }

@@ -205,7 +205,7 @@ export function createRuntime(options: RuntimeOptions) {
       return { plan, summary: { source: identitySource, target: request.target, mode: plan.mode, workspace: plan.workspace,
         includedItemIds: native ? [] : [...input.handoff!.includedItemIds], omittedItemIds: native ? [] : [...input.handoff!.omittedItemIds] } };
     },
-    async launch(plan: LaunchPlan, { signal }: { signal?: AbortSignal } = {}): Promise<LaunchResult> {
+    async launch(plan: LaunchPlan, { signal, beforeSpawn, onSpawn }: { signal?: AbortSignal; beforeSpawn?: () => void; onSpawn?: (pid: number) => void } = {}): Promise<LaunchResult> {
       cancelled(signal);
       const snapshot = snapshots.get(plan);
       if (!snapshot || snapshot.used) return fail('INVALID_PLAN', 'Expected an unused plan prepared by this runtime. Prepare and confirm again; never blindly retry delivery.');
@@ -224,12 +224,13 @@ export function createRuntime(options: RuntimeOptions) {
       catch (error) { terminalOwned = false; throw error; }
       const release = () => { try { releaseNative(); } finally { terminalOwned = false; } };
       if (signal?.aborted) { release(); return fail('CANCELLED', 'Continuation cancelled before launch.'); }
+      try { beforeSpawn?.(); } catch (error) { release(); throw error; }
       snapshot.used = true;
       return new Promise<LaunchResult>((resolve, reject) => {
         let child: ReturnType<typeof spawn>;
         try { child = spawn(plan.executable, [...plan.args], { cwd: plan.workspace, env, shell: false, stdio: 'inherit' }); }
         catch { release(); return reject(new RuntimeError('LAUNCH_FAILED', 'Target launch failed before process creation. Check installation, workspace and OS argument limits; prepare again.')); }
-        let launched = false; let error = false;
+        let launched = false; let error = false; let observationError: unknown;
         const timers = new Set<ReturnType<typeof setTimeout>>();
         const forward = (name: NodeJS.Signals, delay = 75) => {
           // Foreground Ctrl+C already reaches both processes. Give native exit priority.
@@ -241,7 +242,7 @@ export function createRuntime(options: RuntimeOptions) {
         const abort = () => forward('SIGTERM', 0);
         process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
         signal?.addEventListener('abort', abort, { once: true });
-        child.on('spawn', () => { launched = true; if (signal?.aborted) abort(); });
+        child.on('spawn', () => { launched = true; try { if (child.pid) onSpawn?.(child.pid); } catch (caught) { observationError = caught; } if (signal?.aborted) abort(); });
         child.on('error', () => { error = true; });
         child.on('close', (code, exitSignal) => {
           for (const timer of timers) clearTimeout(timer);
@@ -251,6 +252,7 @@ export function createRuntime(options: RuntimeOptions) {
           process.stdout.write('\x1b[?25h\x1b[?1049l');
           if (!restored) return reject(new RuntimeError('TERMINAL_RESTORE', 'Target stopped but terminal restoration failed. Restore your terminal manually; delivery remains uncertain.'));
           if (error || !launched) return reject(new RuntimeError('LAUNCH_FAILED', 'Cannot launch target executable. Check installation, permissions, workspace and OS argument limits. No automatic retry was attempted.'));
+          if (observationError) return reject(new RuntimeError('OBSERVATION_FAILED', 'Target launched but durable launch observation failed. Delivery remains uncertain.'));
           resolve({ launched: true, code, signal: exitSignal, consumption: 'unknown', ...((code !== 0 || exitSignal) ? { recovery: 'Read the native diagnostic above. Check target authentication and workspace access in its own client; confirm delivery before any retry.' } : {}) });
         });
       });

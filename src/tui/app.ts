@@ -29,12 +29,16 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   let hits: readonly SessionHit[] = [];
   let selected = 0;
   let target = 0;
-  let stage: 'list' | 'preview' | 'target' | 'workspace' | 'summary' = 'list';
+  let stage: 'list' | 'preview' | 'target' | 'workspace' | 'request' | 'redaction' | 'summary' = 'list';
   let picked: SessionHit | undefined;
   let items: readonly HistoryItem[] = [];
   let offset = 0;
   let choice: WorkspaceChoice | undefined;
   let pathInput = '';
+  let currentRequest = options.initialRequest ?? 'Continue the task from this conversation.';
+  let redactionInput = '';
+  let redactions: string[] = [];
+  let fresh = false;
   let prepared: PreparedContinuation<Plan> | undefined;
   let busy = false;
   let notice = '';
@@ -98,6 +102,9 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       offset = Math.max(0, Math.min(offset, Math.max(0, lines.length - bodyRows)));
       body = lines.slice(offset, offset + bodyRows);
       footer = '↑ ↓ Scroll · Enter choose target · Esc back';
+    } else if (stage === 'request' || stage === 'redaction') {
+      body = [stage === 'request' ? 'Current request (sent separately from historical data):' : 'Literal redaction (replace every match before transfer retention):', stage === 'request' ? currentRequest : redactionInput, 'Enter save · Esc cancel'];
+      footer = 'Backspace edit · Ctrl+U clear';
     } else if (stage === 'workspace') {
       body = ['Explicit workspace override:', pathInput || 'Type an absolute or relative directory path'];
       footer = 'Enter use this folder and prepare · Esc cancel override';
@@ -105,19 +112,19 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       const summary = prepared!.summary;
       body = wrap([`Source: ${summary.source.agent}/${summary.source.id} (${summary.source.nativeId})`,
         `Target: ${summary.target}`, `Mode: ${summary.mode}`, `Workspace: ${summary.workspace}`,
-        `Included: ${summary.includedItemIds.join(', ') || '(none)'}`, `Omitted: ${summary.omittedItemIds.join(', ') || '(none)'}`], width);
+        `Included: ${summary.includedItemIds.join(', ') || '(none)'}`, `Omitted: ${summary.omittedItemIds.join(', ') || '(none)'}`, ...(summary.previewLines ?? [])], width);
       // A long summary must remain inspectable before confirming.
       offset = Math.max(0, Math.min(offset, Math.max(0, body.length - bodyRows)));
       body = body.slice(offset, offset + bodyRows);
       footer = '↑ ↓ Scroll · Enter confirm continuation · Esc back';
     } else {
       body = [`Source: ${picked!.agent}/${picked!.id}`, `Target: ${targets[target]}  ← → change`,
-        `Workspace: ${choice!.path} (${choice!.kind})`, 'W override workspace'];
+        `Workspace: ${choice!.path} (${choice!.kind})`, 'W override workspace', ...(options.compose ? [`Current request: ${currentRequest}`, `Redactions: ${redactions.length} literal selection(s)`, `Fresh context: ${fresh ? 'explicitly selected' : 'automatic same-agent resume'}`, 'C edit request · X add redaction · F toggle fresh context'] : [])];
       footer = 'Enter prepare summary · Esc back';
     }
     const lines = [options.label ?? 'agentswitch', `Search: ${query.text || 'type to search history…'}`,
       `← → Agent: ${query.agent}     Tab Scope: ${query.scope}`, '', ...body, '',
-      busy ? 'Loading… · Esc back' : footer, notice + (retry ? (stage === 'list' ? ' · Ctrl+R retry' : ' · R retry') : '')];
+      busy ? 'Loading… · Esc back' : footer, [...(options.notices?.() ?? []), notice].filter(Boolean).join(' · ') + (retry ? (stage === 'list' ? ' · Ctrl+R retry' : ' · R retry') : '')];
     output.write('\x1b[2J\x1b[H' + lines.slice(0, height).map(line => clean(line).slice(0, width)).join('\n'));
   };
   const redraw = (): void => { try { draw(); } catch (error) { finish(error); } };
@@ -156,7 +163,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     request(signal => options.preview(source, signal), found => { items = found; }, preview);
   };
   const prepare = (): void => {
-    const requestValue = { source: sourceOf(picked!), target: targets[target]!, workspace: { ...choice! } };
+    const requestValue = { source: sourceOf(picked!), target: targets[target]!, workspace: { ...choice! }, ...(options.compose ? {currentRequest, redactions: [...redactions], fresh} : {}) };
     request(async signal => {
       const directory = await stat(requestValue.workspace.path).catch(() => undefined);
       if (!directory?.isDirectory()) throw new Error(`Workspace unavailable: ${requestValue.workspace.path}. Press W to choose another folder.`);
@@ -174,9 +181,18 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       if (key.name === 'escape') {
         invalidate(); notice = '';
         if (stage === 'list') { finish(); return; }
-        if (stage === 'workspace' || stage === 'summary') stage = 'target';
+        if (stage === 'workspace' || stage === 'summary' || stage === 'request' || stage === 'redaction') stage = 'target';
         else if (stage === 'target') { stage = 'preview'; preview(); return; }
         else { stage = 'list'; search(); return; }
+      } else if (stage === 'request' || stage === 'redaction') {
+        if (key.name === 'return') { if (stage === 'redaction' && redactionInput) { redactions.push(redactionInput); redactionInput=''; } stage='target'; }
+        else {
+          let value = stage === 'request' ? currentRequest : redactionInput;
+          if (key.ctrl && key.name === 'u') value='';
+          else if (key.name === 'backspace') value=Array.from(value).slice(0,-1).join('');
+          else if (text && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f-\x9f]/.test(text)) value+=text;
+          if (stage === 'request') currentRequest=value; else redactionInput=value;
+        }
       } else if (stage === 'workspace') {
         if (key.name === 'return' && pathInput.trim()) {
           choice = { kind: 'override', path: resolve(options.workspace, pathInput.trim()) };
@@ -205,6 +221,9 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
         }
       } else if (stage === 'target') {
         if (key.name === 'left' || key.name === 'right') { invalidate(); target = (target + 1) % targets.length; notice = ''; }
+        else if (options.compose && key.name === 'c') { invalidate(); notice=''; stage='request'; }
+        else if (options.compose && key.name === 'x') { invalidate(); notice=''; redactionInput=''; stage='redaction'; }
+        else if (options.compose && key.name === 'f') { invalidate(); fresh=!fresh; notice=''; }
         else if (key.name === 'w') { invalidate(); notice = ''; pathInput = ''; stage = 'workspace'; }
         else if (key.name === 'return' && !busy) { prepare(); return; }
       } else if (stage === 'summary') {

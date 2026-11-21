@@ -1,0 +1,162 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, stat, rename, symlink, access } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { rollout, writeRollout, completed, ids as codexIds } from './fixtures/codex/native.mjs';
+import { entry, encode, ids as claudeIds } from './fixtures/claude/native.mjs';
+
+const repo=resolve('.');
+const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
+async function setup(target='claude') {
+ const root=await mkdtemp(join(tmpdir(),'agentswitch-cli-'));
+ const cwd=join(root,'workspace'),other=join(root,'other'),child=join(cwd,'nested'),codex=join(root,'codex'),claude=join(root,'claude'),state=join(root,'state');
+ await Promise.all([cwd,other,child,claude].map(path=>mkdir(path,{recursive:true})));
+ const files=[];
+ files.push(await writeRollout(codex,rollout(cwd,codexIds[0],[completed('UserMessage','u','public source NEEDLE_SECRET',1),completed('AgentMessage','a','public answer',2)])));
+ files.push(await writeRollout(codex,rollout(child,codexIds[1],[completed('UserMessage','u','nested-folder-only',1)])));
+ files.push(await writeRollout(codex,rollout(other,codexIds[2],[completed('UserMessage','u','other-folder-only',1)])));
+ const bucket=join(claude,'projects','synthetic');await mkdir(bucket,{recursive:true});
+ const claudePath=join(bucket,claudeIds[0]+'.jsonl');
+ await writeFile(claudePath,encode([entry(claudeIds[0],cwd,'u',null,'user','Claude public NEEDLE_SECRET',{version:'2.1.330'}),entry(claudeIds[0],cwd,'a','u','assistant','Claude answer',{version:'2.1.330'})]));files.push(claudePath);
+ const bin=join(root,'bin');await mkdir(bin);
+ for(const name of ['codex','claude']) {const path=join(bin,name);await writeFile(path,`#!${process.execPath}\nprocess.on('SIGHUP',()=>{});\nawait import('${join(repo,'test/fixtures/runtime-child.mjs')}');\n`,{mode:0o700});}
+ const env={CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:state,RUNTIME_TARGET:target,RUNTIME_LOG:join(root,'launches'),RUNTIME_SCENARIO:'interactive',PATH:bin+':'+process.env.PATH,NODE_NO_WARNINGS:'1'};
+ return {root,cwd,other,child,codex,claude,state,files,env,before:await Promise.all(files.map(hash))};
+}
+function pty(f,actions,args=[]) {
+ const child=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args}),timeout:40000,maxBuffer:8*1024*1024});
+ assert.equal(child.status,0,child.stderr);return JSON.parse(child.stdout);
+}
+const list=[{wait:'Enter preview'}];
+const select=(provider)=>[{send:provider==='codex'?'public source':'Claude public'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
+const redact=[{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions: 1'}];
+const request=[{send:'c'},{wait:'Current request (sent separately'},{send:'\u0015Do next NEEDLE_SECRET\r'},{wait:'Current request: Do next'}];
+const finish=[{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}];
+
+for(const [source,target]of [['codex','claude'],['claude','codex']]) test(`real CLI ${source}→${target}: exact consented redacted payload, cwd, disclosure and unchanged native bytes`,async()=>{
+ const f=await setup(target);
+ const actions=[...list,...select(source),...(target==='claude'?[{send:'\u001b[C'},{wait:'Target: claude'}]:[]),...request,...redact,...finish];
+ const [result]=pty(f,actions);
+ assert.equal(result.code,0);assert.equal(result.restored,true);assert.equal(result.sampledWhileAlive,true);
+ assert.match(result.output,/under its own account and data policies/);
+ const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());
+ assert.equal(launch.cwd,f.cwd);assert.deepEqual(launch.tty,[true,true,true]);
+ const prompt=launch.args.at(-1);const parsed=JSON.parse(prompt);
+ assert.equal(parsed.currentRequest,'Do next [REDACTED]');assert.equal(parsed.history.length,2);assert.match(parsed.history[0].text,/\[REDACTED\]/);assert.doesNotMatch(prompt,/NEEDLE_SECRET/);
+ // With a tall PTY the compact exact JSON prompt is on the final preview screen.
+ assert.ok(result.output.replace(/\r?\n/g,'').includes(prompt),'target receives the exact previewed JSON');
+ assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
+ const records=JSON.parse(spawnSync(process.execPath,[join(repo,'dist/cli.js'),'transfers','list'],{env:{...process.env,...f.env},encoding:'utf8'}).stdout);
+ assert.equal(records.length,1);assert.equal(records[0].state,'uncertain');assert.equal(records[0].targetNativeId,null);assert.equal(records[0].writer,'stopped');
+ const transferFiles=async dir=>{for(const name of await readdir(dir)){const path=join(dir,name);if((await stat(path)).isDirectory())await transferFiles(path);else assert.equal((await readFile(path)).includes(Buffer.from('NEEDLE_SECRET')),false,path);}};
+ await transferFiles(join(f.state,'transfers'));await transferFiles(join(f.state,'archives'));
+});
+
+test('same-agent resume receives native UUID plus only current request',async()=>{
+ const f=await setup('codex');
+ const [result]=pty(f,[...list,...select('codex'),...request,...redact,{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ assert.equal(result.restored,true);
+ const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());
+ assert.deepEqual(launch.args,['resume','-C',f.cwd,'--',codexIds[0],'Do next [REDACTED]']);
+ assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
+});
+
+test('cancelled final preview retains no transfer content and launches nothing',async()=>{
+ const f=await setup();
+ pty(f,[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},...request,...redact,{send:'\r'},{wait:'Exact initial user prompt'},{send:'\u0003'}]);
+ await assert.rejects(access(f.env.RUNTIME_LOG));
+ assert.deepEqual((await readdir(join(f.state,'transfers'))).sort(),['attempts.sqlite','owner']);
+ const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));assert.equal(journal.list().length,0);journal.close();
+ await assert.rejects(access(join(f.state,'archives')));
+});
+
+test('two real CLI processes choosing the same source admit exactly one launch',async()=>{
+ const f=await setup();
+ const toPreview=[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Exact initial user prompt'}];
+ const results=pty(f,[...toPreview,{start:true},...toPreview,{instance:0},{send:'\r'},{wait:'READY'},{instance:1},{send:'\r'},{wait:'failed before launch'},{instance:0},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ assert.equal(results[0].code,0);assert.equal(results[1].code,1);
+ const launches=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n');assert.equal(launches.length,1);
+ const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));assert.deepEqual(journal.list().map(record=>record.state).sort(),['failed','uncertain']);journal.close();
+});
+
+for(const gap of [false,true])test(`wrapper death ${gap?'before durable child PID':'after READY'} leaves source and live archive protected on restart`,async()=>{
+ const f=await setup();if(gap)f.env.CLI_CRASH_POINT='spawn-before-pid';
+ const first=[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},...(gap?[{wait:'READY'}]:[{wait:'READY'},{killWrapper:true}])];
+ // A later wrapper reads the same native source. Ownership cannot be stolen even
+ // when the original parent is dead and the target PID was never committed.
+ const result=pty(f,[...first,{assertLiveChild:true},{start:true},...list,...select('codex'),{send:'\r'},{wait:'ownership is unknown'},{send:'\u0003'}]);
+ const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));const [record]=journal.list();
+ assert.equal(record.state,'pending');assert.equal(record.writer,'unknown');assert.equal(record.childPid===null,gap);assert.equal(journal.ownerState(record.sourceKey),'unknown');
+ assert.throws(()=>journal.beginDeletion(record.id),/writer/);journal.abort(record.id);assert.equal(journal.get(record.id).state,'pending');
+ const {deleteArchive}=await import('../dist/archive.js');await assert.rejects(deleteArchive(record.archive),/reserved/);journal.close();
+ assert.equal((await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').length,1);
+});
+
+test('deliberate recovery is a new confirmed fresh attempt; abort/delete removes only that transfer content',async()=>{
+ const f=await setup();pty(f,[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},...redact,...finish]);
+ const {TransferJournal}=await import('../dist/transfer-journal.js');let journal=await TransferJournal.open(join(f.state,'transfers'));const [prior]=journal.list();journal.close();
+ const results=pty(f,[...list,{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Earlier delivery: uncertain'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}],['transfers','retry',prior.id]);
+ assert.equal(results[0].code,0);journal=await TransferJournal.open(join(f.state,'transfers'));const records=journal.list();assert.equal(records.length,2);assert.equal(records[0].retryOf,prior.id);assert.notEqual(records[0].id,prior.id);journal.close();
+ const cli=(...args)=>spawnSync(process.execPath,[join(repo,'dist/cli.js'),...args],{env:{...process.env,...f.env},encoding:'utf8'});
+ assert.equal(cli('transfers','abort',prior.id).status,0);const deleted=cli('transfers','delete',prior.id);assert.equal(deleted.status,0,deleted.stderr);
+ await assert.rejects(access(join(prior.archive.directory,prior.archive.id+'.json')));
+ journal=await TransferJournal.open(join(f.state,'transfers'));assert.equal(journal.get(prior.id).deleted,true);assert.equal(journal.get(prior.id).prompt,undefined);assert.equal(journal.ownerState(prior.sourceKey),'idle');journal.close();
+});
+
+test('real picker folder scope is exact; global message search defaults to the recorded source workspace',async()=>{
+ const f=await setup();
+ const [result]=pty(f,[...list,{send:'other-folder-only'},{wait:'Enter preview'},{send:'\t'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\u001b[C'},{wait:'Target: claude'},...finish]);
+ const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());assert.equal(launch.cwd,f.other);
+ const initial=result.output.slice(0,result.output.indexOf('other-folder-only'));assert.ok(!initial.includes(codexIds[1]));assert.ok(!initial.includes(codexIds[2]));
+ assert.match(result.output,/No matching sessions/);assert.match(result.output,/Scope: global/);assert.equal(JSON.parse(launch.args.at(-1)).history[0].text,'other-folder-only');
+});
+
+test('source filter and missing recorded workspace require an explicit valid override',async()=>{
+ const f=await setup('codex');const missing=join(f.root,'missing-workspace');
+ await writeRollout(f.codex,rollout(missing,codexIds[3],[completed('UserMessage','u','missing source workspace',1)]));
+ const [result]=pty(f,[...list,{send:'\u001b[C'},{wait:'Enter preview'},{send:'\t'},{wait:'Enter preview'},{send:'missing source workspace'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\r'},{wait:'Workspace unavailable:'},{send:'w'},{wait:'Explicit workspace override'},{send:f.cwd+'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ assert.match(result.output,/Agent: codex/);const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());assert.equal(launch.cwd,f.cwd);assert.ok(launch.args.includes(codexIds[3]));
+});
+
+test('changed executable after preview fails before spawn and retains the consented redacted recovery record',async()=>{
+ const f=await setup();
+ const [result]=pty(f,[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},...redact,{send:'\r'},{wait:'Exact initial user prompt'},{append:{path:join(f.root,'bin','claude'),text:'\n// synthetic executable replacement\n'}},{send:'\r'},{wait:'failed before launch'}]);
+ assert.equal(result.code,1);await assert.rejects(access(f.env.RUNTIME_LOG));
+ const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));const [record]=journal.list();assert.equal(record.state,'failed');assert.equal(record.launch,'not-launched');assert.equal(journal.ownerState(record.sourceKey),'idle');journal.close();
+});
+
+test('changed source invalidates preview without publishing a transfer; cache purge is separate',async()=>{
+ const f=await setup();const [result]=pty(f,[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},...redact,{send:'\r'},{wait:'Exact initial user prompt'},{append:{path:f.files[0],text:'{partial'}},{send:'\r'},{wait:'Source changed after preview'}]);
+ assert.equal(result.code,1);await assert.rejects(access(f.env.RUNTIME_LOG));await assert.rejects(access(join(f.state,'archives')));
+ const resultPurge=spawnSync(process.execPath,[join(repo,'dist/cli.js'),'cache','purge'],{env:{...process.env,...f.env},encoding:'utf8'});assert.equal(resultPurge.status,0,resultPurge.stderr);await assert.rejects(access(join(f.state,'search')));assert.ok((await readFile(f.files[0],'utf8')).includes('NEEDLE_SECRET'));
+});
+
+
+test('supervised native exit releases only writer ownership; intentional selection can resume again',async()=>{
+ const f=await setup('codex');
+ const actions=[...list,...select('codex'),{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}];
+ pty(f,actions);pty(f,actions);
+ const launches=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(launches.length,2);assert.ok(launches.every(launch=>launch.args[0]==='resume'&&launch.args.includes(codexIds[0])));
+ const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));assert.equal(journal.list().length,2);assert.ok(journal.list().every(record=>record.state==='uncertain'&&record.writer==='stopped'));assert.equal(journal.ownerState(journal.list()[0].sourceKey),'idle');journal.close();
+});
+
+test('bounded final preview explains omissions and exposes the retained redacted tool/user archive',async()=>{
+ const f=await setup();
+ await writeRollout(f.codex,rollout(f.cwd,codexIds[0],[completed('UserMessage','u','public source NEEDLE_SECRET '+('huge '.repeat(4500)),1),completed('AgentMessage','a','intact selected answer',2),completed('CommandExecution','t','tool outcome NEEDLE_SECRET',3)]));
+ const [result]=pty(f,[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},...redact,...finish]);
+ const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());const prompt=JSON.parse(launch.args.at(-1));assert.equal(prompt.omissions.count,1);assert.ok(prompt.history.some(item=>item.role==='tool'&&item.text==='tool outcome [REDACTED]'));assert.match(result.output,/Omitted: .*u/);
+ const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));const [record]=journal.list();journal.close();
+ const cli=(...args)=>spawnSync(process.execPath,[join(repo,'dist/cli.js'),'archive',...args],{encoding:'utf8',env:{...process.env,...f.env}});
+ const manifest=cli('list','--directory',record.archive.directory,'--archive',record.archive.id);assert.equal(manifest.status,0,manifest.stderr);const page=JSON.parse(manifest.stdout);assert.equal(page.items.length,3);assert.equal(page.items[0].included,false);
+ const text=cli('read','--directory',record.archive.directory,'--archive',record.archive.id,'--item','0');assert.equal(text.status,0,text.stderr);assert.match(JSON.parse(text.stdout).text,/public source \[REDACTED\]/);assert.doesNotMatch(text.stdout,/NEEDLE_SECRET/);
+});
+
+test('fresh retry of a native-resume attempt rereads source history and never silently loses context',async()=>{
+ const f=await setup('codex');pty(f,[...list,...select('codex'),...request,...redact,{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));const [prior]=journal.list();journal.close();
+ pty(f,[...list,{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},...redact,{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}],['transfers','retry',prior.id]);
+ const launches=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(launches.length,2);assert.equal(launches[1].args[0],'-C');const prompt=JSON.parse(launches[1].args.at(-1));assert.equal(prompt.history.length,2);assert.equal(prompt.currentRequest,'Do next [REDACTED]');assert.doesNotMatch(launches[1].args.at(-1),/NEEDLE_SECRET/);
+});
