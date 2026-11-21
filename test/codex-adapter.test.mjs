@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { zstdCompressSync } from 'node:zlib';
 import { CodexSessionAdapter } from '../dist/adapters/codex.js';
-import { ids, stamp, line, header, completed, rollout, encode, writeRollout, schema, row } from './fixtures/codex/native.mjs';
+import { ids, stamp, line, completed, rollout, encode, writeRollout, schema, row } from './fixtures/codex/native.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(),'agentswitch-codex-'));
@@ -306,4 +306,12 @@ test('tool text variants match pinned schema and explicit public errors survive'
   const result = await new CodexSessionAdapter({root}).readHistoryDetailed(ids[0]);
   assert.deepEqual(texts(result),['Dynamic text','Public MCP failure','Function text']);
   assert.equal(result.items[1].status,'failed'); assert.doesNotMatch(JSON.stringify(result),/PRIVATE_/);
+});
+
+test('standalone subagent display start excludes inherited context without a history_base', async t => {
+  const {root,cwd} = await fixture(t);
+  await writeRollout(root,rollout(cwd,ids[0],[completed('UserMessage','context','PRIVATE_INHERITED_CONTEXT',1),completed('AgentMessage','public','Own answer',2)],{subagent_history_start_ordinal:2}));
+  const result = await new CodexSessionAdapter({root}).readHistoryDetailed(ids[0]);
+  assert.equal(result.complete,true); assert.deepEqual(texts(result),['Own answer']);
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE_/);
 });

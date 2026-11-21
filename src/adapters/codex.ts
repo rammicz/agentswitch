@@ -1,4 +1,4 @@
-import { readdir, realpath } from 'node:fs/promises';
+import { opendir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve, isAbsolute } from 'node:path';
 import type { HistoryItem, Session } from '../domain.js';
@@ -102,7 +102,12 @@ export class CodexSessionAdapter implements SessionAdapter {
       try {
         const canonical = await realpath(path);
         if (!contains(this.root, canonical)) { ctx.add('unsafe-path'); return; }
-        list = await readdir(canonical, { withFileTypes: true });
+        list = [];
+        const directory = await opendir(canonical);
+        for await (const entry of directory) {
+          list.push(entry);
+          if (list.length >= this.limits.maxFiles - entries) { ctx.add('input-limit'); break; }
+        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') ctx.add('read-failed');
         return;
@@ -207,7 +212,9 @@ export class CodexSessionAdapter implements SessionAdapter {
     if (seen.has(parsed.file.rolloutId)) { ctx.add('ancestry-cycle'); return []; }
     if (depth >= this.limits.maxDepth) { ctx.add('input-limit'); return []; }
     seen.add(parsed.file.rolloutId);
-    const meta = parsed.meta, own = parsed.records.slice(1);
+    const meta = parsed.meta;
+    const displayStart = meta.subagent_history_start_ordinal;
+    const own = parsed.records.slice(1).filter(record => !integer(displayStart) || (record.ordinal ?? 0) >= displayStart);
     const base = meta.history_base;
     if (base == null) return own;
     const boundary = object(base);
