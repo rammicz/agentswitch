@@ -102,9 +102,9 @@ The programmatic readers accept explicit native roots; see [Codex reader](docs/c
 | [OpenCode](https://github.com/rammicz/agentswitch/issues/11) | Exact 1.19.6 public history, empty-request native resume and fresh transfers | [Offline fixture/PTY tested; native consumption unverified](docs/opencode-reader.md) |
 | [Antigravity CLI](https://github.com/rammicz/agentswitch/issues/9) | Exact 1.5.14 incoming fresh transfers and confirmed empty-request native open from sparse local last-ID metadata; outgoing history unavailable | [Limited profile; full issue remains open](docs/agy-reader.md) |
 | [Grok Build](https://github.com/rammicz/agentswitch/issues/12) | Public v1 source history and exact 1.0.45 build target; confirmed empty-request native open and four-direction handoffs | [Offline fixture/PTY tested; actual provider consumption unverified](docs/grok-reader.md) |
-| [Community requests](https://github.com/rammicz/agentswitch/issues/13) | Other popular coding agents, based on demand | Open to proposals; structured intake deferred |
+| [Community requests](https://github.com/rammicz/agentswitch/issues/13) | Other popular coding agents, based on demand | [Propose an adapter](https://github.com/rammicz/agentswitch/issues/new?template=adapter-proposal.md); compatibility investigation before implementation |
 
-An adapter is supported only after its discovery, history parsing, launch behavior, and compatibility fixtures pass. Listing an agent on the roadmap does not imply support today.
+An adapter is supported for its documented capabilities only after the applicable discovery, public history, launch and compatibility fixtures pass; a source-and-target profile needs all four. The [support policy](docs/adapter-support.md) defines demand and maintenance triage, the evidence checklist and version-specific limits. Partial profiles keep their unavailable capabilities visible. Listing an agent on the roadmap does not imply support today.
 
 ## Development
 
@@ -134,7 +134,7 @@ test/                Search, CLI, offline PTY and terminal lifecycle checks
 docs/                Architecture, research references, contribution guidance
 ```
 
-See [architecture](docs/architecture.md), [research notes](docs/research.md), and [contributing](CONTRIBUTING.md). Work is tracked as individual [issues](https://github.com/rammicz/agentswitch/issues) with acceptance and verification criteria. New adapter proposals should include sanitized fixtures and documented CLI capabilities, never personal transcripts or credentials.
+See [architecture](docs/architecture.md), [research notes](docs/research.md), and [contributing](CONTRIBUTING.md). Work is tracked as individual [issues](https://github.com/rammicz/agentswitch/issues) with acceptance and verification criteria. Use the [adapter proposal template](https://github.com/rammicz/agentswitch/issues/new?template=adapter-proposal.md) with exact distribution/version, demand, official capability evidence and sanitized public fixtures or explicit gaps. Proposals start in `queue:dev` with `status:triage`; never include personal transcripts or credentials.
 
 ## Inspiration and license
 
