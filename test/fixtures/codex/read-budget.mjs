@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { resolve, relative } from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
-const root = process.env.AGENTSWITCH_FIXTURE_ROOT;
+const root = await fs.promises.realpath(process.env.AGENTSWITCH_FIXTURE_ROOT);
 const original = fs.promises.open;
 const reads = [];
 fs.promises.open = async (path, ...options) => {

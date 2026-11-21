@@ -1,6 +1,6 @@
 import { opendir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join, resolve, isAbsolute } from 'node:path';
+import { basename, dirname, join, resolve, isAbsolute } from 'node:path';
 import type { HistoryItem, Session } from '../domain.js';
 import type { SessionAdapter } from './index.js';
 import { boundedRead, contains, defaultLimits, historyBytes, historyHeader, metadataSnapshot, ReadContext } from './codex-io.js';
@@ -186,8 +186,13 @@ export class CodexSessionAdapter implements SessionAdapter {
       const row = metadata.get(id);
       let chosen: ParsedRollout | undefined;
       if (row && typeof row.rollout_path === 'string') {
-        const selectedPath = resolve(this.root, row.rollout_path);
-        chosen = variants.find(variant => variant.file.path === selectedPath || variant.file.path.replace(/\.zst$/, '') === selectedPath.replace(/\.zst$/, ''));
+        try {
+          const path = resolve(this.root, row.rollout_path);
+          // Resolve directory aliases while retaining the filename across compression transitions.
+          // A selected file symlink must not substitute for a scanned managed file.
+          const selectedPath = join(await realpath(dirname(path)), basename(path));
+          if (contains(this.root, selectedPath)) chosen = variants.find(variant => variant.file.path.replace(/\.zst$/, '') === selectedPath.replace(/\.zst$/, ''));
+        } catch { /* An unavailable selected directory cannot identify a managed rollout. */ }
         if (!chosen) { ctx.add('selected-rollout-unavailable', 'metadata'); continue; }
       } else if (variants.length === 1) chosen = variants[0];
       else { ctx.add('ambiguous-rollout', 'metadata'); continue; }

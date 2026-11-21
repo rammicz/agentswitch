@@ -1,16 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile, readdir, writeFile, appendFile, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, readdir, writeFile, appendFile, symlink, realpath } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { zstdCompressSync } from 'node:zlib';
 import { CodexSessionAdapter } from '../dist/adapters/codex.js';
 import { ids, stamp, line, completed, rollout, encode, writeRollout, schema, row } from './fixtures/codex/native.mjs';
 
 async function fixture(t) {
-  const root = await mkdtemp(join(tmpdir(),'agentswitch-codex-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(),'agentswitch-codex-')));
   t.after(() => rm(root,{recursive:true,force:true}));
   const cwd = join(root,'workspace'); await mkdir(cwd);
   return {root,cwd};
@@ -68,6 +68,33 @@ test('fork identity survives shared root IDs and selected revert excludes obsole
   db.prepare('UPDATE threads SET rollout_path=? WHERE id=?').run(join(root,'missing.jsonl'),ids[0]); db.close();
   assert.deepEqual((await adapter.discover()).map(s=>s.nativeId),[ids[1]]);
   assert.notEqual(original,selected);
+});
+
+test('aliased roots retain the selected rollout, compressed counterpart and managed-file containment', async t => {
+  const {root,cwd} = await fixture(t);
+  const alias = join(root,'native-alias'); await symlink(root,alias);
+  await writeRollout(root,rollout(cwd,ids[0],[completed('UserMessage','old','OBSOLETE',1)]));
+  const selected = await writeRollout(root,rollout(cwd,ids[0],[completed('UserMessage','kept','Kept',1)]),{rolloutId:ids[4]});
+  const aliasedSelection = join(alias,relative(root,selected));
+  await metadata(root,[[ids[0],aliasedSelection,cwd,'Selected through alias']]);
+  const diagnostics = [], adapter = new CodexSessionAdapter({root:alias,onDiagnostic:d=>diagnostics.push(d)});
+  assert.deepEqual((await adapter.discover()).map(s=>s.nativeId),[ids[0]]);
+  assert.deepEqual(texts(await adapter.readHistoryDetailed(ids[0])),['Kept']);
+  await writeFile(`${selected}.zst`,zstdCompressSync(await readFile(selected))); await rm(selected);
+  assert.deepEqual(texts(await adapter.readHistoryDetailed(ids[0])),['Kept']);
+
+  const db = new DatabaseSync(join(root,'state_5.sqlite')); t.after(()=>db.close());
+  const select = path => db.prepare('UPDATE threads SET rollout_path=? WHERE id=?').run(path,ids[0]);
+  select(join(alias,'sessions','missing.jsonl'));
+  assert.deepEqual(await adapter.discover(),[]);
+  const outside = await fixture(t);
+  const external = await writeRollout(outside.root,rollout(outside.cwd,ids[0],[]),{rolloutId:ids[4]});
+  select(external);
+  assert.deepEqual(await adapter.discover(),[]);
+  const linkedFile = join(root,'sessions','selected-link.jsonl');
+  await symlink(`${selected}.zst`,linkedFile); select(linkedFile);
+  assert.deepEqual(await adapter.discover(),[]);
+  assert.ok(diagnostics.some(d=>d.code==='selected-rollout-unavailable'));
 });
 
 test('legacy mirrored messages emit once; structured output excludes nontext and private context', async t => {
@@ -255,8 +282,9 @@ test('continuously changing metadata stamps stop after bounded retries and prese
   const {root,cwd} = await fixture(t);
   const path = await writeRollout(root,rollout(cwd,ids[0],[completed('UserMessage','u','Healthy',1)]));
   await metadata(root,[[ids[0],path,cwd,'Native name']]);
+  const alias = join(root,'fixture-alias'); await symlink(root,alias);
   const before = await tree(root);
-  const result = spawnSync(process.execPath,['test/fixtures/codex/offline.mjs'],{encoding:'utf8',env:{...process.env,AGENTSWITCH_FIXTURE_ROOT:root,AGENTSWITCH_UNSTABLE_METADATA:'1'}});
+  const result = spawnSync(process.execPath,['test/fixtures/codex/offline.mjs'],{encoding:'utf8',env:{...process.env,AGENTSWITCH_FIXTURE_ROOT:alias,AGENTSWITCH_UNSTABLE_METADATA:'1'}});
   assert.equal(result.status,0,result.stderr);
   const output = JSON.parse(result.stdout);
   assert.equal(output.sessions[0].metadataFidelity,'reduced');
@@ -424,7 +452,8 @@ test('snapshot retry reads spend the same operation budget and leave room for fi
   await metadata(root,[[ids[0],path,cwd,'Native title']]);
   const dbBytes = (await readFile(join(root,'state_5.sqlite'))).length;
   const budget = 2 * dbBytes + encode(records.slice(0,1)).length + 40;
-  const output = observedReads(root,{maxScanBytes:budget},undefined,{AGENTSWITCH_UNSTABLE_METADATA:'1'});
+  const alias = join(root,'fixture-alias'); await symlink(root,alias);
+  const output = observedReads(alias,{maxScanBytes:budget},undefined,{AGENTSWITCH_UNSTABLE_METADATA:'1'});
   withinBudget(output,budget);
   assert.equal(output.result.length,1); assert.equal(output.result[0].metadataFidelity,'reduced');
   assert.equal(output.reads.filter(read=>read.path==='state_5.sqlite').reduce((sum,read)=>sum+read.bytes,0),2*dbBytes);
