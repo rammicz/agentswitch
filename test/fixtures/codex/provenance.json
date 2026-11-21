@@ -11,6 +11,7 @@
     "codex-rs/protocol/src/models.rs: ResponseItem and FunctionCallOutputBody",
     "codex-rs/rollout/src/rollout_file_name.rs: thread and immutable rollout IDs",
     "codex-rs/thread-store/src/local/rollout_lineage_tests.rs: ordinal/byte bounds and empty intermediary",
+    "codex-rs/state/src/extract.rs and thread-store/src/local/helpers.rs: native legacy naming and Guardian default policy",
     "codex-rs/state/src/model/thread_metadata.rs: selected rollout/name/timestamp columns",
     "codex-rs/rollout/src/session_index.rs: legacy append-only name index"
   ],

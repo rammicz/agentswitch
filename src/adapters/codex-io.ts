@@ -130,7 +130,7 @@ export async function historyBytes(path: string, root: string, ctx: ReadContext)
   }
 }
 export type MetadataRow = Record<string, unknown>;
-const metadataFields = ['id', 'rollout_path', 'created_at', 'updated_at', 'cwd', 'title', 'name', 'preview', 'recency_at'];
+const metadataFields = ['id', 'rollout_path', 'created_at', 'updated_at', 'cwd', 'title', 'name', 'preview', 'recency_at', 'first_user_message', 'source'];
 async function signature(path: string): Promise<string> {
   try {
     const info = await stat(path, { bigint: true });

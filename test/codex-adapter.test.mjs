@@ -315,3 +315,31 @@ test('standalone subagent display start excludes inherited context without a his
   assert.equal(result.complete,true); assert.deepEqual(texts(result),['Own answer']);
   assert.doesNotMatch(JSON.stringify(result),/PRIVATE_/);
 });
+
+test('legacy distinct SQLite titles precede indexed names, with Guardian default and derived-preview exceptions', async t => {
+  const {root,cwd} = await fixture(t);
+  const path = await writeRollout(root,rollout(cwd,ids[0],[],{history_mode:'legacy'}));
+  await metadata(root,[[ids[0],path,cwd,'Ignored paginated name']]);
+  await writeFile(join(root,'session_index.jsonl'),`${JSON.stringify({id:ids[0],thread_name:'Indexed name'})}\n`);
+  const db = new DatabaseSync(join(root,'state_5.sqlite'));
+  db.exec('ALTER TABLE threads ADD COLUMN first_user_message TEXT; ALTER TABLE threads ADD COLUMN source TEXT');
+  db.prepare('UPDATE threads SET title=?, first_user_message=?, source=?').run('Distinct native title','Derived preview','"cli"');
+  const adapter = new CodexSessionAdapter({root});
+  assert.equal((await adapter.discover())[0].title,'Distinct native title');
+  db.prepare('UPDATE threads SET title=?, first_user_message=?').run('Derived preview','Derived preview');
+  assert.equal((await adapter.discover())[0].title,'Indexed name');
+  db.prepare('UPDATE threads SET title=?, source=?').run('Guardian review',JSON.stringify({subagent:{other:'guardian'}}));
+  assert.equal((await adapter.discover())[0].title,'Indexed name'); db.close();
+});
+
+test('invalid display ordinals and explicit null history mode are rejected beside healthy sessions', async t => {
+  const {root,cwd} = await fixture(t);
+  await writeRollout(root,rollout(cwd,ids[0],[completed('UserMessage','u','Healthy',1)]));
+  await writeRollout(root,rollout(cwd,ids[1],[completed('UserMessage','private','PRIVATE_CONTEXT',1)],{subagent_history_start_ordinal:-1}));
+  await writeRollout(root,rollout(cwd,ids[2],[],{history_mode:null}));
+  const diagnostics=[];
+  const sessions = await new CodexSessionAdapter({root,onDiagnostic:d=>diagnostics.push(d)}).discover();
+  assert.deepEqual(sessions.map(s=>s.nativeId),[ids[0]]);
+  assert.ok(diagnostics.some(d=>d.code==='unsupported-shape')); assert.ok(diagnostics.some(d=>d.code==='unsupported-mode'));
+  assert.doesNotMatch(JSON.stringify({sessions,diagnostics}),/PRIVATE_/);
+});

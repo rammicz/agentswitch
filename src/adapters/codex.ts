@@ -4,7 +4,7 @@ import { basename, join, resolve, isAbsolute } from 'node:path';
 import type { HistoryItem, Session } from '../domain.js';
 import type { SessionAdapter } from './index.js';
 import { boundedRead, contains, defaultLimits, historyBytes, historyHeader, metadataSnapshot, ReadContext } from './codex-io.js';
-import type { CodexDiagnostic, CodexLimits } from './codex-io.js';
+import type { CodexDiagnostic, CodexLimits, MetadataRow } from './codex-io.js';
 import { object, project, text } from './codex-projection.js';
 import type { ObjectRecord, SourceRecord } from './codex-projection.js';
 export type { CodexDiagnostic, CodexLimits } from './codex-io.js';
@@ -29,6 +29,15 @@ function integer(value: unknown): value is number { return typeof value === 'num
 function date(value: unknown): string | undefined {
   const ms = typeof value === 'number' ? (value < 100_000_000_000 ? value * 1000 : value) : typeof value === 'string' ? Date.parse(value) : NaN;
   return Number.isFinite(ms) && Math.abs(ms) <= 8.64e15 ? new Date(ms).toISOString() : undefined;
+}
+function displayTitle(mode: string, row: MetadataRow | undefined, indexedName?: string): string {
+  const title = text(row?.title).trim(), preview = text(row?.preview).trim();
+  if (mode === 'paginated') return text(row?.name).trim() || preview || title;
+  const distinct = title && title !== text(row?.first_user_message).trim() ? title : '';
+  let guardian = false;
+  try { guardian = title === 'Guardian review' && object(object(JSON.parse(text(row?.source))).subagent).other === 'guardian'; }
+  catch { /* A missing or unrecognized source cannot establish a Guardian default. */ }
+  return (guardian ? indexedName || distinct : distinct || indexedName) || preview || title;
 }
 function parseRecords(bytes: Buffer, source: string, ctx: ReadContext): SourceRecord[] {
   const records: SourceRecord[] = [];
@@ -58,9 +67,12 @@ async function parseFile(file: RolloutFile, root: string, ctx: ReadContext, cuto
   if (!first || first.offset !== 0 || first.value.type !== 'session_meta') { ctx.add('unsupported-shape'); return; }
   const meta = object(first.value.payload);
   if (meta.id !== file.owner) { ctx.add('invalid-owner'); return; }
-  const mode = meta.history_mode ?? 'legacy';
+  const mode = meta.history_mode === undefined ? 'legacy' : meta.history_mode;
   if (mode !== 'legacy' && mode !== 'paginated') { ctx.add('unsupported-mode'); return; }
-  if (!isAbsolute(text(meta.cwd)) || !date(meta.timestamp)) { ctx.add('unsupported-shape'); return; }
+  if (!isAbsolute(text(meta.cwd)) || !date(meta.timestamp) ||
+      (meta.subagent_history_start_ordinal != null && !integer(meta.subagent_history_start_ordinal)) ||
+      (meta.forked_from_ordinal_exclusive != null && !integer(meta.forked_from_ordinal_exclusive)) ||
+      (meta.attached_thread != null && typeof meta.attached_thread !== 'boolean')) { ctx.add('unsupported-shape'); return; }
   if (mode === 'paginated') {
     const base = meta.history_base == null ? 0 : object(meta.history_base).end_ordinal_exclusive;
     if (!integer(base)) { ctx.add('invalid-boundary'); return; }
@@ -187,7 +199,7 @@ export class CodexSessionAdapter implements SessionAdapter {
       let workspace = resolve(rawWorkspace);
       try { workspace = await realpath(rawWorkspace); }
       catch { ctx.add('workspace-unavailable', 'workspace', undefined, false); }
-      const nativeName = mode === 'legacy' ? names.get(id) : row ? text(row.name) || text(row.preview) || text(row.title) : undefined;
+      const nativeName = displayTitle(mode, row, names.get(id));
       if (!row && mode === 'paginated') ctx.add('metadata-unavailable', 'metadata', undefined, false);
       this.selected.set(id, chosen.file);
       sessions.push({ id: `codex:${id}`, agent: 'codex', nativeId: id, title: nativeName || `Codex ${id}`,
