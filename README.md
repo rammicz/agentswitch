@@ -4,7 +4,7 @@
 
 Find a coding conversation, choose the agent you want to continue with, and get back to work. The first target is **Codex ↔ Claude Code**: when one quota runs out, your task should not have to start over.
 
-> **Status: early development scaffold.** The CLI, shared types, in-memory search, and an interactive demo exist. Reading real sessions, persistent search, native resume, and cross-agent handoffs are tracked in [GitHub Issues](https://github.com/rammicz/agentswitch/issues). No working provider integration is claimed yet. The package has not been published to npm.
+> **Status: early development scaffold.** The CLI, shared types, in-memory search, injected-service picker, and an interactive demo exist. Reading real sessions, persistent search, native resume, and cross-agent handoffs are tracked in [GitHub Issues](https://github.com/rammicz/agentswitch/issues). No working provider integration is claimed yet. The package has not been published to npm.
 
 ## The intended experience
 
@@ -51,17 +51,18 @@ agentswitch --demo --global
 
 The demo uses three synthetic sessions, including one in a different workspace. It reads no agent history, writes no history store, makes no network or model calls, and launches no agent.
 
-| Key | In the session list | In target selection |
+| Key | In the session list | In progressive views |
 | --- | --- | --- |
-| Type / Backspace | Search titles, workspaces, and message text | — |
-| ↑ / ↓ | Move selection | — |
-| ← / → | Cycle All / Codex / Claude | Cycle Codex / Claude |
+| Type / Backspace | Search titles, workspaces, and message text | Edit a workspace override |
+| ↑ / ↓ | Move selection | Scroll transcript or summary |
+| ← / → | Cycle All / Codex / Claude | Cycle target agent in target selection |
 | Tab | Toggle folder / global scope | — |
-| Enter | Choose a target for the selected session | Display a demo confirmation |
-| Esc | Exit | Return to sessions |
+| Enter | Preview matches and transcript | Choose target, prepare summary, then confirm |
+| W | Search text | Explicit workspace override in target selection |
+| Esc | Exit | Return to previous view |
 | Ctrl+C | Exit | Exit |
 
-The target selector is an interaction preview. Confirming it **does not transfer a conversation** in this scaffold.
+The demo uses the same injected-service picker as future integrations. Its final summary is synthetic; confirming exits with a demo notice and **does not transfer a conversation**. A global selection starts with its recorded folder. Missing folders require an explicit valid override before preparing the summary.
 
 ## What “transfer” means
 
@@ -111,6 +112,8 @@ npm run dev -- --demo
 npm pack --dry-run
 ```
 
+The offline PTY tests require Python 3 with its standard library on Linux or macOS. They use temporary folders and fake services without accessing provider histories.
+
 There are no runtime npm dependencies. TypeScript and Node type definitions are development dependencies.
 
 ```text
@@ -119,7 +122,7 @@ src/domain.ts        Sessions, history items, queries, handoff state
 src/adapters/        Read-only adapter contract and planned agent catalog
 src/search.ts        In-memory search baseline
 src/tui/             Synthetic data and keyboard interaction prototype
-test/                Search and CLI behavior checks
+test/                Search, CLI, offline PTY and terminal lifecycle checks
 docs/                Architecture, research references, contribution guidance
 ```
 

@@ -2,7 +2,7 @@
 
 ## Boundaries
 
-The CLI coordinates a session catalog, query service, terminal UI, continuation planner, handoff builder, delivery journal, and provider adapters. The scaffold implements only shared types, synthetic search and an interaction prototype. Adapter implementations, persistence and launch are deliberately pending.
+The CLI coordinates a session catalog, query service, terminal UI, continuation planner, handoff builder, delivery journal, and provider adapters. The scaffold implements shared types, synthetic search and a picker with injected asynchronous query, lazy preview and continuation preparation services. Adapter implementations, persistence, real continuation planning and launch are pending. The default CLI still prints scaffold help; `--demo` supplies only synthetic services.
 
 TypeScript on Node 22+ keeps installation straightforward for CLI users while allowing native subprocess launch. Avoid runtime dependencies until a concrete feature warrants them.
 
@@ -33,3 +33,11 @@ Restore terminal state before handing stdin/stdout to the child. Propagate exit 
 ## Scope and verification
 
 Initial targets are Linux and macOS. Windows needs explicit subprocess, terminal and path validation. Parsers and planners use sanitized fixtures with no paid provider calls. TUI behavior and child launch use PTY tests and fake agent executables; an optional opt-in provider smoke test documents tested versions without consuming quotas in CI. Persistent state must be tested for crash recovery and concurrent processes.
+
+## Picker service boundary
+
+`runPicker<Plan>` in `src/tui/app.ts` accepts the contracts in `src/tui/contracts.ts`. Query returns list metadata and attributed match excerpts, without eager transcripts. Preview receives provider/session identity and lazily returns public history items. Preparation receives that identity, the independent target choice and a workspace choice marked `source` or explicit `override`. Its result pairs an opaque plan with a summary naming source, target, `native-resume` or `fresh-handoff`, workspace and included/omitted item IDs. The UI displays the supplied summary without deriving compatibility or budgeting history.
+
+Enter progresses from list to transcript, target and final summary. Target selection offers W to type an explicit directory override; it never silently falls back from a missing source folder. Preparation checks directory existence before calling the service. Full permission and launch-time checks remain the runtime's responsibility. Long preview and summary lines wrap and scroll with up/down. Query errors offer Ctrl+R retry; preview and preparation errors offer R retry. Retrying never dispatches a continuation.
+
+Cancellation invalidates pending work and aborts its signal. Services may finish later, but obsolete results cannot redraw or dispatch. Setup, render and stream errors reject after cleanup; recoverable service errors remain visible until retry or cancellation. Signals and confirmation use the same idempotent cleanup. The callback receives the identical opaque plan only after raw mode, input flow, alternate screen and picker listeners have been restored. Callback rejection propagates after cleanup. The embedding caller must own the terminal while the picker is active.

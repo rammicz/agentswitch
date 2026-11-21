@@ -1,0 +1,45 @@
+import type { ReadStream, WriteStream } from 'node:tty';
+import type { AgentId, HistoryItem, Scope, Session, SessionQuery } from '../domain.js';
+
+/** Identity always includes the provider; native IDs alone need not be unique. */
+export type SessionSource = Pick<Session, 'id' | 'nativeId' | 'agent'>;
+export type MatchExcerpt =
+  | { field: 'message'; itemId: string; role: HistoryItem['role']; text: string }
+  | { field: 'title' | 'workspace'; text: string };
+/** List metadata does not require loading a transcript. Matches belong to this source. */
+export type SessionHit = Omit<Session, 'messages'> & { matches: readonly MatchExcerpt[] };
+export type WorkspaceChoice = { kind: 'source' | 'override'; path: string };
+export interface ContinuationRequest {
+  source: SessionSource;
+  target: AgentId;
+  workspace: WorkspaceChoice;
+}
+export interface ContinuationSummary {
+  source: SessionSource;
+  target: AgentId;
+  mode: 'native-resume' | 'fresh-handoff';
+  workspace: string;
+  includedItemIds: readonly string[];
+  omittedItemIds: readonly string[];
+}
+export interface PreparedContinuation<Plan> {
+  /** Opaque to the picker. The identical value is dispatched after confirmation. */
+  plan: Plan;
+  summary: ContinuationSummary;
+}
+/** Override streams only for embedding/testing. The caller owns the terminal. */
+export interface PickerTerminal {
+  input: ReadStream;
+  output: WriteStream;
+  signals: Pick<NodeJS.Process, 'on' | 'removeListener'>;
+}
+export interface PickerOptions<Plan> {
+  workspace: string;
+  scope?: Scope;
+  label?: string;
+  terminal?: PickerTerminal;
+  query(query: SessionQuery, signal: AbortSignal): Promise<readonly SessionHit[]>;
+  preview(source: SessionSource, signal: AbortSignal): Promise<readonly HistoryItem[]>;
+  prepare(request: ContinuationRequest, signal: AbortSignal): Promise<PreparedContinuation<Plan>>;
+  continue(plan: Plan): Promise<void>;
+}
