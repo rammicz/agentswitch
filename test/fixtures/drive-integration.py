@@ -12,13 +12,13 @@ def main():
   os.close(ack_read)
   state={'master':master,'slave':slave,'child':child,'output':'','cursor':0,'before':before,'ack':ack_write,'decoder':codecs.getincrementaldecoder('utf8')(),'preview':[]}
   instances.append(state);return state
- def until(state,marker,timeout=15):
+ def until(state,marker,timeout=15,retained=False):
   deadline=time.monotonic()+timeout
   while time.monotonic()<deadline:
-   found=state['output'].find(marker,state['cursor'])
-   if found>=0:state['cursor']=found+len(marker);return
+   found=state['output'].find(marker,0 if retained else state['cursor'])
+   if found>=0:state['cursor']=max(state['cursor'],found+len(marker));return
    if select.select([state['master']],[],[],0.03)[0]:
-    try:data=os.read(state['master'],65536)
+    try:data=os.read(state['master'],config.get('readBytes',65536))
     except OSError:break
     if not data:break
     state['output']+=state['decoder'].decode(data)
@@ -34,8 +34,8 @@ def main():
    if 'wait' in action:until(state,action['wait'])
    if 'signal' in action:os.kill(state['child'].pid,getattr(signal,action['signal']))
    if 'send' in action:os.write(state['master'],action['send'].encode())
-   if 'waitPrePidBarrier' in action:
-    if 'PID_COMMIT_PAUSED' not in state['output']:until(state,'PID_COMMIT_PAUSED')
+   if 'waitPrePidBarrier' in action:until(state,'PID_COMMIT_PAUSED',retained=True)
+   if 'waitPostPidCommit' in action:until(state,'PID_COMMIT_DONE',retained=True)
    if 'assertWrapperAlive' in action:
     if state['child'].poll() is not None:raise Exception('Wrapper exited before the driver observed child READY')
    if 'killWrapper' in action:state['child'].kill();state['child'].wait(timeout=5)

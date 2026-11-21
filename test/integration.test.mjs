@@ -82,18 +82,20 @@ test('two real CLI processes choosing the same source admit exactly one launch',
  const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));assert.deepEqual(journal.list().map(record=>record.state).sort(),['failed','uncertain']);journal.close();
 });
 
-for(const gap of [false,true])test(`wrapper death ${gap?'before durable child PID':'after READY'} leaves source and live archive protected on restart`,async()=>{
- const f=await setup();f.env.CLI_CHILD_HEARTBEAT=join(f.root,'child-heartbeat');if(gap){f.env.CLI_CRASH_POINT='spawn-before-pid';f.env.RUNTIME_READY_DELAY_MS='100';}
- const first=[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},...(gap?[{waitPrePidBarrier:true}]:[]),{assertWrapperAlive:true},{killWrapper:true}];
+for(const phase of ['committed-first','ready-first','pre-pid'])test(`wrapper death ${phase==='pre-pid'?'before durable child PID':'after READY ('+phase+')'} leaves source and live archive protected on restart`,async()=>{
+ const gap=phase==='pre-pid';
+ const f=await setup();f.env.CLI_CHILD_HEARTBEAT=join(f.root,'child-heartbeat');f.env.CLI_TRACK_PID_COMMIT='1';if(phase==='ready-first')f.env.CLI_DELAY_PID_COMMIT='1';if(phase==='committed-first')f.env.RUNTIME_READY_DELAY_MS='150';if(gap){f.env.CLI_CRASH_POINT='spawn-before-pid';f.env.RUNTIME_READY_DELAY_MS='100';}
+ const first=[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},...(gap?[{waitPrePidBarrier:true}]:[{waitPostPidCommit:true}]),{assertWrapperAlive:true},{killWrapper:true}];
  // A later wrapper reads the same native source. Ownership cannot be stolen even
  // when the original parent is dead and the target PID was never committed.
- const result=pty(f,[...first,{assertLiveChild:true},{start:true},...list,...select('codex'),{send:'\r'},{wait:'ownership is unknown'},{send:'\u0003'},{assertLiveChild:true}]);
+ const result=pty(f,[...first,{assertLiveChild:true},{start:true},...list,...select('codex'),{send:'\r'},{wait:'ownership is unknown'},{send:'\u0003'},{assertLiveChild:true}],[],phase==='committed-first'?{readBytes:1}:{});
  assert.equal(result[0].code,-9,'the driver must SIGKILL the live wrapper explicitly');
  const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));const [record]=journal.list();
  assert.equal(record.state,'pending');assert.equal(record.writer,'unknown');assert.equal(record.childPid===null,gap);assert.equal(journal.ownerState(record.sourceKey),'unknown');
  assert.throws(()=>journal.beginDeletion(record.id),/writer/);journal.abort(record.id);assert.equal(journal.get(record.id).state,'pending');
  const {deleteArchive}=await import('../dist/archive.js');await assert.rejects(deleteArchive(record.archive),/reserved/);journal.close();
- assert.equal((await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').length,1);
+ const launches=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(launches.length,1);assert.equal(record.childPid,gap?null:launches[0].pid);
+ if(!gap)assert.match(result[0].output,/PID_COMMIT_DONE/);
 });
 
 test('deliberate recovery is a new confirmed fresh attempt; abort/delete removes only that transfer content',async()=>{

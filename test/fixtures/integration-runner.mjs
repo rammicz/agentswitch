@@ -15,5 +15,16 @@ if(process.env.CLI_CRASH_POINT==='spawn-before-pid') {
   readSync(Number(process.env.CLI_ACK_FD),Buffer.alloc(1),0,1,null);
   throw new Error('Crash-test barrier unexpectedly released');
  };
+} else if(process.env.CLI_TRACK_PID_COMMIT==='1') {
+ const {TransferJournal}=await import('../../dist/transfer-journal.js');
+ const spawned=TransferJournal.prototype.spawned;
+ TransferJournal.prototype.spawned=function(...args) {
+  // Test-only scheduling stress: READY may arrive while this parent is paused.
+  if(process.env.CLI_DELAY_PID_COMMIT==='1')Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,1000);
+  const result=spawned.apply(this,args);
+  writeSync(1,'\nPID_COMMIT_DONE\n');
+  return result;
+ };
 }
+
 await import(process.env.CLI_ENTRY_MODULE??'../../dist/cli.js');
