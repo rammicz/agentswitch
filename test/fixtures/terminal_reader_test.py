@@ -46,4 +46,35 @@ class TerminalReaderTest(unittest.TestCase):
    chunks.append('fresh frame\nEnter preview\n')
    self.assertEqual(driver.read_until('Enter preview'),'fresh frame\nEnter preview\n')
 
+
+spec = importlib.util.spec_from_file_location('integration_driver', Path(__file__).with_name('drive-integration.py'))
+integration = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(integration)
+
+class IntegrationReaderTest(unittest.TestCase):
+ @contextmanager
+ def reader(self, chunks):
+  state={'output':'','cursor':0,'master':12345,'child':SimpleNamespace(poll=lambda: None if chunks else 0),'decoder':integration.codecs.getincrementaldecoder('utf8')()}
+  with patch.object(integration.select,'select',side_effect=lambda *args: ([state['master']],[],[]) if chunks else ([],[],[])), patch.object(integration.os,'read',side_effect=lambda *args: chunks.pop(0)):
+   yield state
+
+ def test_retained_commit_marker_handles_either_order_and_fragmented_utf8_without_tiny_pty_reads(self):
+  marker='PID_COMMIT_DONE'
+  for commit_first in [True,False]:
+   stream=('frame 日本語\n'+(marker+'\r\nREADY' if commit_first else 'READY\r\n'+marker)).encode()
+   split=stream.index(marker.encode())+len('PID_COMMIT_')
+   layouts=[('coalesced',[stream]),('split marker',[stream[:split],stream[split:]]),('one byte fragments',[bytes([unit]) for unit in stream])]
+   for name,chunks in layouts:
+    with self.subTest(commit_first=commit_first,layout=name), self.reader(chunks.copy()) as state:
+     integration.until(state,'READY');cursor=state['cursor']
+     integration.until(state,marker,retained=True)
+     self.assertEqual(state['output'],stream.decode())
+     self.assertGreaterEqual(state['cursor'],cursor)
+
+ def test_normal_wait_cannot_reuse_an_earlier_commit_marker(self):
+  with self.reader([b'PID_COMMIT_DONE\nREADY']) as state:
+   integration.until(state,'READY')
+   with self.assertRaisesRegex(Exception,'Missing'):
+    integration.until(state,'PID_COMMIT_DONE')
+
 if __name__ == '__main__': unittest.main()

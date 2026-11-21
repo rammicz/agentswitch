@@ -1,6 +1,19 @@
 """Real CLI entry in isolated foreground PTYs, with only synthetic providers."""
 import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess,codecs
 
+def until(state,marker,timeout=15,retained=False):
+ deadline=time.monotonic()+timeout
+ while time.monotonic()<deadline:
+  found=state['output'].find(marker,0 if retained else state['cursor'])
+  if found>=0:state['cursor']=max(state['cursor'],found+len(marker));return
+  if select.select([state['master']],[],[],0.03)[0]:
+   try:data=os.read(state['master'],65536)
+   except OSError:break
+   if not data:break
+   state['output']+=state['decoder'].decode(data)
+  elif state['child'].poll() is not None:break
+ raise Exception('Missing '+repr(marker)+'; output='+repr(state['output']))
+
 def main():
  config=json.load(sys.stdin);instances=[]
  def start():
@@ -12,18 +25,6 @@ def main():
   os.close(ack_read)
   state={'master':master,'slave':slave,'child':child,'output':'','cursor':0,'before':before,'ack':ack_write,'decoder':codecs.getincrementaldecoder('utf8')(),'preview':[]}
   instances.append(state);return state
- def until(state,marker,timeout=15,retained=False):
-  deadline=time.monotonic()+timeout
-  while time.monotonic()<deadline:
-   found=state['output'].find(marker,0 if retained else state['cursor'])
-   if found>=0:state['cursor']=max(state['cursor'],found+len(marker));return
-   if select.select([state['master']],[],[],0.03)[0]:
-    try:data=os.read(state['master'],config.get('readBytes',65536))
-    except OSError:break
-    if not data:break
-    state['output']+=state['decoder'].decode(data)
-   elif state['child'].poll() is not None:break
-  raise Exception('Missing '+repr(marker)+'; output='+repr(state['output']))
  try:
   state=start()
   for action in config['actions']:

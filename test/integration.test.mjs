@@ -28,7 +28,8 @@ async function setup(target='claude') {
 }
 function pty(f,actions,args=[],terminal={}) {
  const child=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,...terminal}),timeout:40000,maxBuffer:8*1024*1024});
- assert.equal(child.status,0,child.stderr);return JSON.parse(child.stdout);
+ if(child.error)throw new Error(`PTY driver failed: ${child.error.code??'unknown error'}; signal=${child.signal??'none'}; timeout=40000ms. ${child.error.message}\n${child.stderr?.slice(-4096)??''}`,{cause:child.error});
+ assert.equal(child.status,0,`PTY driver exited status=${child.status}; signal=${child.signal??'none'}\n${child.stderr}`);return JSON.parse(child.stdout);
 }
 const list=[{wait:'Enter preview'}];
 const select=(provider)=>[{send:provider==='codex'?'public source':'Claude public'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
@@ -88,7 +89,7 @@ for(const phase of ['committed-first','ready-first','pre-pid'])test(`wrapper dea
  const first=[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},...(gap?[{waitPrePidBarrier:true}]:[{waitPostPidCommit:true}]),{assertWrapperAlive:true},{killWrapper:true}];
  // A later wrapper reads the same native source. Ownership cannot be stolen even
  // when the original parent is dead and the target PID was never committed.
- const result=pty(f,[...first,{assertLiveChild:true},{start:true},...list,...select('codex'),{send:'\r'},{wait:'ownership is unknown'},{send:'\u0003'},{assertLiveChild:true}],[],phase==='committed-first'?{readBytes:1}:{});
+ const result=pty(f,[...first,{assertLiveChild:true},{start:true},...list,...select('codex'),{send:'\r'},{wait:'ownership is unknown'},{send:'\u0003'},{assertLiveChild:true}]);
  assert.equal(result[0].code,-9,'the driver must SIGKILL the live wrapper explicitly');
  const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));const [record]=journal.list();
  assert.equal(record.state,'pending');assert.equal(record.writer,'unknown');assert.equal(record.childPid===null,gap);assert.equal(journal.ownerState(record.sourceKey),'unknown');
