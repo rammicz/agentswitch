@@ -44,7 +44,9 @@ export function publicSnapshot(snapshot: ArchiveSnapshot): ArchiveSnapshot {
     if (!id || ids.has(id)) failure('DUPLICATE_ITEM', 'Public history has an empty or duplicate item ID.');
     ids.add(id); bytes += Buffer.byteLength(id) + Buffer.byteLength(text);
     if (bytes > MAX_ARCHIVE_BYTES) failure('ARCHIVE_TOO_LARGE', 'Public history exceeds the supported archive size.');
-    return { id, role: item.role, text, status: item.status };
+    const origin=item.origin;
+    if(origin&&(!['codex','claude'].includes(origin.agent)||!/^([a-f0-9]{64})$/.test(origin.context))) failure('INVALID_HISTORY','Invalid activity origin.');
+    return { id, role: item.role, text, status: item.status, ...(origin?{origin:{agent:origin.agent,context:origin.context}}:{}) };
   });
   const includedItemIds = snapshot.includedItemIds.map(id => publicString(id, 4096));
   if (new Set(includedItemIds).size !== includedItemIds.length || includedItemIds.some(id => !ids.has(id))) failure('INVALID_HISTORY', 'Invalid included history IDs.');

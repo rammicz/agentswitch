@@ -18,6 +18,8 @@ export interface HistoryItem {
   role: 'user' | 'assistant' | 'tool';
   text: string;
   status: 'complete' | 'interrupted' | 'failed';
+  /** Non-sensitive origin attribution for canonical cross-provider activity. */
+  origin?: { agent: AgentId; context: string };
 }
 
 export interface SessionQuery {

@@ -25,7 +25,7 @@ function project(input: HandoffInput): Projected {
   const pattern = redactions.length ? new RegExp([...new Set(redactions)].sort((a, b) => b.length - a.length || (a < b ? -1 : 1)).map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gu') : undefined;
   const redact = (value: string) => pattern ? value.replace(pattern, '[REDACTED]') : value;
   const original = publicSnapshot({ source: input.source, items: input.items, includedItemIds: [], completeness: input.completeness ?? 'unknown' });
-  const snapshot = publicSnapshot({ ...original, source: { agent: original.source.agent, id: redact(original.source.id), nativeId: redact(original.source.nativeId) }, items: original.items.map(item => ({ id: redact(item.id), role: item.role, status: item.status, text: redact(item.text) })) });
+  const snapshot = publicSnapshot({ ...original, source: { agent: original.source.agent, id: redact(original.source.id), nativeId: redact(original.source.nativeId) }, items: original.items.map(item => ({ id: redact(item.id), role: item.role, status: item.status, text: redact(item.text), ...(item.origin?{origin:item.origin}:{}) })) });
   return { snapshot, currentRequest: redact(input.currentRequest) };
 }
 function limits(input: HandoffInput) {

@@ -2,9 +2,9 @@
 
 `createRuntime` in `src/runtime.ts` prepares an opaque `LaunchPlan` and matching
 picker summary, then launches that exact one-shot snapshot after confirmation.
-The default CLI still prints help; #5 owns reader/index/builder/picker composition,
-durable delivery state and cross-process serialization. #8 owns selection,
-redaction, attribution, omission references and archive lifetime.
+The default CLI composes readers, index, picker, handoff archives and durable
+delivery state. [Continuity](continuity.md) resolves earlier native targets and
+conditionally observes matching Codex submit/completion hooks.
 
 The runtime performs only `--version`, `--help`, and Codex `resume --help` probes.
 It supports exactly **Codex 0.171.0** and **Claude Code 2.1.330**, with required
@@ -41,8 +41,9 @@ or explicit `mode: 'fresh'`, requires `input.handoff`:
 
 `prompt` is the **complete serialized user prompt**, including the historical
 context and separately identified current request. The runtime does not append,
-select, truncate or reserialize it. Native resume instead receives only
-`input.currentRequest`, without replaying history. The complete final positional
+select, truncate or reserialize it. Ordinary source-native resume receives only
+`input.currentRequest`. A trusted `input.resumeTarget` can identify a separate
+earlier target and receive the bounded missing-history `input.handoff`. The complete final positional
 prompt must contain no NUL and fit **16,384 UTF-8 bytes**, including envelopes,
 escaping, archive references and current request. An application can configure a
 smaller limit. This conservative transport policy is neither a model token limit

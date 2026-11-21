@@ -15,7 +15,7 @@ const outputRelative = relative(realpathSync(root), output);
 assert.ok(isAbsolute(outputRelative) || (outputRelative !== '' && outputRelative !== '..' && outputRelative.startsWith('../')), 'Artifacts must be outside the checkout');
 if (args.length) mkdirSync(output, { mode: 0o700 });
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'agentswitch-install-')));
-const prefix = join(work, 'prefix with spaces');
+const prefix = join(work, "prefix with spaces and ' quote");
 const workspace = join(work, 'workspace with spaces');
 for (const path of [prefix, workspace, 'home', 'cache', 'tmp', 'config', 'codex', 'codex-sqlite', 'claude', 'xdg-state'].map(path => isAbsolute(path) ? path : join(work, path))) mkdirSync(path, { mode: 0o700 });
 const userConfig = join(work, 'user.npmrc');
@@ -191,6 +191,11 @@ try {
     assert.equal(retrieved, text);
     smoke(['archive', 'delete', ...base], 0);
     smoke(['archive', 'read', ...base, '--item', '0'], 1, /missing|deleted/i, 'stderr');
+  });
+  checked('installed default CLI continuity invokes packaged observer through quoted absolute helper',()=>{
+    env.AGENTSWITCH_TEST_ENTRY=join(installed,'dist/cli.js');
+    try {command(process.execPath,['--test','--test-name-pattern=^default CLI A→B→A',join(root,'test/continuity-integration.test.mjs')],root);}
+    finally {delete env.AGENTSWITCH_TEST_ENTRY;}
   });
   checked('explicit offline uninstall removes package and exact bin, preserving sentinel', () => {
     npm(['uninstall', ...installArgs, 'agentswitch']);

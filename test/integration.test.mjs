@@ -148,7 +148,7 @@ test('bounded final preview explains omissions and exposes the retained redacted
  const f=await setup();
  await writeRollout(f.codex,rollout(f.cwd,codexIds[0],[completed('UserMessage','u','public source NEEDLE_SECRET '+('huge '.repeat(4500)),1),completed('AgentMessage','a','intact selected answer',2),completed('CommandExecution','t','tool outcome NEEDLE_SECRET',3)]));
  const [result]=pty(f,[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},...redact,...finish]);
- const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());const prompt=JSON.parse(launch.args.at(-1));assert.equal(prompt.omissions.count,1);assert.ok(prompt.history.some(item=>item.role==='tool'&&item.text==='tool outcome [REDACTED]'));assert.match(result.output,/Omitted: .*u/);
+ const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());const prompt=JSON.parse(launch.args.at(-1));assert.equal(prompt.omissions.count,1);assert.ok(prompt.history.some(item=>item.role==='tool'&&item.text==='tool outcome [REDACTED]'));assert.match(result.output,/Omitted: [a-f0-9]{64}/);
  const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));const [record]=journal.list();journal.close();
  const cli=(...args)=>spawnSync(process.execPath,[join(repo,'dist/cli.js'),'archive',...args],{encoding:'utf8',env:{...process.env,...f.env}});
  const manifest=cli('list','--directory',record.archive.directory,'--archive',record.archive.id);assert.equal(manifest.status,0,manifest.stderr);const page=JSON.parse(manifest.stdout);assert.equal(page.items.length,3);assert.equal(page.items[0].included,false);

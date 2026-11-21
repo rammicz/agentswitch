@@ -1,4 +1,5 @@
-import { opendir, realpath } from 'node:fs/promises';
+import { opendir, realpath, stat } from 'node:fs/promises';
+import { nativeIncarnation } from '../continuity.js';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { HistoryItem, Session } from '../domain.js';
@@ -16,7 +17,7 @@ export interface ClaudeAdapterOptions {
   limits?: Partial<ClaudeLimits>; onDiagnostic?: (diagnostic: ClaudeDiagnostic) => void;
 }
 export interface ClaudeSession extends Session { createdAt: string; producerVersion?: string }
-export interface ClaudeHistory { items: readonly HistoryItem[]; complete: boolean; diagnostics: readonly ClaudeDiagnostic[] }
+export interface ClaudeHistory { items: readonly HistoryItem[]; complete: boolean; diagnostics: readonly ClaudeDiagnostic[]; incarnation?:string; retained?:boolean }
 interface File { path: string; id: string; mtime: number }
 interface Metadata { cwd: string; created: string; prompt: string; customTitle: string; aiTitle: string; lastPrompt: string; summary: string; producer: string; sidechain: boolean; valid: boolean }
 const filePattern = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
@@ -160,7 +161,7 @@ export class ClaudeSessionAdapter implements SessionAdapter {
         const entry = graphEntry(value, line, file.id, ctx); if (entry) entries.push(entry);
       });
       const items = project(conversation(entries, ctx), file.id, ctx);
-      return { items, complete: ctx.complete, diagnostics: ctx.diagnostics };
+      return { items, complete: ctx.complete, diagnostics: ctx.diagnostics, incarnation:nativeIncarnation(await stat(file.path)),retained:false };
     });
   }
 }

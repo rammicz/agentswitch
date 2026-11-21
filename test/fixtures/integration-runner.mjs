@@ -16,4 +16,4 @@ if(process.env.CLI_CRASH_POINT==='spawn-before-pid') {
   throw new Error('Crash-test barrier unexpectedly released');
  };
 }
-await import('../../dist/cli.js');
+await import(process.env.CLI_ENTRY_MODULE??'../../dist/cli.js');

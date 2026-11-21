@@ -8,11 +8,12 @@ import type { SessionSource } from './tui/contracts.js';
 import { SearchIndex } from './search-index.js';
 import type { RuntimeSource } from './runtime.js';
 import { digest } from './transfer-journal.js';
+import type { ContextRef } from './continuity.js';
 
 const agents: readonly AgentId[] = ['codex','claude'];
 const canonical = async (path: string): Promise<string> => realpath(resolve(path)).catch(()=>resolve(path));
 const harmless = new Set(['workspace-unavailable','metadata-unavailable','metadata-schema','metadata-unstable','untested-producer']);
-export interface NativeSnapshot { session: CodexSession | ClaudeSession; history: CodexHistory; fingerprint: string; runtime: RuntimeSource; sourceKey: string }
+export interface NativeSnapshot { session: CodexSession | ClaudeSession; history: CodexHistory; fingerprint: string; runtime: RuntimeSource; sourceKey: string; context:ContextRef; retained:boolean }
 
 /** Captures native quality before committing generations; healthy siblings remain searchable. */
 export class NativeCatalog {
@@ -30,6 +31,8 @@ export class NativeCatalog {
     return new NativeCatalog(roots,{codex:JSON.stringify([roots.codex,sqlite]),claude:roots.claude},sqlite);
   }
   sources() { return agents.map(agent=>({sourceId:digest(this.rootKeys[agent]),adapter:{id:agent,discover:async()=>[...(this.staged.get(agent)?.values()??[])],readHistory:async(nativeId:string)=>this.staged.get(agent)?.get(nativeId)?.messages??[]}})); }
+  rootKey(agent:AgentId):string {return digest(this.rootKeys[agent]);}
+  rootPath(agent:AgentId):string {return this.roots[agent];}
   notices():readonly string[] {return agents.map(agent=>this.warnings[agent]).filter(Boolean);}
   private report(agent:AgentId, extra=''):void {
     const codes=[...new Set(this.diagnostics[agent].map(diagnostic=>diagnostic.code))];
@@ -68,6 +71,8 @@ export class NativeCatalog {
     this.report(source.agent,history.complete?'':'selected public history incomplete; transfer blocked');signal?.throwIfAborted();
     const compatible=source.agent==='codex' ? session.producerVersion==='0.171.0' : !session.producerVersion||session.producerVersion==='2.1.330';
     const runtime:RuntimeSource={agent:session.agent,id:session.id,nativeId:session.nativeId,workspace:session.workspace,nativeResume:compatible?'compatible':'unknown'};
-    return {session,history,runtime,fingerprint:digest(JSON.stringify([runtime,history.items,history.complete])),sourceKey:digest(JSON.stringify([source.agent,this.rootKeys[source.agent],source.nativeId]))};
+    const sourceKey=digest(JSON.stringify([source.agent,this.rootKeys[source.agent],source.nativeId]));
+    const context:ContextRef={...runtime,root:this.rootKey(source.agent),incarnation:history.incarnation??'unknown',sourceKey};
+    return {session,history,runtime,fingerprint:digest(JSON.stringify([runtime,history.items,history.complete,context.incarnation,history.retained])),sourceKey,context,retained:compatible&&history.retained===true};
   }
 }

@@ -98,7 +98,7 @@ The programmatic readers accept explicit native roots; see [Codex reader](docs/c
 | --- | --- | --- |
 | Foundation | Installable development CLI, shared types, keyboard demo, CI, documentation | Scaffold available |
 | [First usable release](https://github.com/rammicz/agentswitch/issues/5) | Codex and Claude Code discovery, folder/global search, transcript preview, native resume, bounded cross-agent handoff, launch and recovery | Planned; component tasks linked from integration issue |
-| [Continuity](https://github.com/rammicz/agentswitch/issues/6) | Durable transfer lineage, A → B → A missing-history delivery, archive retrieval, capability-tested native import | Deferred |
+| [Continuity](https://github.com/rammicz/agentswitch/issues/6) | Durable lineage, exact missing-history sets and conditional Codex return via native hooks; reviewed fresh fallbacks | [Offline integration](docs/continuity.md) |
 | More agents | [OpenCode](https://github.com/rammicz/agentswitch/issues/11), [agy](https://github.com/rammicz/agentswitch/issues/9), [grokbuild](https://github.com/rammicz/agentswitch/issues/12) | Deferred; validate each integration before promising compatibility |
 | [Community requests](https://github.com/rammicz/agentswitch/issues/13) | Other popular coding agents, based on demand | Open to proposals; structured intake deferred |
 

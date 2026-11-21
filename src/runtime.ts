@@ -26,6 +26,10 @@ export interface RuntimeInput {
   handoff?: PreparedPrompt;
   /** Native resume receives only this new request, never replayed history. */
   currentRequest?: string;
+  /** Trusted continuity resolution. This identity is independent from selected history. */
+  resumeTarget?:RuntimeSource;
+  observerCommand?:string;
+  requireReceipt?:boolean;
 }
 export interface OwnedSessionGuard {
   check(source: SessionSource): 'idle' | 'active' | 'unknown';
@@ -66,6 +70,8 @@ export interface LaunchPlan {
   readonly args: readonly string[];
   readonly workspace: string;
   readonly version: string;
+  readonly nativeTarget:SessionSource|null;
+  readonly observer:'codex-hooks'|'none';
 }
 export interface LaunchResult {
   launched: true;
@@ -138,7 +144,7 @@ function probe(executable: string, args: string[], cwd: string, env: NodeJS.Proc
     if (signal?.aborted) abort();
   });
 }
-async function capabilities(target: AgentId, executable: string, cwd: string, env: NodeJS.ProcessEnv, timeout: number, signal?: AbortSignal): Promise<string> {
+async function capabilities(target: AgentId, executable: string, cwd: string, env: NodeJS.ProcessEnv, timeout: number, signal?: AbortSignal): Promise<{version:string;observer:boolean}> {
   const version = await probe(executable, ['--version'], cwd, env, timeout, signal);
   const expected = target === 'codex' ? 'codex-cli 0.171.0' : '2.1.330 (Claude Code)';
   if (version !== expected) return fail('UNSUPPORTED_VERSION', 'Target version is unsupported. Supported versions: Codex 0.171.0 and Claude Code 2.1.330. Prepare with a tested version.');
@@ -150,7 +156,7 @@ async function capabilities(target: AgentId, executable: string, cwd: string, en
   } else if (!/Usage: claude \[options\](?: \[command\])? \[prompt\]/.test(help) || !/--resume\s+\[value\]/.test(help)) {
     return fail('UNSUPPORTED_CAPABILITY', 'Claude interactive prompt or exact resume capability is missing.');
   }
-  return expected;
+  return {version:expected,observer:target==='codex'&&/--config\s+<key=value>/.test(help)};
 }
 function available(guard: OwnedSessionGuard, source: SessionSource): void {
   const state = guard.check(source);
@@ -183,29 +189,34 @@ export function createRuntime(options: RuntimeOptions) {
       if (request.workspace.kind === 'source' && workspace.path !== (await directory(source.workspace)).path)
         return fail('WORKSPACE_CHOICE', 'Workspace does not match the recorded source workspace. Choose an explicit override.');
       if (input.mode !== undefined && !['auto', 'fresh'].includes(input.mode)) return fail('INVALID_MODE', 'Continuation mode must be auto or explicitly fresh.');
-      const native = source.agent === request.target && input.mode !== 'fresh';
-      if (native && !uuid.test(source.nativeId)) return fail('INVALID_NATIVE_ID', 'Native resume requires the exact source UUID. Refresh or explicitly choose a fresh handoff.');
-      if (native && source.nativeResume !== 'compatible') return fail('INCOMPATIBLE_NATIVE', 'Native session compatibility is unavailable. Explicitly choose a fresh handoff or use the native client.');
-      if (native) available(guard, source);
+      const targetSource=input.resumeTarget??source;
+      const native = targetSource.agent === request.target && input.mode !== 'fresh';
+      if(input.resumeTarget&&targetSource.workspace!==workspace.path)return fail('WORKSPACE_CHOICE','Earlier native target workspace differs from the selected workspace.');
+      if (native && !uuid.test(targetSource.nativeId)) return fail('INVALID_NATIVE_ID', 'Native resume requires the exact source UUID. Refresh or explicitly choose a fresh handoff.');
+      if (native && targetSource.nativeResume !== 'compatible') return fail('INCOMPATIBLE_NATIVE', 'Native session compatibility is unavailable. Explicitly choose a fresh handoff or use the native client.');
+      if (native) available(guard, targetSource);
       if (!native && !input.handoff) return fail('HANDOFF_REQUIRED', 'A prepared historical user prompt and distinct current request are required for a fresh handoff.');
-      const prompt = native ? input.currentRequest ?? '' : input.handoff!.prompt;
+      const prompt = input.handoff?.prompt??(native ? input.currentRequest ?? '' : input.handoff!.prompt);
       if (prompt.includes('\0')) return fail('INVALID_PROMPT', 'Initial user prompt contains NUL and cannot be transported.');
       if (Buffer.byteLength(prompt, 'utf8') > limit) return fail('PROMPT_TOO_LARGE', `Complete initial user prompt exceeds the ${limit} byte transport limit. Reduce the prepared selection before confirming.`);
       const executable = await resolveExecutable(options.executables?.[request.target] ?? request.target, env);
       const identity = await executableIdentity(executable);
-      const version = await capabilities(request.target, executable, workspace.path, env, timeout, signal);
+      const capability = await capabilities(request.target, executable, workspace.path, env, timeout, signal);
+      if(input.requireReceipt&&!capability.observer)return fail('RECEIPT_UNAVAILABLE','Native receipt capability is unavailable; review a fresh bounded rebuild.');
       if (await executableIdentity(executable) !== identity) return fail('EXECUTABLE_CHANGED', 'Target executable changed during preparation. Prepare and confirm again.');
       cancelled(signal);
+      const observer=Boolean(capability.observer&&input.observerCommand);
+      const hooks=observer?['UserPromptSubmit','Stop'].flatMap(event=>['-c',`hooks.${event}=[{hooks=[{type="command",command=${JSON.stringify(input.observerCommand)},timeout=5}]}]`]):[];
       const args = request.target === 'codex'
-        ? native ? ['resume', '-C', workspace.path, '--', source.nativeId, ...(prompt ? [prompt] : [])] : ['-C', workspace.path, '--', prompt]
-        : native ? [`--resume=${source.nativeId}`, ...(prompt ? ['--', prompt] : [])] : ['--', prompt];
-      const plan: LaunchPlan = Object.freeze({ mode: native ? 'native-resume' : 'fresh-handoff', target: request.target, executable, args: Object.freeze(args), workspace: workspace.path, version });
+        ? native ? ['resume',...hooks, '-C', workspace.path, '--', targetSource.nativeId, ...(prompt ? [prompt] : [])] : [...hooks,'-C', workspace.path, '--', prompt]
+        : native ? [`--resume=${targetSource.nativeId}`, ...(prompt ? ['--', prompt] : [])] : ['--', prompt];
+      const plan: LaunchPlan = Object.freeze({ mode: native ? 'native-resume' : 'fresh-handoff', target: request.target, executable, args: Object.freeze(args), workspace: workspace.path, version:capability.version,nativeTarget:native?{id:targetSource.id,agent:targetSource.agent,nativeId:targetSource.nativeId}:null,observer:observer?'codex-hooks':'none' });
       const identitySource = Object.freeze({ id: source.id, agent: source.agent, nativeId: source.nativeId });
-      snapshots.set(plan, { source: identitySource, workspacePath: request.workspace.path, workspaceIdentity: workspace.identity, executableIdentity: identity, used: false });
+      snapshots.set(plan, { source: plan.nativeTarget??identitySource, workspacePath: request.workspace.path, workspaceIdentity: workspace.identity, executableIdentity: identity, used: false });
       return { plan, summary: { source: identitySource, target: request.target, mode: plan.mode, workspace: plan.workspace,
-        includedItemIds: native ? [] : [...input.handoff!.includedItemIds], omittedItemIds: native ? [] : [...input.handoff!.omittedItemIds] } };
+        includedItemIds: input.handoff?[...input.handoff.includedItemIds]:[], omittedItemIds: input.handoff?[...input.handoff.omittedItemIds]:[] } };
     },
-    async launch(plan: LaunchPlan, { signal, beforeSpawn, onSpawn }: { signal?: AbortSignal; beforeSpawn?: () => void; onSpawn?: (pid: number) => void } = {}): Promise<LaunchResult> {
+    async launch(plan: LaunchPlan, { signal, beforeSpawn, onSpawn, observer }: { signal?: AbortSignal; beforeSpawn?: () => void; onSpawn?: (pid: number) => void; observer?:{journal:string;attempt:string;token:string;root:string;rootPath:string} } = {}): Promise<LaunchResult> {
       cancelled(signal);
       const snapshot = snapshots.get(plan);
       if (!snapshot || snapshot.used) return fail('INVALID_PLAN', 'Expected an unused plan prepared by this runtime. Prepare and confirm again; never blindly retry delivery.');
@@ -228,7 +239,9 @@ export function createRuntime(options: RuntimeOptions) {
       snapshot.used = true;
       return new Promise<LaunchResult>((resolve, reject) => {
         let child: ReturnType<typeof spawn>;
-        try { child = spawn(plan.executable, [...plan.args], { cwd: plan.workspace, env, shell: false, stdio: 'inherit' }); }
+        const launchEnv={...env};delete launchEnv.AGENTSWITCH_OBSERVER;
+        if(plan.observer==='codex-hooks'&&observer)launchEnv.AGENTSWITCH_OBSERVER=JSON.stringify(observer);
+        try { child = spawn(plan.executable, [...plan.args], { cwd: plan.workspace, env:launchEnv, shell: false, stdio: 'inherit' }); }
         catch { release(); return reject(new RuntimeError('LAUNCH_FAILED', 'Target launch failed before process creation. Check installation, workspace and OS argument limits; prepare again.')); }
         let launched = false; let error = false; let observationError: unknown;
         const timers = new Set<ReturnType<typeof setTimeout>>();

@@ -16,7 +16,7 @@ Sort recent sessions first with deterministic ID tie breaking. Provider filterin
 
 ## Continuation
 
-Same-agent native resume and cross-agent handoff are different plans. A compatible native source session may be resumed by its own agent. A different agent initially gets a fresh conversation with attributed history. Reusing a previously targeted session with deltas is later continuity work.
+Same-agent native resume and cross-agent handoff are different plans. A compatible native source session may be resumed by its own agent. A different agent initially gets a fresh conversation with attributed history. [Continuity](continuity.md) resolves a compatible earlier Codex native target independently from the selected source and sends exact missing activity; unsupported or changed contexts receive a reviewed fresh rebuild.
 
 Start in the recorded source workspace by default. Show it before launch, handle deleted folders, and require an explicit choice to override it. Do not silently change an agent's trust or approval flags. Use argument arrays with shell disabled; do not put unbounded transcripts or secrets into command strings. The receiving agent must get its normal terminal and current native settings.
 
