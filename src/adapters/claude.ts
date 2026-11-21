@@ -105,7 +105,7 @@ export class ClaudeSessionAdapter implements SessionAdapter {
         }
       }
       for (const field of ['customTitle', 'aiTitle', 'lastPrompt', 'summary'] as const) {
-        if (typeof value[field] === 'string' && value[field].trim()) meta[field] = value[field].trim().slice(0, 500);
+        if (typeof value[field] === 'string') meta[field] = value[field].trim().slice(0, 500);
       }
       if (typeof value.version === 'string') {
         if (!/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(value.version)) { ctx.add('unsupported-shape', 'metadata', line); return; }

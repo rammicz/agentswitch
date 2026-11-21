@@ -220,3 +220,8 @@ test('direct sidechain/team transcripts are not promoted to top-level resumable 
   const {root,cwd}=await fixture(t);await write(root,ids[0],[e(ids[0],cwd,'u',null,'user','Healthy')]);await write(root,ids[1],[e(ids[1],cwd,'u',null,'user','PRIVATE_SIDECHAIN',{isSidechain:true})]);await write(root,ids[2],[e(ids[2],cwd,'u',null,'user','PRIVATE_TEAM',{teamName:'worker'})]);
   assert.deepEqual((await reader({root}).discover()).map(s=>s.nativeId),[ids[0]]);
 });
+
+test('empty native title updates clear earlier values before applying title precedence',async t=>{
+  const {root,cwd}=await fixture(t);await write(root,ids[0],[e(ids[0],cwd,'u',null,'user','Prompt'),{type:'custom-title',customTitle:'Old title'},{type:'ai-title',aiTitle:'AI fallback'},{type:'custom-title',customTitle:''}]);
+  assert.equal((await reader({root}).discover())[0].title,'AI fallback');
+});
