@@ -1,0 +1,232 @@
+import { readdir, realpath } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { basename, join, resolve, isAbsolute } from 'node:path';
+import type { HistoryItem, Session } from '../domain.js';
+import type { SessionAdapter } from './index.js';
+import { boundedRead, contains, defaultLimits, historyBytes, historyHeader, metadataSnapshot, ReadContext } from './codex-io.js';
+import type { CodexDiagnostic, CodexLimits } from './codex-io.js';
+import { object, project, text } from './codex-projection.js';
+import type { ObjectRecord, SourceRecord } from './codex-projection.js';
+export type { CodexDiagnostic, CodexLimits } from './codex-io.js';
+export interface CodexAdapterOptions {
+  root?: string; sqliteRoot?: string; home?: string; env?: NodeJS.ProcessEnv;
+  limits?: Partial<CodexLimits>; onDiagnostic?: (diagnostic: CodexDiagnostic) => void;
+}
+export interface CodexSession extends Session {
+  createdAt: string; historyMode: 'legacy' | 'paginated'; producerVersion: string;
+  metadataFidelity: 'native' | 'reduced';
+}
+export interface CodexHistory { items: readonly HistoryItem[]; complete: boolean; diagnostics: readonly CodexDiagnostic[] }
+interface RolloutFile { path: string; owner: string; rolloutId: string }
+interface ParsedRollout { file: RolloutFile; meta: ObjectRecord; records: SourceRecord[] }
+const uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+const filePattern = new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${uuid})(?:_(${uuid}))?\\.jsonl(?:\\.zst)?$`);
+function identify(path: string): RolloutFile | undefined {
+  const match = filePattern.exec(basename(path));
+  return match?.[1] ? { path, owner: match[1], rolloutId: match[2] ?? match[1] } : undefined;
+}
+function integer(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0; }
+function date(value: unknown): string | undefined {
+  const ms = typeof value === 'number' ? (value < 100_000_000_000 ? value * 1000 : value) : typeof value === 'string' ? Date.parse(value) : NaN;
+  return Number.isFinite(ms) && Math.abs(ms) <= 8.64e15 ? new Date(ms).toISOString() : undefined;
+}
+function parseRecords(bytes: Buffer, source: string, ctx: ReadContext): SourceRecord[] {
+  const records: SourceRecord[] = [];
+  let offset = 0, line = 0;
+  while (offset < bytes.length) {
+    line++;
+    const newline = bytes.indexOf(10, offset), end = newline < 0 ? bytes.length : newline + 1;
+    const chunk = bytes.subarray(offset, newline < 0 ? end : end - 1);
+    if (chunk.length > ctx.limits.maxLineBytes) ctx.add('input-limit', 'history', line);
+    else {
+      try {
+        const value = object(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(chunk)));
+        if (!value.type || !value.payload) throw new Error();
+        records.push({ value, offset, end, line, source, ...(integer(value.ordinal) ? { ordinal: value.ordinal } : {}) });
+      } catch { ctx.add(newline < 0 ? 'partial-record' : 'malformed-record', 'history', line); }
+    }
+    offset = end;
+  }
+  return records;
+}
+async function parseFile(file: RolloutFile, root: string, ctx: ReadContext, cutoff?: number, headerOnly = false): Promise<ParsedRollout | undefined> {
+  const input = await (headerOnly ? historyHeader(file.path, root, ctx) : historyBytes(file.path, root, ctx));
+  if (!input) return;
+  if (cutoff !== undefined && (cutoff > input.length || cutoff < 1 || input[cutoff - 1] !== 10)) { ctx.add('invalid-boundary'); return; }
+  const bytes = cutoff === undefined ? input : input.subarray(0, cutoff);
+  const records = parseRecords(bytes, file.rolloutId, ctx), first = records[0];
+  if (!first || first.offset !== 0 || first.value.type !== 'session_meta') { ctx.add('unsupported-shape'); return; }
+  const meta = object(first.value.payload);
+  if (meta.id !== file.owner) { ctx.add('invalid-owner'); return; }
+  const mode = meta.history_mode ?? 'legacy';
+  if (mode !== 'legacy' && mode !== 'paginated') { ctx.add('unsupported-mode'); return; }
+  if (!isAbsolute(text(meta.cwd)) || !date(meta.timestamp)) { ctx.add('unsupported-shape'); return; }
+  if (mode === 'paginated') {
+    const base = meta.history_base == null ? 0 : object(meta.history_base).end_ordinal_exclusive;
+    if (!integer(base)) { ctx.add('invalid-boundary'); return; }
+    const accepted: SourceRecord[] = [];
+    for (const record of records) {
+      // Physical record positions remain fixed across malformed interior records.
+      if (record.ordinal !== base + record.line - 1) { ctx.add('invalid-ordinal', 'history', record.line); continue; }
+      accepted.push(record);
+    }
+    if (accepted[0] !== first) return;
+    return { file, meta, records: accepted };
+  }
+  return { file, meta, records };
+}
+
+/** Codex 0.171 source-format reader. No native CLI, account configuration or provider is invoked. */
+export class CodexSessionAdapter implements SessionAdapter {
+  readonly id = 'codex' as const;
+  private readonly options: CodexAdapterOptions;
+  private readonly limits: CodexLimits;
+  private root = '';
+  private readonly selected = new Map<string, RolloutFile>();
+  private files: RolloutFile[] = [];
+  private pending: Promise<void> = Promise.resolve();
+  constructor(options: CodexAdapterOptions = {}) {
+    this.options = options;
+    this.limits = { ...defaultLimits, ...options.limits };
+    for (const [key, value] of Object.entries(this.limits)) {
+      if (!Number.isSafeInteger(value) || value < 1 || value > defaultLimits[key as keyof CodexLimits]) throw new RangeError(`Invalid Codex limit: ${key}`);
+    }
+  }
+  private context(): ReadContext { return new ReadContext(this.limits, this.options.onDiagnostic); }
+  private async scan(ctx: ReadContext): Promise<RolloutFile[]> {
+    const found: RolloutFile[] = [];
+    let entries = 0;
+    const walk = async (path: string, depth: number): Promise<void> => {
+      if (depth > 5 || entries >= this.limits.maxFiles) { ctx.add('input-limit'); return; }
+      let list;
+      try {
+        const canonical = await realpath(path);
+        if (!contains(this.root, canonical)) { ctx.add('unsafe-path'); return; }
+        list = await readdir(canonical, { withFileTypes: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') ctx.add('read-failed');
+        return;
+      }
+      list.sort((a, b) => a.name.localeCompare(b.name));
+      for (const entry of list) {
+        if (++entries > this.limits.maxFiles) { ctx.add('input-limit'); return; }
+        const child = join(path, entry.name);
+        if (entry.isSymbolicLink()) { ctx.add('unsafe-path'); continue; }
+        if (entry.isDirectory()) await walk(child, depth + 1);
+        else if (entry.isFile()) { const file = identify(child); if (file) found.push(file); }
+      }
+    };
+    await walk(join(this.root, 'sessions'), 0);
+    await walk(join(this.root, 'archived_sessions'), 0);
+    // Plain is preferred if an atomic compression transition leaves both copies.
+    const unique = new Map<string, RolloutFile>();
+    for (const file of found) {
+      const prior = unique.get(file.rolloutId);
+      if (!prior || (prior.path.endsWith('.zst') && !file.path.endsWith('.zst'))) unique.set(file.rolloutId, file);
+    }
+    return [...unique.values()];
+  }
+  private async legacyNames(ctx: ReadContext): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    try {
+      const bytes = await boundedRead(join(this.root, 'session_index.jsonl'), this.root, this.limits.maxMetadataBytes);
+      let count = 0;
+      for (const raw of bytes.toString('utf8').split('\n')) {
+        if (!raw) continue;
+        if (++count > this.limits.maxFiles || Buffer.byteLength(raw) > this.limits.maxLineBytes) { ctx.add('input-limit', 'metadata'); break; }
+        try { const row = object(JSON.parse(raw)); if (text(row.id) && text(row.thread_name)) names.set(text(row.id), text(row.thread_name)); }
+        catch { ctx.add('malformed-record', 'metadata'); }
+      }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') ctx.add('metadata-unavailable', 'metadata', undefined, false); }
+    return names;
+  }
+  private run<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.pending.then(operation);
+    this.pending = result.then(() => {}, () => {});
+    return result;
+  }
+  discover(): Promise<readonly CodexSession[]> { return this.run(() => this.discoverCatalog()); }
+  private async discoverCatalog(): Promise<readonly CodexSession[]> {
+    const ctx = this.context(), env = this.options.env ?? process.env;
+    try { this.root = await realpath(resolve(this.options.root ?? (env.CODEX_HOME?.trim() || join(this.options.home ?? homedir(), '.codex')))); }
+    catch { ctx.add('root-unavailable', 'root'); this.selected.clear(); return []; }
+    this.files = await this.scan(ctx);
+    let sqliteRoot = this.root;
+    try { sqliteRoot = await realpath(resolve(this.options.sqliteRoot ?? (env.CODEX_SQLITE_HOME?.trim() || this.root))); }
+    catch { ctx.add('metadata-unavailable', 'metadata', undefined, false); sqliteRoot = ''; }
+    const rows = sqliteRoot ? await metadataSnapshot(sqliteRoot, ctx) : [];
+    const metadata = new Map(rows.filter(row => text(row.id)).map(row => [text(row.id), row]));
+    const names = await this.legacyNames(ctx);
+    const candidates = new Map<string, ParsedRollout[]>();
+    for (const file of this.files) {
+      if (ctx.bytes > ctx.limits.maxScanBytes) break;
+      const parsed = await parseFile(file, this.root, ctx, undefined, true);
+      if (parsed) candidates.set(file.owner, [...(candidates.get(file.owner) ?? []), parsed]);
+    }
+    const sessions: CodexSession[] = [];
+    this.selected.clear();
+    for (const [id, variants] of candidates) {
+      const row = metadata.get(id);
+      let chosen: ParsedRollout | undefined;
+      if (row && typeof row.rollout_path === 'string') {
+        const selectedPath = resolve(this.root, row.rollout_path);
+        chosen = variants.find(variant => variant.file.path === selectedPath || variant.file.path.replace(/\.zst$/, '') === selectedPath.replace(/\.zst$/, ''));
+        if (!chosen) { ctx.add('selected-rollout-unavailable', 'metadata'); continue; }
+      } else if (variants.length === 1) chosen = variants[0];
+      else { ctx.add('ambiguous-rollout', 'metadata'); continue; }
+      if (!chosen) continue;
+      const meta = chosen.meta, mode = meta.history_mode === 'paginated' ? 'paginated' : 'legacy';
+      const producer = text(meta.cli_version);
+      if (producer !== '0.171.0') ctx.add('untested-producer', 'history', undefined, false);
+      const rawWorkspace = text(meta.cwd);
+      let workspace = resolve(rawWorkspace);
+      try { workspace = await realpath(rawWorkspace); }
+      catch { ctx.add('workspace-unavailable', 'workspace', undefined, false); }
+      const nativeName = mode === 'legacy' ? names.get(id) : row ? text(row.name) || text(row.preview) || text(row.title) : undefined;
+      if (!row && mode === 'paginated') ctx.add('metadata-unavailable', 'metadata', undefined, false);
+      this.selected.set(id, chosen.file);
+      sessions.push({ id: `codex:${id}`, agent: 'codex', nativeId: id, title: nativeName || `Codex ${id}`,
+        workspace, createdAt: date(row?.created_at) ?? date(meta.timestamp)!, updatedAt: date(row?.updated_at) ?? date(meta.timestamp)!,
+        messages: [], historyMode: mode, producerVersion: producer, metadataFidelity: row ? 'native' : 'reduced' });
+    }
+    return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
+  }
+  async readHistory(nativeId: string): Promise<readonly HistoryItem[]> { return (await this.readHistoryDetailed(nativeId)).items; }
+  readHistoryDetailed(nativeId: string): Promise<CodexHistory> { return this.run(() => this.readDetailed(nativeId)); }
+  private async readDetailed(nativeId: string): Promise<CodexHistory> {
+    // Refresh authoritative selection and managed file identities at every read.
+    await this.discoverCatalog();
+    const ctx = this.context(), file = this.selected.get(nativeId);
+    if (!file) { ctx.add('selected-rollout-unavailable'); return { items: [], complete: false, diagnostics: ctx.diagnostics }; }
+    const leaf = await parseFile(file, this.root, ctx);
+    const records = leaf ? await this.lineage(leaf, ctx, new Set(), 0) : [];
+    const items = project(records, leaf?.meta.history_mode === 'paginated' ? 'paginated' : 'legacy', ctx);
+    return { items, complete: ctx.complete, diagnostics: ctx.diagnostics };
+  }
+  private async lineage(parsed: ParsedRollout, ctx: ReadContext, seen: Set<string>, depth: number): Promise<SourceRecord[]> {
+    if (seen.has(parsed.file.rolloutId)) { ctx.add('ancestry-cycle'); return []; }
+    if (depth >= this.limits.maxDepth) { ctx.add('input-limit'); return []; }
+    seen.add(parsed.file.rolloutId);
+    const meta = parsed.meta, own = parsed.records.slice(1);
+    const base = meta.history_base;
+    if (base == null) return own;
+    const boundary = object(base);
+    const end = boundary.end_ordinal_exclusive, bytes = boundary.end_byte_offset;
+    if (!integer(end) || !integer(bytes) || !text(boundary.thread_id)) { ctx.add('invalid-boundary'); return own; }
+    // Attached children hide inherited model context from their public transcript.
+    if (meta.attached_thread === true && integer(meta.forked_from_ordinal_exclusive) && end <= meta.forked_from_ordinal_exclusive) {
+      const start = integer(meta.subagent_history_start_ordinal) ? meta.subagent_history_start_ordinal : end + 1;
+      return own.filter(record => (record.ordinal ?? 0) >= start);
+    }
+    if (seen.has(text(boundary.thread_id))) { ctx.add('ancestry-cycle'); return own; }
+    const parentFile = this.files.find(candidate => candidate.rolloutId === boundary.thread_id);
+    if (!parentFile) { ctx.add('ancestry-unavailable'); return own; }
+    const parent = await parseFile(parentFile, this.root, ctx, bytes);
+    if (!parent || parent.meta.history_mode !== 'paginated') { ctx.add('ancestry-unavailable'); return own; }
+    const last = parent.records.at(-1);
+    if (!last || last.end !== bytes || last.ordinal !== end - 1 || !parent.records.every(record => (record.ordinal ?? end) < end)) { ctx.add('invalid-boundary'); return own; }
+    const inherited = await this.lineage(parent, ctx, seen, depth + 1);
+    const start = meta.subagent_history_start_ordinal;
+    return [...inherited, ...own].filter(record => !integer(start) || (record.ordinal ?? 0) >= start);
+  }
+}

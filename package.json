@@ -5,7 +5,7 @@
   "type": "module",
   "bin": { "agentswitch": "dist/cli.js" },
   "files": ["dist", "README.md", "LICENSE", "docs", "CONTRIBUTING.md", "AGENTS.md"],
-  "engines": { "node": ">=22" },
+  "engines": { "node": ">=22.15" },
   "scripts": {
     "build": "tsc",
     "dev": "npm run build && node dist/cli.js",

@@ -2,13 +2,13 @@
 
 ## Boundaries
 
-The CLI coordinates a session catalog, query service, terminal UI, continuation planner, handoff builder, delivery journal, and provider adapters. The scaffold implements shared types, synthetic search and a picker with injected asynchronous query, lazy preview and continuation preparation services. Adapter implementations, persistence, real continuation planning and launch are pending. The default CLI still prints scaffold help; `--demo` supplies only synthetic services.
+The CLI coordinates a session catalog, query service, terminal UI, continuation planner, handoff builder, delivery journal, and provider adapters. The scaffold implements shared types, synthetic search and a picker with injected asynchronous query, lazy preview and continuation preparation services. A fixture-tested read-only Codex adapter exists separately; CLI integration, persistence, real continuation planning and launch are pending. The default CLI still prints scaffold help; `--demo` supplies only synthetic services.
 
-TypeScript on Node 22+ keeps installation straightforward for CLI users while allowing native subprocess launch. Avoid runtime dependencies until a concrete feature warrants them.
+TypeScript on Node >=22.15 keeps installation straightforward for CLI users while allowing native subprocess launch. Avoid runtime dependencies until a concrete feature warrants them.
 
 ## Catalog and search
 
-Adapter reads must be non-destructive. Discover configured native roots, including environment overrides; identify session IDs, source workspace, timestamps and searchable public text. Malformed records should yield bounded diagnostics without hiding healthy sessions. Never index credentials or hidden reasoning. Separate metadata discovery from lazy transcript reads and a rebuildable persistent full-text index.
+Adapter reads must be non-destructive. Discover configured native roots, including environment overrides; identify session IDs, source workspace, timestamps and searchable public text. Malformed records should yield bounded diagnostics without hiding healthy sessions. Never index credentials or hidden reasoning. Separate metadata discovery from lazy transcript reads and a rebuildable persistent full-text index. The Codex reader returns metadata with empty messages; query/index integration must hydrate public history explicitly. See [the reader contract and compatibility limits](codex-reader.md).
 
 Folder scope means an exact canonical workspace match, not descendants. Global scope means all supported local history roots for the current user, not all files on the machine or remote accounts. Production code must resolve symlinks and platform path semantics; the scaffold uses lexical absolute paths only.
 

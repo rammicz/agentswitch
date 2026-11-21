@@ -1,0 +1,23 @@
+{
+  "producer": "Codex 0.171.0",
+  "source_revision": "ccf9be8cc458bd6b8336fe84d68d8893f2691a5e",
+  "source_repository": "https://github.com/openai/codex",
+  "provenance": "All records, IDs, paths, timestamps, names, public text and private sentinel text are synthetic. No captured personal transcript, account data, provider runtime test or paid model call is used.",
+  "schemas": [
+    "codex-rs/protocol/src/protocol.rs: SessionMeta, HistoryPosition, ItemCompleted, ThreadHistoryMode",
+    "codex-rs/protocol/src/items.rs: PascalCase TurnItem and AgentMessageContent, CommandExecution and McpToolCall",
+    "codex-rs/protocol/src/dynamic_tools.rs: camelCase inputText dynamic output",
+    "codex-rs/protocol/src/user_input.rs: lowercase UserInput text",
+    "codex-rs/protocol/src/models.rs: ResponseItem and FunctionCallOutputBody",
+    "codex-rs/rollout/src/rollout_file_name.rs: thread and immutable rollout IDs",
+    "codex-rs/thread-store/src/local/rollout_lineage_tests.rs: ordinal/byte bounds and empty intermediary",
+    "codex-rs/state/src/model/thread_metadata.rs: selected rollout/name/timestamp columns",
+    "codex-rs/rollout/src/session_index.rs: legacy append-only name index"
+  ],
+  "fixtures": {
+    "native.mjs": "Synthetic schema builders; paginated ordinal starts at inherited exclusive end; header is included in byte cutoffs. SQLite schema contains the selected projection of real threads columns, not a copied native database.",
+    "codex-adapter.test.mjs": "Exact fixture oracles for metadata, text, roles/statuses, ancestry, privacy sentinels, WAL, immutable source tree, malformed/partial/unsupported input and caps.",
+    "offline.mjs": "Test-only process/network guard; no provider executable may be invoked."
+  },
+  "runtime": "Node >=22.15, built-in SQLite/private DB+WAL copy, streaming zstd. SQLite WAL behavior: https://sqlite.org/wal.html#read_only_databases"
+}
