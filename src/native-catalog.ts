@@ -49,7 +49,9 @@ export class NativeCatalog {
           this.warnings[agent]=`${agent}: history root unavailable; previous search data retained`;continue;
         }
         const sessions=await this.adapters[agent].discover();
-        let degraded=this.diagnostics[agent].some(diagnostic=>agent==='opencode'||!harmless.has(diagnostic.code));
+        // agy's metadata file is its entire source, rather than optional enrichment.
+        const isDegraded=()=>this.diagnostics[agent].some(diagnostic=>agent==='opencode'||agent==='agy'||!harmless.has(diagnostic.code));
+        let degraded=isDegraded();
         const healthy:Session[]=[];
         for(const session of sessions) {
           if(agent==='agy'){healthy.push(session);continue;}
@@ -57,7 +59,7 @@ export class NativeCatalog {
           if(!history.complete) {degraded=true;continue;}
           healthy.push({...session,messages:history.items});
         }
-        degraded ||= this.diagnostics[agent].some(diagnostic=>agent==='opencode'||!harmless.has(diagnostic.code));
+        degraded ||= isDegraded();
         this.staged.set(agent,new Map(healthy.map(session=>[session.nativeId,session])));
         await index.refresh(agent,{preserveMissing:degraded});
         this.report(agent,agent==='agy'?'metadata only; last cached IDs, no public transcript or full inventory':degraded?'degraded source; earlier entries retained, healthy sessions refreshed':'');

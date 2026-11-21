@@ -47,7 +47,7 @@ agentswitch --demo
 agentswitch --demo --global
 ```
 
-`npm link` installs the local development command. You can also run `node dist/cli.js --demo` without linking. Use `npm uninstall -g agentswitch` to remove the link. Running `agentswitch` without options opens the native picker in an interactive terminal. Set `CODEX_HOME`, `CODEX_SQLITE_HOME`, `CLAUDE_CONFIG_DIR`, `OPENCODE_DB`, `XDG_DATA_HOME` `AGENTSWITCH_AGY_ROOT` or `AGENTSWITCH_STATE_DIR` to choose isolated roots; see [integration and recovery](docs/integration.md).
+`npm link` installs the local development command. You can also run `node dist/cli.js --demo` without linking. Use `npm uninstall -g agentswitch` to remove the link. Running `agentswitch` without options opens the native picker in an interactive terminal. Set `CODEX_HOME`, `CODEX_SQLITE_HOME`, `CLAUDE_CONFIG_DIR`, `OPENCODE_DB`, `XDG_DATA_HOME`, `AGENTSWITCH_AGY_ROOT` or `AGENTSWITCH_STATE_DIR` to choose isolated roots; see [integration and recovery](docs/integration.md).
 
 The demo uses three synthetic sessions, including one in a different workspace. It reads no agent history, writes no history store, makes no network or model calls, and launches no agent.
 

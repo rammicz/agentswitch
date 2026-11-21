@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgySessionAdapter, agyPaths } from '../dist/adapters/index.js';
@@ -51,5 +51,6 @@ test('agy catalog searches sparse metadata offline, preserves incomplete public-
  const catalog=await NativeCatalog.create(env),index=await SearchIndex.open({directory:join(f.root,'search'),sources:catalog.sources()});t.after(()=>index.close());await catalog.refresh(index);
  const query={text:id,agent:'agy',scope:'folder',workspace:f.cwd};const hits=await index.query(query);assert.equal(hits.length,1);assert.equal(hits[0].updatedAt,'');assert.equal((await index.query({...query,text:'PRIVATE_CREDENTIAL',scope:'global'})).length,0);
  const snapshot=await catalog.snapshot(hits[0]);assert.equal(snapshot.history.complete,false);assert.equal(snapshot.runtime.nativeResume,'compatible');assert.equal(snapshot.retained,false);assert.match(catalog.notices().join(' '),/metadata only/);
+ await rename(f.path,f.path+'.missing');await catalog.refresh(index);assert.equal((await index.query(query)).length,1,'unavailable sole metadata store retains the prior searchable generation');await assert.rejects(catalog.snapshot(hits[0]),/unavailable/);await rename(f.path+'.missing',f.path);
  await assert.rejects(applicationPaths({...env,AGENTSWITCH_STATE_DIR:join(f.native,'state')}),/separate/);assert.equal(await readFile(f.path,'utf8'),f.text);
 });

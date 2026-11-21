@@ -7,7 +7,7 @@ delivery state. [Continuity](continuity.md) resolves earlier native targets and
 conditionally observes matching Codex submit/completion hooks.
 
 The runtime performs only `--version`, `--help`, and Codex `resume --help` probes.
-It supports exactly **Codex 0.171.0**, **Claude Code 2.1.330** **OpenCode opencode-ai 1.19.6** and **Antigravity CLI 1.5.14**, with required
+It supports exactly **Codex 0.171.0**, **Claude Code 2.1.330**, **OpenCode opencode-ai 1.19.6** and **Antigravity CLI 1.5.14**, with required
 interactive prompt/resume/workspace help shapes. Probes have a combined 64 KiB
 output cap per invocation and a two second default timeout (configurable up to ten
 seconds). Unknown versions, missing capabilities, nonzero results, timeout and
