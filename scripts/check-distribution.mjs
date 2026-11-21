@@ -17,7 +17,7 @@ if (args.length) mkdirSync(output, { mode: 0o700 });
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'agentswitch-install-')));
 const prefix = join(work, "prefix with spaces and ' quote");
 const workspace = join(work, 'workspace with spaces');
-for (const path of [prefix, workspace, 'home', 'cache', 'tmp', 'config', 'codex', 'codex-sqlite', 'claude', 'opencode', 'agy', 'xdg-data', 'xdg-state'].map(path => isAbsolute(path) ? path : join(work, path))) mkdirSync(path, { mode: 0o700 });
+for (const path of [prefix, workspace, 'home', 'cache', 'tmp', 'config', 'codex', 'codex-sqlite', 'claude', 'opencode', 'agy', 'grok', 'xdg-data', 'xdg-state'].map(path => isAbsolute(path) ? path : join(work, path))) mkdirSync(path, { mode: 0o700 });
 const userConfig = join(work, 'user.npmrc');
 const globalConfig = join(work, 'global.npmrc');
 writeFileSync(userConfig, '');
@@ -28,7 +28,7 @@ const env = {
   HOME: join(work, 'home'), TMPDIR: join(work, 'tmp'), LANG: 'C',
   XDG_DATA_HOME: join(work, 'xdg-data'), OPENCODE_DB:join(work,'opencode','opencode.db'),
   XDG_CONFIG_HOME: join(work, 'config'), XDG_CACHE_HOME: join(work, 'cache'), XDG_STATE_HOME: join(work, 'xdg-state'),
-  AGENTSWITCH_AGY_ROOT: join(work,'agy'), CODEX_HOME: join(work, 'codex'), CODEX_SQLITE_HOME: join(work, 'codex-sqlite'), CLAUDE_CONFIG_DIR: join(work, 'claude'),
+  GROK_HOME:join(work,'grok'), AGENTSWITCH_AGY_ROOT: join(work,'agy'), CODEX_HOME: join(work, 'codex'), CODEX_SQLITE_HOME: join(work, 'codex-sqlite'), CLAUDE_CONFIG_DIR: join(work, 'claude'),
   AGENTSWITCH_STATE_DIR: join(work, 'application-state'),
   NPM_CONFIG_USERCONFIG: userConfig, NPM_CONFIG_GLOBALCONFIG: globalConfig, NPM_CONFIG_CACHE: join(work, 'cache'),
   NPM_CONFIG_OFFLINE: 'true', NPM_CONFIG_AUDIT: 'false', NPM_CONFIG_FUND: 'false', NPM_CONFIG_UPDATE_NOTIFIER: 'false',
@@ -113,7 +113,7 @@ try {
       assert.ok(!/\.(?:jsonl|sqlite(?:3)?|db|pem|key|tgz)(?:-(?:wal|shm))?$|(?:-wal|-shm)$/i.test(path), `Forbidden data file: ${path}`);
       assert.ok(!path.startsWith('docs/') || /\.(?:md|txt)$/.test(path), `Unreviewed document type: ${path}`);
     }
-    for (const required of ['dist/cli.js', 'dist/application.js', 'dist/archive-cli.js', 'dist/archive.js', 'dist/handoff.js', 'dist/runtime.js', 'dist/transfer-journal.js', 'docs/integration.md', 'docs/claude-sdk-license.txt', 'dist/adapters/opencode.js', 'docs/opencode-reader.md', 'docs/opencode-license.txt', 'dist/adapters/agy.js', 'docs/agy-reader.md']) assert.ok(actual.includes(required), `Missing required file: ${required}`);
+    for (const required of ['dist/cli.js', 'dist/application.js', 'dist/archive-cli.js', 'dist/archive.js', 'dist/handoff.js', 'dist/runtime.js', 'dist/transfer-journal.js', 'docs/integration.md', 'docs/claude-sdk-license.txt', 'dist/adapters/opencode.js', 'docs/opencode-reader.md', 'docs/opencode-license.txt', 'dist/adapters/agy.js', 'docs/agy-reader.md', 'dist/adapters/grok.js', 'docs/grok-reader.md']) assert.ok(actual.includes(required), `Missing required file: ${required}`);
     assert.deepEqual(archive.package, source);
     assert.equal(manifest.version, source.version);
     assert.equal(archive.package.name, 'agentswitch');
@@ -206,6 +206,11 @@ try {
   checked('installed Antigravity incoming transfers and empty-request native open use synthetic roots and fake targets',()=>{
     env.AGENTSWITCH_TEST_ENTRY=join(installed,'dist/cli.js');
     try {command(process.execPath,['--test','--test-name-pattern=^(default CLI .*→agy|agy native open requires)',join(root,'test/agy-integration.test.mjs')],root);}
+    finally {delete env.AGENTSWITCH_TEST_ENTRY;}
+  });
+  checked('installed Grok four-direction transfers and empty-request native resume use synthetic roots and fake targets',()=>{
+    env.AGENTSWITCH_TEST_ENTRY=join(installed,'dist/cli.js');
+    try {command(process.execPath,['--test','--test-name-pattern=^(default CLI .*→|Grok native requires)',join(root,'test/grok-integration.test.mjs')],root);}
     finally {delete env.AGENTSWITCH_TEST_ENTRY;}
   });
   checked('explicit offline uninstall removes package and exact bin, preserving sentinel', () => {

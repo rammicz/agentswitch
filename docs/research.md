@@ -24,3 +24,7 @@ The read-only Claude reader follows the official [Python Agent SDK native sessio
 ## OpenCode native history and launch evidence
 
 The [1.19.6 compatibility profile](opencode-reader.md) records dated distribution, platform and MIT evidence from official `opencode-ai@1.19.6` and commit `f4e363c8295fa90a03dddc451882fffe8fbce357`. Its implemented public reader uses `session/message/part`, immutable no-sidecar reads and explicit roots. Exact native `ses_` resume omits all initial prompts; fresh transport uses the complete bounded `--prompt=` envelope. Four-direction default-CLI PTYs use synthetic databases and fake providers. Source evidence, fake runtime checks and unverified actual provider behavior are distinguished in that profile. Version 2.3.2 is separately inspected and unsupported.
+
+## Grok Build public schema and native build evidence
+
+The [Grok Build profile](grok-reader.md) separates public Apache-2.0 source snapshot `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8` (Cargo 1.0.45, upstream SOURCE_REV `559751fdcec02d413e4c57c8832ab275e4f44980`) from the official versioned Linux x86_64 binary, whose actual version is `grok 1.0.45 (c33bff361a6f)`. Public v1 session fixtures follow the source schema; the binary was run only for version/help in a sterile, no-network sandbox. Different revisions are retained explicitly: there is no verified source-to-binary equivalence or real provider consumption claim. Four-direction offline default-CLI PTYs use synthetic files and fake runtimes. No upstream code or native binary is distributed in this package.

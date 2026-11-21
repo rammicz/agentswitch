@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { Scope, Session, HistoryItem } from './domain.js';
 import { deleteArchive, protectArchive, readArchiveSnapshot, releaseArchive } from './archive.js';
 import { createHandoffPlan, publishHandoffPlan, type HandoffPlan } from './handoff.js';
+import { grokPaths } from './adapters/grok.js';
 import { agyPaths } from './adapters/agy.js';
 import { openCodePaths } from './adapters/opencode.js';
 import { NativeCatalog, type NativeSnapshot } from './native-catalog.js';
@@ -30,7 +31,7 @@ export async function applicationPaths(env: NodeJS.ProcessEnv=process.env): Prom
   const root=resolve(env.AGENTSWITCH_STATE_DIR?.trim()||join(env.XDG_STATE_HOME?.trim()||join(homedir(),'.local','state'),'agentswitch'));
   const opencode=openCodePaths({env});
   const nativePaths=await Promise.all([
-    agyPaths({env}).root,opencode.root,join(env.XDG_CONFIG_HOME||join(homedir(),'.config'),'opencode'),
+    grokPaths({env}).root,agyPaths({env}).root,opencode.root,join(env.XDG_CONFIG_HOME||join(homedir(),'.config'),'opencode'),
     join(env.XDG_CACHE_HOME||join(homedir(),'.cache'),'opencode'),
     join(env.XDG_STATE_HOME||join(homedir(),'.local','state'),'opencode'),
     ...(env.OPENCODE_CONFIG_DIR?[env.OPENCODE_CONFIG_DIR]:[]),
@@ -176,10 +177,10 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
           } catch { /* A missing/replaced/changed target receives a reviewed fresh fallback. */ }
         }
         const choice=chooseContinuation(observed,contexts,validated,request.target,await realpath(request.workspace.path));
-        const ordinaryNative=!prior&&!request.fresh&&(source.agent!=='opencode'||request.workspace.kind==='source')&&!observed.reason&&source.agent===request.target&&snapshot.runtime.nativeResume==='compatible';
+        const ordinaryNative=!prior&&!request.fresh&&(!['opencode','grok'].includes(source.agent)||request.workspace.kind==='source')&&!observed.reason&&source.agent===request.target&&snapshot.runtime.nativeResume==='compatible';
         let target=ordinaryNative?null:choice.target;
         let fresh=!ordinaryNative&&!target;
-        let reason=sourceRecovery?'Required ancestry is unavailable. Explicit fresh recovery includes only available active source and known included echoes; unavailable application ancestry is excluded.':ordinaryNative?(source.agent==='opencode'?'Open the selected existing OpenCode session; no initial request is sent.':'Resume the selected source; send only the new current request.'):choice.reason;
+        let reason=sourceRecovery?'Required ancestry is unavailable. Explicit fresh recovery includes only available active source and known included echoes; unavailable application ancestry is excluded.':ordinaryNative?(['opencode','grok'].includes(source.agent)?`Open the selected existing ${source.agent} session without an initial request.`:'Resume the selected source; send only the new current request.'):choice.reason;
         const makeHandoff=(items:readonly HistoryItem[])=>createHandoffPlan({directory:paths.archives,source,items,currentRequest:request.currentRequest??'Continue the task from this conversation.',redactions,completeness:'complete'});
         let handoff=ordinaryNative?null:makeHandoff(target?choice.items:observed.items);
         // Use the same redaction implementation for native current-request-only transport.

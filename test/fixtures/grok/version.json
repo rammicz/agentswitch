@@ -1,0 +1,8 @@
+{
+  "args": [
+    "--version"
+  ],
+  "exit": 0,
+  "stdout": "grok 1.0.45 (c33bff361a6f)\n",
+  "stderr": ""
+}

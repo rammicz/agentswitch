@@ -47,7 +47,7 @@ test('agy isolates escaped lone surrogates while retaining exact healthy Unicode
  assert.deepEqual(new Set((await f.adapter.discover()).map(x=>x.workspace)),new Set([f.cwd,unicode]));
 });
 test('agy catalog searches sparse metadata offline, preserves incomplete public-history boundary and rejects state overlap',async t=>{
- const f=await fixture(t);const env={AGENTSWITCH_AGY_ROOT:f.native,CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude'),OPENCODE_DB:join(f.root,'opencode.db'),XDG_DATA_HOME:join(f.root,'xdg')};
+ const f=await fixture(t);const env={GROK_HOME:join(f.root,'grok'),AGENTSWITCH_AGY_ROOT:f.native,CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude'),OPENCODE_DB:join(f.root,'opencode.db'),XDG_DATA_HOME:join(f.root,'xdg')};
  const catalog=await NativeCatalog.create(env),index=await SearchIndex.open({directory:join(f.root,'search'),sources:catalog.sources()});t.after(()=>index.close());await catalog.refresh(index);
  const query={text:id,agent:'agy',scope:'folder',workspace:f.cwd};const hits=await index.query(query);assert.equal(hits.length,1);assert.equal(hits[0].updatedAt,'');assert.equal((await index.query({...query,text:'PRIVATE_CREDENTIAL',scope:'global'})).length,0);
  const snapshot=await catalog.snapshot(hits[0]);assert.equal(snapshot.history.complete,false);assert.equal(snapshot.runtime.nativeResume,'compatible');assert.equal(snapshot.retained,false);assert.match(catalog.notices().join(' '),/metadata only/);

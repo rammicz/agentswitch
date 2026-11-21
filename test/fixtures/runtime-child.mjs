@@ -1,20 +1,28 @@
 #!/usr/bin/env node
 // Offline provider stand-in. Reads no native settings, histories or network.
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs';
 const args=process.argv.slice(2);
+const grok=process.env.RUNTIME_TARGET==='grok';
 const agy=process.env.RUNTIME_TARGET==='agy';
 const opencode=process.env.RUNTIME_TARGET==='opencode';
 const claude=process.env.RUNTIME_TARGET==='claude';
 if(agy&&process.env.AGY_PROBE_LOG&&(args.includes('--version')||args.includes('--help')))appendFileSync(process.env.AGY_PROBE_LOG,JSON.stringify(args)+'\n');
-if(args.includes('--version'))console.log(agy?(process.env.AGY_FAKE_VERSION||'1.5.14'):opencode?(process.env.OPENCODE_FAKE_VERSION||'1.19.6'):claude?'2.1.330 (Claude Code)':'codex-cli 0.171.0');
+if(args.includes('--version'))console.log(grok?(process.env.GROK_FAKE_VERSION||'grok 1.0.45 (c33bff361a6f)'):agy?(process.env.AGY_FAKE_VERSION||'1.5.14'):opencode?(process.env.OPENCODE_FAKE_VERSION||'1.19.6'):claude?'2.1.330 (Claude Code)':'codex-cli 0.171.0');
 else if(args.includes('--help')) {
- console.log(agy?(process.env.AGY_FAKE_HELP||'Usage of agy:\n  --conversation                  Resume a previous conversation by ID\n  --prompt-interactive            Run an initial prompt interactively and continue the session'):opencode?(process.env.OPENCODE_FAKE_HELP||'opencode [project]\n--session  session id\n--prompt  prompt to use'):claude?'Usage: claude [options] [command] [prompt]\n-r, --resume [value]':args[0]==='resume'
+ console.log(grok?(process.env.GROK_FAKE_HELP||'Grok Build TUI\nUsage: grok [OPTIONS] [PROMPT] [COMMAND]\n[PROMPT] Initial prompt for the interactive session\n--cwd <CWD>\n--resume [<SESSION_ID_OR_TITLE>]'):agy?(process.env.AGY_FAKE_HELP||'Usage of agy:\n  --conversation                  Resume a previous conversation by ID\n  --prompt-interactive            Run an initial prompt interactively and continue the session'):opencode?(process.env.OPENCODE_FAKE_HELP||'opencode [project]\n--session  session id\n--prompt  prompt to use'):claude?'Usage: claude [options] [command] [prompt]\n-r, --resume [value]':args[0]==='resume'
  ? 'Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]\n-C, --cd <DIR>'
  : 'Usage: codex [OPTIONS] [PROMPT]\n-C, --cd <DIR>');
+ if(grok&&process.env.GROK_FAKE_DELETE_DURING_HELP)unlinkSync(process.env.GROK_FAKE_SUMMARY);
  if(opencode&&process.env.OPENCODE_FAKE_DELETE_DURING_HELP){const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(process.env.OPENCODE_DB);db.exec('DELETE FROM session');db.close();}
 }
 else {
  const scenario=process.env.RUNTIME_SCENARIO;
+ if(grok&&args.some(arg=>arg.startsWith('--resume='))) {
+  const id=args.find(arg=>arg.startsWith('--resume=')).slice('--resume='.length);
+  let row;try{row=JSON.parse(readFileSync(process.env.GROK_FAKE_SUMMARY,'utf8'));}catch{}
+  if(row?.info?.id!==id){console.error('SYNTHETIC NATIVE SESSION MISSING');process.exit(1);}
+  if(process.env.GROK_FAKE_DELETE_AFTER_VALIDATE){unlinkSync(process.env.GROK_FAKE_SUMMARY);appendFileSync(process.env.RUNTIME_LOG,JSON.stringify({args,cwd:process.cwd(),created:false,autoRequest:false})+'\n');console.error('SYNTHETIC NATIVE SESSION DELETED');process.exit(1);}
+ }
  if(opencode&&args.some(arg=>arg.startsWith('--session='))) {
   const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(process.env.OPENCODE_DB);const id=args.find(arg=>arg.startsWith('--session=')).slice('--session='.length);
   const exists=db.prepare('SELECT id FROM session WHERE id=?').get(id);

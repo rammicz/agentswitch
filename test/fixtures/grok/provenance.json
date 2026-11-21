@@ -1,0 +1,26 @@
+{
+  "product": "xAI Grok Build",
+  "executable": "grok",
+  "date": "2026-11-21",
+  "source": "https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8",
+  "sourceRevision": "2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8",
+  "upstreamSourceRevision": "559751fdcec02d413e4c57c8832ab275e4f44980",
+  "cargoVersion": "1.0.45",
+  "schema": "summary.json chat_format_version=1 and ConversationItem chat_history.jsonl",
+  "fixtures": "synthetic, source-derived; no real histories or account data",
+  "license": "Apache-2.0 public source; no upstream code or binary copied into package",
+  "binary": {
+    "url": "https://x.ai/cli/grok-1.0.45-linux-x86_64",
+    "generation": "1790661872193104",
+    "bytes": 170448832,
+    "md5": "b00a4b30baf05eb1b58731552bd7d01c",
+    "sha256": "3ef9bf5689ae9cc58f1bc918ae6067627a3667c7519245b9e8aacd9288559718",
+    "version": "grok 1.0.45 (c33bff361a6f)",
+    "sourceEquivalence": "unknown; build revision differs from source export and SOURCE_REV",
+    "probes": "only version/help and combined cwd/resume help, no-network bwrap sterile HOME/environment, Linux x86_64, wall20s/CPU10s/address-space2GiB/file-size1MiB bounds",
+    "publisherSignature": "not established"
+  },
+  "runtimeTests": "offline fake-provider PTYs only",
+  "realProviderConsumption": "unknown",
+  "realAuthenticatedHistoryWriting": "not tested"
+}

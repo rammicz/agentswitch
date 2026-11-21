@@ -7,7 +7,7 @@ delivery state. [Continuity](continuity.md) resolves earlier native targets and
 conditionally observes matching Codex submit/completion hooks.
 
 The runtime performs only `--version`, `--help`, and Codex `resume --help` probes.
-It supports exactly **Codex 0.171.0**, **Claude Code 2.1.330**, **OpenCode opencode-ai 1.19.6** and **Antigravity CLI 1.5.14**, with required
+It supports exactly **Codex 0.171.0**, **Claude Code 2.1.330**, **OpenCode opencode-ai 1.19.6** **Antigravity CLI 1.5.14** and **Grok Build `grok 1.0.45 (c33bff361a6f)`**, with required
 interactive prompt/resume/workspace help shapes. Probes have a combined 64 KiB
 output cap per invocation and a two second default timeout (configurable up to ten
 seconds). Unknown versions, missing capabilities, nonzero results, timeout and
@@ -29,7 +29,7 @@ provider-scoped identity, recorded workspace and native compatibility. The picke
 request alone cannot attest to those facts. `nativeResume: 'compatible'` must come
 from an adapter that knows the source kind; incompatible or unknown native formats
 require explicit fresh recovery. Codex/Claude same-agent resume accepts only an exact UUID; OpenCode accepts an exact `ses_` ID in its recorded workspace with an explicitly empty current request (see [OpenCode profile](opencode-reader.md));
-there is no latest-session, name, picker, fork or cross-provider ID fallback.
+Grok uses an exact UUID and explicitly empty draft at its recorded workspace; its [public v1 schema and native build evidence](grok-reader.md) are independently pinned. There is no latest-session, name, picker, fork or cross-provider ID fallback.
 
 `prepare(request, input, signal)` returns `PreparedContinuation<LaunchPlan>` for
 the existing picker. Same-provider `auto` resumes natively. A different provider,
@@ -63,6 +63,7 @@ cwd, and inherited stdin/stdout/stderr. Codex also receives explicit `-C` so a s
 resume cwd cannot override the approved workspace. Claude resume uses
 `--resume=<UUID>`. OpenCode uses `[workspace, --session=ses_ID]` with no prompt or `[workspace, --prompt=completeJson]` for fresh transport. Its draft must be explicitly cleared for native resume; select F to retain it in a fresh reviewed envelope. Option termination protects literal option-looking prompts.
 Antigravity uses `[--conversation, UUID]` with an explicitly empty draft and recorded workspace only, or `[--prompt-interactive, completeJson]` for fresh input. Its cache is only a native-open candidate, never a transcript or target receipt.
+Grok uses `[--cwd=canonicalWorkspace, --resume=exactUUID]` with no initial request or `[--cwd=canonicalWorkspace, --, completeJson]` for fresh interactive transport. An explicit workspace override selects fresh mode. Real isolated help/version probes verify the argument surface; model consumption and source-to-binary storage equivalence remain unverified.
 No approval, sandbox, trust, system-prompt, model, print-mode or authentication
 flags are added. Normal environment/native configuration remain inherited; the
 runtime never reads or copies credentials or native history files.
