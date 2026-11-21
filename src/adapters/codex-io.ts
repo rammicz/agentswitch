@@ -24,8 +24,12 @@ export const defaultLimits: CodexLimits = {
 export class ReadContext {
   readonly diagnostics: CodexDiagnostic[] = [];
   complete = true;
-  bytes = 0;
-  constructor(readonly limits: CodexLimits, private readonly notify?: (diagnostic: CodexDiagnostic) => void) {}
+  constructor(readonly limits: CodexLimits, private readonly notify?: (diagnostic: CodexDiagnostic) => void,
+    private readonly budget: { bytes: number } = { bytes: 0 }) {}
+  get bytes(): number { return this.budget.bytes; }
+  set bytes(value: number) { this.budget.bytes = value; }
+  get remaining(): number { return this.limits.maxScanBytes - this.bytes; }
+  fork(): ReadContext { return new ReadContext(this.limits, this.notify, this.budget); }
   add(code: DiagnosticCode, source: CodexDiagnostic['source'] = 'history', line?: number, incomplete = true): void {
     if (incomplete) this.complete = false;
     if (this.diagnostics.length >= this.limits.maxDiagnostics) return;
@@ -41,21 +45,23 @@ export function contains(root: string, path: string): boolean {
   return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`));
 }
 /** Resolve symlinks before opening; final-component swaps fail through O_NOFOLLOW. */
-export async function boundedRead(path: string, root: string, limit: number): Promise<Buffer> {
+export async function boundedRead(path: string, root: string, limit: number, ctx: ReadContext): Promise<Buffer> {
   const canonical = await realpath(path);
   if (!contains(root, canonical)) throw new Error('unsafe-path');
   const handle = await open(canonical, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const info = await handle.stat();
-    if (!info.isFile() || info.size > limit) throw new Error('input-limit');
-    const data = Buffer.alloc(Math.min(info.size + 1, limit + 1));
+    if (!info.isFile() || info.size > limit || info.size > ctx.remaining) throw new Error('input-limit');
+    const data = Buffer.alloc(info.size);
     let offset = 0;
     while (offset < data.length) {
-      const { bytesRead } = await handle.read(data, offset, data.length - offset, offset);
+      const requested = Math.min(data.length - offset, ctx.remaining);
+      if (requested < 1) throw new Error('input-limit');
+      const { bytesRead } = await handle.read(data, offset, requested, offset);
+      ctx.bytes += bytesRead;
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
-    if (offset > limit || offset > info.size) throw new Error('input-limit');
     return data.subarray(0, offset);
   } finally { await handle.close(); }
 }
@@ -67,19 +73,26 @@ export async function historyHeader(path: string, root: string, ctx: ReadContext
       if (!contains(root, canonical)) throw new Error('unsafe-path');
       const handle = await open(canonical, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
       try {
-        if (!(await handle.stat()).isFile()) throw new Error('read-failed');
-        const buffer = Buffer.alloc(ctx.limits.maxLineBytes + 1);
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-        const end = buffer.subarray(0, bytesRead).indexOf(10);
-        if (end < 0 && bytesRead > ctx.limits.maxLineBytes) throw new Error('input-limit');
-        const header = buffer.subarray(0, end < 0 ? bytesRead : end + 1);
-        ctx.bytes += header.length;
-        if (ctx.bytes > ctx.limits.maxScanBytes) throw new Error('input-limit');
-        return header;
+        const info = await handle.stat();
+        if (!info.isFile()) throw new Error('read-failed');
+        const chunks: Buffer[] = [];
+        let size = 0;
+        while (true) {
+          const requested = Math.min(256, ctx.limits.maxLineBytes + 1 - size, ctx.remaining);
+          if (requested < 1) throw new Error('input-limit');
+          const buffer = Buffer.alloc(requested);
+          const { bytesRead } = await handle.read(buffer, 0, requested, size);
+          ctx.bytes += bytesRead;
+          const data = buffer.subarray(0, bytesRead), newline = data.indexOf(10);
+          const prefix = newline < 0 ? data : data.subarray(0, newline + 1);
+          chunks.push(prefix);
+          size += prefix.length;
+          if (size > ctx.limits.maxLineBytes) throw new Error('input-limit');
+          if (newline >= 0 || bytesRead === 0 || size === info.size) return Buffer.concat(chunks, size);
+        }
       } finally { await handle.close(); }
     }
-    const input = await boundedRead(path, root, ctx.limits.maxFileBytes);
-    ctx.bytes += input.length;
+    const input = await boundedRead(path, root, ctx.limits.maxFileBytes, ctx);
     const stream = Readable.from([input]).pipe(createZstdDecompress());
     const chunks: Buffer[] = [];
     let size = 0;
@@ -88,9 +101,9 @@ export async function historyHeader(path: string, root: string, ctx: ReadContext
         const chunk = Buffer.from(value as Uint8Array), newline = chunk.indexOf(10);
         const part = newline < 0 ? chunk : chunk.subarray(0, newline + 1);
         size += part.length;
-        if (size > ctx.limits.maxLineBytes || size > ctx.limits.maxDecodedBytes || ctx.bytes + size > ctx.limits.maxScanBytes) throw new Error('input-limit');
+        if (size > ctx.limits.maxLineBytes || size > ctx.limits.maxDecodedBytes) throw new Error('input-limit');
         chunks.push(part);
-        if (newline >= 0) { ctx.bytes += size; return Buffer.concat(chunks, size); }
+        if (newline >= 0) return Buffer.concat(chunks, size);
       }
       return Buffer.concat(chunks, size);
     } finally { stream.destroy(); }
@@ -102,9 +115,7 @@ export async function historyHeader(path: string, root: string, ctx: ReadContext
 }
 export async function historyBytes(path: string, root: string, ctx: ReadContext): Promise<Buffer | undefined> {
   try {
-    const input = await boundedRead(path, root, ctx.limits.maxFileBytes);
-    ctx.bytes += input.length;
-    if (ctx.bytes > ctx.limits.maxScanBytes) throw new Error('input-limit');
+    const input = await boundedRead(path, root, ctx.limits.maxFileBytes, ctx);
     if (!path.endsWith('.zst')) {
       if (input.length > ctx.limits.maxDecodedBytes) throw new Error('input-limit');
       return input;
@@ -119,8 +130,6 @@ export async function historyBytes(path: string, root: string, ctx: ReadContext)
         if (size > ctx.limits.maxDecodedBytes) throw new Error('input-limit');
         chunks.push(data);
       }
-      ctx.bytes += size;
-      if (ctx.bytes > ctx.limits.maxScanBytes) throw new Error('input-limit');
       return Buffer.concat(chunks, size);
     } finally { stream.destroy(); }
   } catch (error) {
@@ -149,7 +158,10 @@ export async function metadataSnapshot(root: string, ctx: ReadContext): Promise<
     try {
       const before = await Promise.all(files.map(signature));
       if (before[0] === 'absent') { ctx.add('metadata-unavailable', 'metadata', undefined, false); return []; }
-      const copies = await Promise.all(files.map((file, index) => before[index] === 'absent' ? undefined : boundedRead(file, root, ctx.limits.maxMetadataBytes)));
+      const copies: (Buffer | undefined)[] = [];
+      for (let index = 0; index < files.length; index++) {
+        copies.push(before[index] === 'absent' ? undefined : await boundedRead(files[index]!, root, ctx.limits.maxMetadataBytes, ctx));
+      }
       const after = await Promise.all(files.map(signature));
       if (before.some((value, index) => value !== after[index])) continue;
       temporary = await mkdtemp(join(tmpdir(), 'agentswitch-codex-snapshot-'));
@@ -169,7 +181,7 @@ export async function metadataSnapshot(root: string, ctx: ReadContext): Promise<
         if (rows.length > ctx.limits.maxFiles) ctx.add('input-limit', 'metadata');
         return rows.slice(0, ctx.limits.maxFiles);
       } finally { database.close(); }
-    } catch { ctx.add('metadata-unavailable', 'metadata', undefined, false); return []; }
+    } catch (error) { ctx.add(error instanceof Error && error.message === 'input-limit' ? 'input-limit' : 'metadata-unavailable', 'metadata', undefined, false); return []; }
     finally { if (temporary) await rm(temporary, { recursive: true, force: true }); }
   }
   ctx.add('metadata-unstable', 'metadata', undefined, false);

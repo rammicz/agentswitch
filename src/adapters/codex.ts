@@ -146,7 +146,7 @@ export class CodexSessionAdapter implements SessionAdapter {
   private async legacyNames(ctx: ReadContext): Promise<Map<string, string>> {
     const names = new Map<string, string>();
     try {
-      const bytes = await boundedRead(join(this.root, 'session_index.jsonl'), this.root, this.limits.maxMetadataBytes);
+      const bytes = await boundedRead(join(this.root, 'session_index.jsonl'), this.root, this.limits.maxMetadataBytes, ctx);
       let count = 0;
       for (const raw of bytes.toString('utf8').split('\n')) {
         if (!raw) continue;
@@ -154,7 +154,7 @@ export class CodexSessionAdapter implements SessionAdapter {
         try { const row = object(JSON.parse(raw)); if (text(row.id) && text(row.thread_name)) names.set(text(row.id), text(row.thread_name)); }
         catch { ctx.add('malformed-record', 'metadata'); }
       }
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') ctx.add('metadata-unavailable', 'metadata', undefined, false); }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') ctx.add(error instanceof Error && error.message === 'input-limit' ? 'input-limit' : 'metadata-unavailable', 'metadata', undefined, false); }
     return names;
   }
   private run<T>(operation: () => Promise<T>): Promise<T> {
@@ -163,8 +163,8 @@ export class CodexSessionAdapter implements SessionAdapter {
     return result;
   }
   discover(): Promise<readonly CodexSession[]> { return this.run(() => this.discoverCatalog()); }
-  private async discoverCatalog(): Promise<readonly CodexSession[]> {
-    const ctx = this.context(), env = this.options.env ?? process.env;
+  private async discoverCatalog(ctx = this.context()): Promise<readonly CodexSession[]> {
+    const env = this.options.env ?? process.env;
     try { this.root = await realpath(resolve(this.options.root ?? (env.CODEX_HOME?.trim() || join(this.options.home ?? homedir(), '.codex')))); }
     catch { ctx.add('root-unavailable', 'root'); this.selected.clear(); return []; }
     this.files = await this.scan(ctx);
@@ -212,8 +212,9 @@ export class CodexSessionAdapter implements SessionAdapter {
   readHistoryDetailed(nativeId: string): Promise<CodexHistory> { return this.run(() => this.readDetailed(nativeId)); }
   private async readDetailed(nativeId: string): Promise<CodexHistory> {
     // Refresh authoritative selection and managed file identities at every read.
-    await this.discoverCatalog();
-    const ctx = this.context(), file = this.selected.get(nativeId);
+    const discovery = this.context();
+    await this.discoverCatalog(discovery);
+    const ctx = discovery.fork(), file = this.selected.get(nativeId);
     if (!file) { ctx.add('selected-rollout-unavailable'); return { items: [], complete: false, diagnostics: ctx.diagnostics }; }
     const leaf = await parseFile(file, this.root, ctx);
     const records = leaf ? await this.lineage(leaf, ctx, new Set(), 0) : [];

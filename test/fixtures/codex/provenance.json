@@ -18,6 +18,7 @@
   "fixtures": {
     "native.mjs": "Synthetic schema builders; paginated ordinal starts at inherited exclusive end; header is included in byte cutoffs. SQLite schema contains the selected projection of real threads columns, not a copied native database.",
     "codex-adapter.test.mjs": "Exact fixture oracles for metadata, text, roles/statuses, ancestry, privacy sentinels, WAL, immutable source tree, malformed/partial/unsupported input and caps.",
+    "read-budget.mjs": "Observes actual native FileHandle read requests/transfers for operation-budget fixtures, including changing-copy retries.",
     "offline.mjs": "Test-only process/network guard; no provider executable may be invoked."
   },
   "runtime": "Node >=22.15, built-in SQLite/private DB+WAL copy, streaming zstd. SQLite WAL behavior: https://sqlite.org/wal.html#read_only_databases"

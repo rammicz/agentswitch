@@ -35,11 +35,12 @@ function projectItem(item: ObjectRecord, record: SourceRecord, ctx: ReadContext,
       case 'AgentMessage':
         if (object(item.moderation).moderated === true) return;
         role = 'assistant'; content = textParts(item.content, ['Text']); break;
+      case 'Plan': role = 'assistant'; content = text(item.text); break;
       case 'CommandExecution': content = text(item.aggregated_output); break;
       case 'FunctionCallOutput': content = output(item.output); break;
       case 'DynamicToolCall': content = textParts(item.content_items, ['inputText']) || text(item.error); break;
       case 'McpToolCall': content = textParts(object(item.result).content, ['text']) || text(object(item.error).message); break;
-      case 'Reasoning': case 'Plan': case 'HookPrompt': case 'CollabAgentToolCall':
+      case 'Reasoning': case 'HookPrompt': case 'CollabAgentToolCall':
       case 'SubAgentActivity': case 'WebSearch': case 'ImageView': case 'Extension':
       case 'ImageGeneration': case 'EnteredReviewMode': case 'ExitedReviewMode':
       case 'FileChange': case 'ContextCompaction': return;

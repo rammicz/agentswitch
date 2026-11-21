@@ -343,3 +343,99 @@ test('invalid display ordinals and explicit null history mode are rejected besid
   assert.ok(diagnostics.some(d=>d.code==='unsupported-shape')); assert.ok(diagnostics.some(d=>d.code==='unsupported-mode'));
   assert.doesNotMatch(JSON.stringify({sessions,diagnostics}),/PRIVATE_/);
 });
+
+test('public paginated plans retain assistant text, native identity and status without reasoning', async t => {
+  const {root,cwd} = await fixture(t);
+  await writeRollout(root,rollout(cwd,ids[0],[
+    completed('UserMessage','u','Request',1),
+    completed('Plan','plan-public-1','',2,{text:'PLAN_PUBLIC_MARKER'}),
+    completed('Reasoning','reason','PRIVATE_REASON',3,{text:'PRIVATE_REASON_TEXT'}),
+    completed('AgentMessage','a','Answer',4),
+  ]));
+  const adapter = new CodexSessionAdapter({root});
+  const history = await adapter.readHistoryDetailed(ids[0]);
+  assert.equal(history.complete,true);
+  assert.deepEqual(history.items,[{id:`codex:${ids[0]}:u`,role:'user',text:'Request',status:'complete'},{id:`codex:${ids[0]}:plan-public-1`,role:'assistant',text:'PLAN_PUBLIC_MARKER',status:'complete'},{id:`codex:${ids[0]}:a`,role:'assistant',text:'Answer',status:'complete'}]);
+  assert.deepEqual(await adapter.readHistory(ids[0]),history.items);
+  assert.doesNotMatch(JSON.stringify(history),/PRIVATE_/);
+});
+
+function observedReads(root,limits,nativeId,env = {}) {
+  const result = spawnSync(process.execPath,['test/fixtures/codex/read-budget.mjs'],{encoding:'utf8',env:{...process.env,AGENTSWITCH_FIXTURE_ROOT:root,AGENTSWITCH_READ_LIMITS:JSON.stringify(limits),...(nativeId ? {AGENTSWITCH_READ_ID:nativeId} : {}),...env}});
+  assert.equal(result.status,0,result.stderr);
+  return JSON.parse(result.stdout);
+}
+function withinBudget(output,budget) {
+  let total = 0;
+  for (const read of output.reads) {assert.ok(read.requested <= budget - total,`requested ${read.requested} with ${budget-total} remaining`); total += read.bytes;}
+  assert.ok(total <= budget);
+}
+
+test('native header read requests and transferred bytes stay within the remaining operation budget', async t => {
+  const {root,cwd} = await fixture(t);
+  const records = rollout(cwd,ids[0],[completed('UserMessage','u','x'.repeat(100000),1)]);
+  await writeRollout(root,records);
+  await writeRollout(root,rollout(cwd,ids[1],[completed('UserMessage','u','x'.repeat(100000),1)]));
+  const budget = encode(records.slice(0,1)).length + 40;
+  const output = observedReads(root,{maxLineBytes:65536,maxScanBytes:budget});
+  withinBudget(output,budget);
+  assert.equal(output.result.length,1); assert.ok(output.diagnostics.some(d=>d.code==='input-limit'));
+});
+
+for (const source of ['database','index','wal']) {
+  test(`native ${source} bytes are charged before reads without losing a fitting healthy header`, async t => {
+    const {root,cwd} = await fixture(t);
+    const records = rollout(cwd,ids[0],[],{history_mode:source === 'index' ? 'legacy' : 'paginated'});
+    const path = await writeRollout(root,records);
+    let prefix = 0, db;
+    if (source === 'database') await metadata(root,[[ids[0],path,cwd,'Native title']]);
+    if (source === 'index') await writeFile(join(root,'session_index.jsonl'),`${JSON.stringify({id:ids[0],thread_name:'x'.repeat(10000)})}\n`);
+    if (source === 'wal') {
+      db = new DatabaseSync(join(root,'state_5.sqlite')); t.after(()=>db.close());
+      db.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0'); schema(db); row(db,ids[0],path,cwd,'Native title');
+      prefix = (await readFile(join(root,'state_5.sqlite'))).length;
+    }
+    const budget = prefix + encode(records.slice(0,1)).length + 40;
+    const before = await tree(root);
+    const output = observedReads(root,{maxScanBytes:budget});
+    withinBudget(output,budget);
+    assert.equal(output.result.length,1); assert.equal(output.result[0].metadataFidelity,'reduced');
+    assert.equal(output.result[0].title,`Codex ${ids[0]}`);
+    assert.ok(output.diagnostics.some(d=>d.code==='input-limit'));
+    assert.deepEqual(await tree(root),before);
+  });
+}
+
+test('one public lazy read shares its native byte budget with discovery and metadata', async t => {
+  const {root,cwd} = await fixture(t);
+  const records = rollout(cwd,ids[0],[completed('UserMessage','u','x'.repeat(1000),1)]);
+  await writeRollout(root,records);
+  const budget = encode(records).length;
+  const output = observedReads(root,{maxScanBytes:budget},ids[0]);
+  withinBudget(output,budget);
+  assert.equal(output.result.complete,false); assert.ok(output.result.diagnostics.some(d=>d.code==='input-limit'));
+});
+
+
+test('snapshot retry reads spend the same operation budget and leave room for fitting headers', async t => {
+  const {root,cwd} = await fixture(t);
+  const records = rollout(cwd,ids[0],[]);
+  const path = await writeRollout(root,records);
+  await metadata(root,[[ids[0],path,cwd,'Native title']]);
+  const dbBytes = (await readFile(join(root,'state_5.sqlite'))).length;
+  const budget = 2 * dbBytes + encode(records.slice(0,1)).length + 40;
+  const output = observedReads(root,{maxScanBytes:budget},undefined,{AGENTSWITCH_UNSTABLE_METADATA:'1'});
+  withinBudget(output,budget);
+  assert.equal(output.result.length,1); assert.equal(output.result[0].metadataFidelity,'reduced');
+  assert.equal(output.reads.filter(read=>read.path==='state_5.sqlite').reduce((sum,read)=>sum+read.bytes,0),2*dbBytes);
+  assert.ok(output.diagnostics.some(d=>d.code==='input-limit'));
+});
+
+test('a final header without newline fits an exact native-read budget', async t => {
+  const {root,cwd} = await fixture(t);
+  const records = rollout(cwd,ids[0],[]);
+  const path = await writeRollout(root,records);
+  const bytes = encode(records).subarray(0,-1); await writeFile(path,bytes);
+  const output = observedReads(root,{maxScanBytes:bytes.length});
+  withinBudget(output,bytes.length); assert.equal(output.result.length,1);
+});
