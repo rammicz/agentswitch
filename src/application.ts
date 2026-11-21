@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { Scope, Session, HistoryItem } from './domain.js';
 import { deleteArchive, protectArchive, readArchiveSnapshot, releaseArchive } from './archive.js';
 import { createHandoffPlan, publishHandoffPlan, type HandoffPlan } from './handoff.js';
+import { openCodePaths } from './adapters/opencode.js';
 import { NativeCatalog, type NativeSnapshot } from './native-catalog.js';
 import { createRuntime, RuntimeError, type LaunchPlan, type RuntimeSource } from './runtime.js';
 import { SearchIndex } from './search-index.js';
@@ -26,8 +27,23 @@ async function proposedCanonical(path: string): Promise<string> {
 const contains=(parent:string,child:string):boolean=>{const part=relative(parent,child);return part===''||(!isAbsolute(part)&&part!=='..'&&!part.startsWith('../'));};
 export async function applicationPaths(env: NodeJS.ProcessEnv=process.env): Promise<ApplicationPaths> {
   const root=resolve(env.AGENTSWITCH_STATE_DIR?.trim()||join(env.XDG_STATE_HOME?.trim()||join(homedir(),'.local','state'),'agentswitch'));
-  const nativePaths=await Promise.all([env.CODEX_HOME||join(homedir(),'.codex'),env.CODEX_SQLITE_HOME||env.CODEX_HOME||join(homedir(),'.codex'),env.CLAUDE_CONFIG_DIR||join(homedir(),'.claude')].map(proposedCanonical));
-  const check=(canonical:string):void=>{if(nativePaths.some(path=>contains(path,canonical)||contains(canonical,path)))throw new Error('Application state and native history roots must be separate.');};
+  const opencode=openCodePaths({env});
+  const nativePaths=await Promise.all([
+    opencode.root,join(env.XDG_CONFIG_HOME||join(homedir(),'.config'),'opencode'),
+    join(env.XDG_CACHE_HOME||join(homedir(),'.cache'),'opencode'),
+    join(env.XDG_STATE_HOME||join(homedir(),'.local','state'),'opencode'),
+    ...(env.OPENCODE_CONFIG_DIR?[env.OPENCODE_CONFIG_DIR]:[]),
+    env.CODEX_HOME||join(homedir(),'.codex'),env.CODEX_SQLITE_HOME||env.CODEX_HOME||join(homedir(),'.codex'),env.CLAUDE_CONFIG_DIR||join(homedir(),'.claude'),
+  ].map(proposedCanonical));
+  // An external DB may share an ancestor with application state. Protect its
+  // exact native files/sidecars, without reserving an unrelated parent directory.
+  const databases=opencode.dbPath===':memory:'?[]:[...new Set([opencode.dbPath,await proposedCanonical(opencode.dbPath)])];
+  const nativeFiles=await Promise.all(databases.flatMap(path=>['','-wal','-shm','-journal'].map(suffix=>proposedCanonical(path+suffix))));
+  const overlap=(left:string,right:string)=>contains(left,right)||contains(right,left);
+  const check=(canonical:string):void=>{
+    if(nativePaths.some(path=>overlap(path,canonical))||nativeFiles.some(path=>overlap(path,canonical))||databases.some(path=>canonical.startsWith(path+'-mj')||root.startsWith(path+'-mj')))
+      throw new Error('Application state and native history roots must be separate.');
+  };
   check(await proposedCanonical(root));
   await mkdir(root,{recursive:true,mode:0o700});
   const info=await lstat(root);
@@ -145,10 +161,10 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
           } catch { /* A missing/replaced/changed target receives a reviewed fresh fallback. */ }
         }
         const choice=chooseContinuation(observed,contexts,validated,request.target,await realpath(request.workspace.path));
-        const ordinaryNative=!prior&&!request.fresh&&!observed.reason&&source.agent===request.target&&snapshot.runtime.nativeResume==='compatible';
+        const ordinaryNative=!prior&&!request.fresh&&(source.agent!=='opencode'||request.workspace.kind==='source')&&!observed.reason&&source.agent===request.target&&snapshot.runtime.nativeResume==='compatible';
         let target=ordinaryNative?null:choice.target;
         let fresh=!ordinaryNative&&!target;
-        let reason=sourceRecovery?'Required ancestry is unavailable. Explicit fresh recovery includes only available active source and known included echoes; unavailable application ancestry is excluded.':ordinaryNative?'Resume the selected source; send only the new current request.':choice.reason;
+        let reason=sourceRecovery?'Required ancestry is unavailable. Explicit fresh recovery includes only available active source and known included echoes; unavailable application ancestry is excluded.':ordinaryNative?(source.agent==='opencode'?'Open the selected existing OpenCode session; no initial request is sent.':'Resume the selected source; send only the new current request.'):choice.reason;
         const makeHandoff=(items:readonly HistoryItem[])=>createHandoffPlan({directory:paths.archives,source,items,currentRequest:request.currentRequest??'Continue the task from this conversation.',redactions,completeness:'complete'});
         let handoff=ordinaryNative?null:makeHandoff(target?choice.items:observed.items);
         // Use the same redaction implementation for native current-request-only transport.
@@ -166,9 +182,10 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         return {plan:{launch:prepared.plan,handoff,intent,fingerprint:snapshot.fingerprint,source,...(targetSnapshot?{targetFingerprint:targetSnapshot.fingerprint,targetSource:publicIdentity(targetSnapshot.runtime)}:{})},summary:{...prepared.summary,previewLines:[
           ...(prior?[`Earlier delivery: ${prior.state}; possible duplicate context. This is a NEW fresh attempt.`]:[]),
           reason,
+          ...(source.agent==='opencode'&&ordinaryNative?['OpenCode opens the exact native session without an initial request. Type the next request in its native terminal.']:[]),
           ...(target?[`Selected history source: ${source.agent} ${source.nativeId}. Actual resumed target: ${target.agent} ${target.nativeId}.`]:[]),
           ...(redactions.length?[handoff?'Selected history redactions require a new context; they cannot erase content already retained by an earlier native context.':'Redactions apply only to this new request. Earlier native context remains retained by its provider.']:[]),
-          `Disclosure: ${request.target} receives ${handoff?'selected public history and the current request':'only the new current request; native history stays with its existing provider'} under its own account and data policies.`,
+          `Disclosure: ${request.target} receives ${handoff?'selected public history and the current request':source.agent==='opencode'?'no initial request; its existing native history remains in the selected session':'only the new current request; native history stays with its existing provider'} under its own account and data policies.`,
           'Hidden reasoning, credentials and native permissions do not transfer. No historical commands are replayed.',
           'Process launch/exit is not proof of prompt consumption. Delivery remains uncertain without a trusted receipt.',
           prepared.plan.observer==='codex-hooks'?'Codex launch-local submit/Stop observation is conditional on native hook enablement, trust and managed policy. Existing callbacks and permissions remain native.':'No supported native receipt transport here. This launch cannot advance accepted coverage.',

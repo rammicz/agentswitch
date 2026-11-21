@@ -1,0 +1,56 @@
+# OpenCode 1.19.6 compatibility profile
+
+The default CLI supports an **offline fixture-tested** OpenCode source and target profile. Discovery makes no provider call. Runtime probes the selected executable's exact version/help before confirmation. Tests use synthetic databases and fake executables in real PTYs. No real OpenCode executable, authenticated service, model turn or packaged native TUI has been run for certification. Linux and macOS are agentswitch's intended hosts; actual OpenCode consumption remains unverified on both.
+
+## Product and evidence
+
+Evidence checked **2026-11-21**. All 1.x implementation references below use official commit `f4e363c8295fa90a03dddc451882fffe8fbce357` (release `v1.19.6`). This is a selected profile, not a claim about future releases.
+
+| Fact | Primary evidence | Implementation limit |
+| --- | --- | --- |
+| Official npm distribution `opencode-ai@1.19.6`, executable `opencode` | [Official release](https://github.com/anomalyco/opencode/releases/tag/v1.19.6), [official installation README](https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/README.md), [exact npm metadata](https://registry.npmjs.org/opencode-ai/1.19.6) | Users install/authenticate independently; agentswitch never installs or downgrades it. |
+| Native distribution lists Linux/macOS/Windows x64 and arm64 plus Linux variants | [Distribution metadata](https://registry.npmjs.org/opencode-ai/1.19.6) | agentswitch launch/lifecycle targets Linux/macOS; Windows is unvalidated. Distribution availability is not a platform test result. |
+| Upstream MIT | [Pinned license](https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/LICENSE), [retained notice](opencode-license.txt) | Independent adapter; no private native API, account, permission or quota bypass. |
+| `session`, `message`, `part` SQLite schema and public data | [Core schema](https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/packages/core/src/session/sql.ts), [public v1 schema](https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/packages/schema/src/v1/session.ts), [native reader](https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/packages/opencode/src/session/message-v2.ts) | Reads `message`, not the conflicting `session_message` event projection. No ordinal field is assumed. |
+| Data roots and overrides | [Database path](https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/packages/core/src/database/database.ts), [Global paths](https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/packages/core/src/global.ts), [xdg-basedir 5.1.0](https://github.com/sindresorhus/xdg-basedir/blob/v5.1.0/index.js) | Default-channel profile; custom channel paths must be provided explicitly. |
+| Exact-existing-session validation, project and prompt options | [TUI command](https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/packages/opencode/src/cli/cmd/tui.ts), [validation](https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/packages/opencode/src/cli/tui/validate-session.ts), [home auto-submit](https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/packages/tui/src/routes/home.tsx) | Native resume only with an explicitly empty request and recorded workspace. No trusted OpenCode receipt. |
+
+Version `2.3.2` is a separate product/CLI profile (`@opencode/cli`) with different storage and create-if-missing session semantics. It is **unsupported**, as are untested 1.x versions. A matching version/help is a capability check, not proof of delivery. Do not replace an installed version automatically.
+
+## Read-only roots and snapshot policy
+
+`OpenCodeSessionAdapter` accepts `{dbPath, root, home, env, limits, onDiagnostic}`. Path precedence is explicit `dbPath`, then truthy `OPENCODE_DB`, then `opencode.db` under explicit `root` or `$XDG_DATA_HOME/opencode` (fallback `~/.local/share/opencode`, including macOS per upstream XDG implementation). Relative DB overrides resolve under that data directory. Recorded directories are plain absolute strings on Linux/macOS, per the [pinned path-column implementation](https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/packages/core/src/database/path.ts). Empty environment values fall back. `:memory:` is unavailable for local discovery. `OPENCODE_CONFIG_DIR` does not change the data root. Official latest/beta/prod channels use `opencode.db`; configure a custom channel's actual DB explicitly. Native global/database modules are never imported because their initialization can create directories or migrate stores.
+
+The same database contains account/control-account tokens and credential values: [credential schema](https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/packages/core/src/database/schema.gen.ts). agentswitch never copies this DB, WAL or other native file, reads credential tables/auth.json, exports native history, or uses native migration/recovery code. SQL projects only session metadata and known public JSON fields. Ignored/synthetic/reasoning text and tool inputs are not selected into application memory or persisted artifacts.
+
+Only a bounded **quiescent immutable SQLite URI** (`mode=ro&immutable=1`, `readOnly:true`) is supported, using Node >=22.15. Ordinary SQLite read-only mode can still modify SHM, and immutable mode ignores live WAL; neither is a live snapshot mechanism. The reader refuses any `-wal`, `-shm`, `-journal` or matching super-journal sidecar, symlink DB leaves, nonregular files, unsupported schemas and limits. It checks canonical paths, open-file identity, physical database/root identity and parent directory metadata before and after every projection. A change refuses the entire projection. There is no retry against a possibly live writer. Stop the native client cleanly and let **that client** checkpoint/close its own store; agentswitch does not delete sidecars or issue checkpoint commands. A stable synthetic DB provides a usable offline path even when a user's live DB is unavailable.
+
+Limits default to 64 MiB physical DB, 10,000 rows per selected query, 32 MiB projected public text, 100 diagnostics and 10,000 sibling directory entries; callers may lower them. These conservative bounds may refuse a large healthy store. Native data remains unchanged. Catalog warnings are bounded codes without source values. Degraded/unavailable/unsupported OpenCode refreshes retain earlier search entries; stale entries cannot launch without revalidation. Explicit DB paths and canonical data-root identities namespace search and continuation state. Application state must be separate from native data/config/cache/state roots, the exact overridden DB and its sidecars, including aliases, before any application directory is created. An external DB can share an ancestor with a separate application directory.
+
+## Public projection
+
+Discovery returns metadata with empty `messages`, title, `ses_` native ID, recorded canonical workspace, exact producer version and creation/update times. Only local top-level, unarchived sessions with producer `1.19.6` are included; remote `workspace_id`, children and archived sessions are excluded. Missing workspace metadata is rejected; missing folders stay visible for explicit fresh workspace recovery.
+
+Selected history orders messages by `(time_created, message.id)` and parts lexically by `part.id`, matching the native 1.19.6 reader. IDs are stable `opencode:<session>:<message>:<part>` tuples. Eligible user/assistant text is public; reasoning, synthetic/ignored text, files, snapshots, patches, agents/subtasks, step bookkeeping, user system metadata and unknown fields are omitted. Completed tool `state.output` and failed tool `state.error` must be strings; inputs, attachments, metadata and pending/running results never transfer. Assistant messages without completion remain interrupted; known errors mark failed. Native revert message/part boundaries remove the undone tail. Invalid boundaries or malformed selected records block complete-history certification while healthy siblings stay searchable. No metadata-only record is fabricated into a user message.
+
+## Launch and recovery
+
+Native resume uses exactly `[canonicalWorkspace, '--session=' + exactSesId]`, no `--prompt`, `--continue`, `--fork`, revision, model or permission flags. The user must clear the current request with C → Ctrl+U → Enter, then review the no-initial-request disclosure. The next request is typed in OpenCode's native terminal. A nonempty draft is retained; F selects a new reviewed fresh context. W workspace override also uses fresh mode. Missing/changed selected IDs fail before launch; if deletion races native validation, the native client can return home with an error. Omitting the prompt prevents automatic replacement-session submission. Native process success never proves that the exact session opened.
+
+Fresh handoff uses exactly `[canonicalWorkspace, '--prompt=' + exactPreparedJson]` with no session option. The complete historical envelope and distinct current request fit the shared 16,384 UTF-8 byte budget, including provenance and archive references. Literal shell-looking/option-looking strings remain one argument. The child receives the real inherited terminal, normal environment, account settings, trust and permission behavior. There is no shell, stdin-pipe replacement, auth copying, permission bypass or silent fallback. Archive/journal consent, redaction, cancellation, omissions and explicit recovery are shared with Codex/Claude. Exit/PID output is not a receipt; `targetNativeId` stays unknown and accepted coverage never advances for OpenCode. Existing Codex receipt/delta behavior remains conditional and separate.
+
+## Reproduce offline checks
+
+```sh
+npm ci
+npm run build
+node --test test/opencode-adapter.test.mjs test/opencode-integration.test.mjs
+npm run check
+npm test
+npm pack --dry-run
+npm run distribution:check -- --output /tmp/agentswitch-opencode-package
+```
+
+Fixtures under `test/fixtures/opencode` are authored synthetic data, with credential/reasoning/input sentinels and conflicting event-projection rows. They are not captures. PTY tests run the real CLI with fake provider executables, exact version/help responses and synthetic data roots. Distribution checks also use a sterile XDG data root and explicit synthetic `OPENCODE_DB`, then run the installed package's four handoff directions and empty-request native path.
+
+For a separately authorized no-model-call compatibility check, use an isolated installation/root and inspect `npm view opencode-ai@1.19.6 version bin license os cpu`, `opencode --version`, and `opencode --help`. These commands document a future real readback procedure; the fake help fixture is source-attributed, not an observed packaged-binary output. Actual packaged literal-option parsing, native TUI behavior and provider consumption remain unverified; no real probe is part of default tests.

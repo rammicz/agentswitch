@@ -1,5 +1,5 @@
 /** Provider-native identifiers are meaningful only within their adapter. */
-export type AgentId = 'codex' | 'claude';
+export type AgentId = 'codex' | 'claude' | 'opencode';
 export type Scope = 'folder' | 'global';
 
 export interface Session {

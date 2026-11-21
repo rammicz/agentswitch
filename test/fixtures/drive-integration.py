@@ -32,6 +32,7 @@ def main():
     with open(action['append']['path'],'a') as changed:changed.write(action['append']['text'])
    if 'instance' in action:state=instances[action['instance']]
    if 'wait' in action:until(state,action['wait'])
+   if 'signal' in action:os.kill(state['child'].pid,getattr(signal,action['signal']))
    if 'send' in action:os.write(state['master'],action['send'].encode())
    if 'waitPrePidBarrier' in action:
     if 'PID_COMMIT_PAUSED' not in state['output']:until(state,'PID_COMMIT_PAUSED')

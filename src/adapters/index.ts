@@ -11,6 +11,7 @@ export interface SessionAdapter {
 export const agentCatalog = [
   { id: 'codex', label: 'Codex', status: 'planned' },
   { id: 'claude', label: 'Claude Code', status: 'planned' },
+  { id: 'opencode', label: 'OpenCode', status: 'fixture-tested' },
 ] as const;
 
 export { CodexSessionAdapter } from './codex.js';
@@ -18,3 +19,6 @@ export type { CodexAdapterOptions, CodexDiagnostic, CodexHistory, CodexLimits, C
 
 export { ClaudeSessionAdapter } from './claude.js';
 export type { ClaudeAdapterOptions, ClaudeDiagnostic, ClaudeHistory, ClaudeLimits, ClaudeSession } from './claude.js';
+
+export { OpenCodeSessionAdapter, openCodePaths } from './opencode.js';
+export type { OpenCodeAdapterOptions, OpenCodeSession, OpenCodeHistory } from './opencode.js';

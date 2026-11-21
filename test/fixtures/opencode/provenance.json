@@ -1,0 +1,11 @@
+{
+  "product": "OpenCode",
+  "distribution": "opencode-ai@1.19.6",
+  "commit": "f4e363c8295fa90a03dddc451882fffe8fbce357",
+  "observed": "2026-11-21",
+  "kind": "source-derived synthetic schema and CLI fixtures; no user histories, packaged native execution or provider calls",
+  "schema": "https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/packages/core/src/session/sql.ts",
+  "public": "https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/packages/schema/src/v1/session.ts",
+  "cli": "https://github.com/anomalyco/opencode/blob/f4e363c8295fa90a03dddc451882fffe8fbce357/packages/opencode/src/cli/cmd/tui.ts",
+  "unsupported": ["2.3.2", "live WAL", "nonempty native initial request", "trusted consumption receipt", "remote/child/archived sessions", "Windows lifecycle"]
+}

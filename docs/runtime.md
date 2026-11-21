@@ -7,7 +7,7 @@ delivery state. [Continuity](continuity.md) resolves earlier native targets and
 conditionally observes matching Codex submit/completion hooks.
 
 The runtime performs only `--version`, `--help`, and Codex `resume --help` probes.
-It supports exactly **Codex 0.171.0** and **Claude Code 2.1.330**, with required
+It supports exactly **Codex 0.171.0**, **Claude Code 2.1.330** and **OpenCode opencode-ai 1.19.6**, with required
 interactive prompt/resume/workspace help shapes. Probes have a combined 64 KiB
 output cap per invocation and a two second default timeout (configurable up to ten
 seconds). Unknown versions, missing capabilities, nonzero results, timeout and
@@ -28,7 +28,7 @@ name through absolute PATH entries. Supply a trusted `getSource` lookup returnin
 provider-scoped identity, recorded workspace and native compatibility. The picker
 request alone cannot attest to those facts. `nativeResume: 'compatible'` must come
 from an adapter that knows the source kind; incompatible or unknown native formats
-require explicit fresh recovery. Same-agent resume accepts only an exact UUID;
+require explicit fresh recovery. Codex/Claude same-agent resume accepts only an exact UUID; OpenCode accepts an exact `ses_` ID in its recorded workspace with an explicitly empty current request (see [OpenCode profile](opencode-reader.md));
 there is no latest-session, name, picker, fork or cross-provider ID fallback.
 
 `prepare(request, input, signal)` returns `PreparedContinuation<LaunchPlan>` for
@@ -43,7 +43,7 @@ or explicit `mode: 'fresh'`, requires `input.handoff`:
 context and separately identified current request. The runtime does not append,
 select, truncate or reserialize it. Ordinary source-native resume receives only
 `input.currentRequest`. A trusted `input.resumeTarget` can identify a separate
-earlier target and receive the bounded missing-history `input.handoff`. The complete final positional
+earlier target and receive the bounded missing-history `input.handoff`. The complete final initial
 prompt must contain no NUL and fit **16,384 UTF-8 bytes**, including envelopes,
 escaping, archive references and current request. An application can configure a
 smaller limit. This conservative transport policy is neither a model token limit
@@ -61,7 +61,7 @@ package dependencies or native settings; filesystem changes can still race spawn
 All provider launches use argument arrays, `shell: false`, the chosen canonical
 cwd, and inherited stdin/stdout/stderr. Codex also receives explicit `-C` so a saved
 resume cwd cannot override the approved workspace. Claude resume uses
-`--resume=<UUID>`. Option termination protects literal option-looking prompts.
+`--resume=<UUID>`. OpenCode uses `[workspace, --session=ses_ID]` with no prompt or `[workspace, --prompt=completeJson]` for fresh transport. Its draft must be explicitly cleared for native resume; select F to retain it in a fresh reviewed envelope. Option termination protects literal option-looking prompts.
 No approval, sandbox, trust, system-prompt, model, print-mode or authentication
 flags are added. Normal environment/native configuration remain inherited; the
 runtime never reads or copies credentials or native history files.

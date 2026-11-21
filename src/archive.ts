@@ -35,7 +35,7 @@ function publicString(value: unknown, maxBytes = MAX_ARCHIVE_BYTES): string {
 }
 /** Copy only the approved public schema. Never retain unknown native/account fields. */
 export function publicSnapshot(snapshot: ArchiveSnapshot): ArchiveSnapshot {
-  if (!snapshot || !snapshot.source || !['codex', 'claude'].includes(snapshot.source.agent) || !Array.isArray(snapshot.items) || snapshot.items.length > 100000 || !Array.isArray(snapshot.includedItemIds) || !['complete', 'partial', 'unknown'].includes(snapshot.completeness)) failure('INVALID_HISTORY', 'Invalid public history snapshot.');
+  if (!snapshot || !snapshot.source || !['codex', 'claude', 'opencode'].includes(snapshot.source.agent) || !Array.isArray(snapshot.items) || snapshot.items.length > 100000 || !Array.isArray(snapshot.includedItemIds) || !['complete', 'partial', 'unknown'].includes(snapshot.completeness)) failure('INVALID_HISTORY', 'Invalid public history snapshot.');
   const source: SessionSource = { agent: snapshot.source.agent, id: publicString(snapshot.source.id, 4096), nativeId: publicString(snapshot.source.nativeId, 4096) };
   const ids = new Set<string>(); let bytes = 0;
   const items = snapshot.items.map(item => {
@@ -45,7 +45,7 @@ export function publicSnapshot(snapshot: ArchiveSnapshot): ArchiveSnapshot {
     ids.add(id); bytes += Buffer.byteLength(id) + Buffer.byteLength(text);
     if (bytes > MAX_ARCHIVE_BYTES) failure('ARCHIVE_TOO_LARGE', 'Public history exceeds the supported archive size.');
     const origin=item.origin;
-    if(origin&&(!['codex','claude'].includes(origin.agent)||!/^([a-f0-9]{64})$/.test(origin.context))) failure('INVALID_HISTORY','Invalid activity origin.');
+    if(origin&&(!['codex','claude','opencode'].includes(origin.agent)||!/^([a-f0-9]{64})$/.test(origin.context))) failure('INVALID_HISTORY','Invalid activity origin.');
     return { id, role: item.role, text, status: item.status, ...(origin?{origin:{agent:origin.agent,context:origin.context}}:{}) };
   });
   const includedItemIds = snapshot.includedItemIds.map(id => publicString(id, 4096));

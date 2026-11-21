@@ -7,8 +7,8 @@ import { searchSessions } from '../search.js';
 import type { PickerOptions, PreparedContinuation, SessionHit, SessionSource, WorkspaceChoice } from './contracts.js';
 export type * from './contracts.js';
 
-const filters = ['all', 'codex', 'claude'] as const;
-const targets: readonly AgentId[] = ['codex', 'claude'];
+const filters = ['all', 'codex', 'claude', 'opencode'] as const;
+const targets: readonly AgentId[] = ['codex', 'claude', 'opencode'];
 const sourceOf = ({ id, nativeId, agent }: SessionHit): SessionSource => ({ id, nativeId, agent });
 // Untrusted controls stay visible as text and never reach the terminal as instructions.
 const clean = (text: string): string => text.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]|\p{Bidi_Control}/gu,
@@ -231,7 +231,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
           stage = 'target'; target = 0; choice = { kind: 'source', path: picked!.workspace };
         }
       } else if (stage === 'target') {
-        if (key.name === 'left' || key.name === 'right') { invalidate(); target = (target + 1) % targets.length; notice = ''; }
+        if (key.name === 'left' || key.name === 'right') { invalidate(); target = (target + (key.name === 'left' ? -1 : 1) + targets.length) % targets.length; notice = ''; }
         else if (options.compose && key.name === 'c') { invalidate(); notice=''; stage='request'; }
         else if (options.compose && key.name === 'x') { invalidate(); notice=''; redactionInput=''; stage='redaction'; }
         else if (options.compose && key.name === 'f') { invalidate(); fresh=!fresh; notice=''; }

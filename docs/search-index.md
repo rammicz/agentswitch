@@ -1,6 +1,6 @@
 # Private offline search index
 
-`SearchIndex` in `dist/search-index.js` is a programmatic component over injected `SessionAdapter`s. It searches Codex, Claude or both without a model call. The CLI and demo do not open this cache yet; real reader/picker composition and user-facing cache controls belong to integration issue #5.
+`SearchIndex` in `dist/search-index.js` is a programmatic component over injected `SessionAdapter`s. It searches configured Codex, Claude and OpenCode sources without a model call. The default native CLI composes this private cache and exposes `cache purge`; the demo stays in memory. OpenCode uses the conservative [1.19.6 quiescent profile](opencode-reader.md).
 
 ```js
 import { SearchIndex } from './dist/search-index.js';
