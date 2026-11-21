@@ -167,6 +167,7 @@ export class TransferJournal {
   observe(id:string,token:string,event:{name:'UserPromptSubmit'|'Stop';target:ContextRef;turnId:string;promptHash?:string}):void {
     this.transaction(()=>{
       const record=this.get(id),continuity=record.continuity;
+      if(!['UserPromptSubmit','Stop'].includes(event.name))throw new Error('Unsupported native observation.');
       if(!continuity||record.target!=='codex'||record.observerTokenHash!==digest(token)||record.retired||record.deleted||record.deleting||!['pending','uncertain','accepted'].includes(record.state)||event.target.agent!==record.target||event.target.root!==continuity.targetRoot||event.target.workspace!==record.workspace||(continuity.targetRef&&contextKey(continuity.targetRef)!==contextKey(event.target))||!event.turnId||event.turnId.length>256||/[\x00-\x1f\x7f-\x9f]/.test(event.turnId))throw new Error('Invalid native observation.');
       if(event.name==='UserPromptSubmit') {
         const same=record.observation&&contextKey(record.observation.target)===contextKey(event.target)&&record.observation.turnId===event.turnId;

@@ -97,8 +97,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         const existing=contexts.find(context=>contextKey(context.ref)===contextKey(ref));
         const aliases=attempts.filter(attempt=>attempt.continuity&&journal.lineage(attempt.continuity.lineage.id));
         const echo=snapshot.items.map(item=>matchingEcho(item,ref,aliases)).find(Boolean);
-        const ancestry=prior?undefined:journal.lineage(existing?.lineageId??echo?.continuity?.lineage.id??'');
-        const known=ancestry;
+        const known=prior?undefined:journal.lineage(existing?.lineageId??echo?.continuity?.lineage.id??'');
         const retainedItems=new Map<string,HistoryItem>();
         let unavailableAncestry=false;
         if(known)for(const attempt of attempts.filter(attempt=>attempt.continuity?.lineage.id===known.id&&!attempt.deleted&&!attempt.deleting)) {

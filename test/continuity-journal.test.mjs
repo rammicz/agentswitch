@@ -20,6 +20,7 @@ test('migration retains legacy accepted and uncertain outcomes without manufactu
 test('accepted receipt and exact coverage are atomic, idempotent and do not release native admission',async()=>{
  const path=await directory(),{journal,record,intent}=await preparedContinuity(path);journal.begin(record.id);submit(journal,record);stop(journal,record);stop(journal,record);
  const accepted=journal.get(record.id);assert.equal(accepted.state,'accepted');assert.equal(accepted.targetNativeId,'A');assert.equal(accepted.receiptTurnId,'turn-1');assert.equal(accepted.writer,'unknown');
+ assert.throws(()=>journal.observe(record.id,token,{name:'SubagentStop',target:ref('codex','A'),turnId:'turn-1'}),/Unsupported/);
  const a=journal.contexts().find(context=>context.ref.nativeId==='A');assert.deepEqual(a.coveredIds,[...intent.includedItemIds,intent.continuity.requestId]);assert.ok(!a.coveredIds.includes(intent.omittedItemIds[0]));
  const lineage=journal.lineage(intent.continuity.lineage.id),items=Object.fromEntries([...intent.continuity.lineage.ids.map(id=>[id,{id,text:id,role:'user',status:'complete'}]),[intent.continuity.requestId,{id:intent.continuity.requestId,text:'current',role:'user',status:'complete'}]]);
  const next=chooseContinuation({context:intent.continuity.sourceContext,lineage,items:lineage.ids.map(id=>items[id])},[a],new Map([[contextKey(a.ref),a]]),'codex','/synthetic');assert.deepEqual(next.items.map(item=>item.id),intent.omittedItemIds);

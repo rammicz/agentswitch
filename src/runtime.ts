@@ -24,7 +24,7 @@ export interface PreparedPrompt {
 export interface RuntimeInput {
   mode?: 'auto' | 'fresh';
   handoff?: PreparedPrompt;
-  /** Native resume receives only this new request, never replayed history. */
+  /** Ordinary source-native resume receives only this new request. */
   currentRequest?: string;
   /** Trusted continuity resolution. This identity is independent from selected history. */
   resumeTarget?:RuntimeSource;
@@ -196,7 +196,7 @@ export function createRuntime(options: RuntimeOptions) {
       if (native && targetSource.nativeResume !== 'compatible') return fail('INCOMPATIBLE_NATIVE', 'Native session compatibility is unavailable. Explicitly choose a fresh handoff or use the native client.');
       if (native) available(guard, targetSource);
       if (!native && !input.handoff) return fail('HANDOFF_REQUIRED', 'A prepared historical user prompt and distinct current request are required for a fresh handoff.');
-      const prompt = input.handoff?.prompt??(native ? input.currentRequest ?? '' : input.handoff!.prompt);
+      const prompt = input.handoff?.prompt??input.currentRequest??'';
       if (prompt.includes('\0')) return fail('INVALID_PROMPT', 'Initial user prompt contains NUL and cannot be transported.');
       if (Buffer.byteLength(prompt, 'utf8') > limit) return fail('PROMPT_TOO_LARGE', `Complete initial user prompt exceeds the ${limit} byte transport limit. Reduce the prepared selection before confirming.`);
       const executable = await resolveExecutable(options.executables?.[request.target] ?? request.target, env);
