@@ -51,6 +51,8 @@ agentswitch --demo --global
 
 The demo uses three synthetic sessions, including one in a different workspace. It reads no agent history, writes no history store, makes no network or model calls, and launches no agent.
 
+For installation from a verified local tarball and its removal, see [installation and prerelease checks](docs/releasing.md). CI tests the actual package on Linux and macOS with Node 22.15.0 and the current Node 22 release. The package remains unpublished on npm.
+
 | Key | In the session list | In progressive views |
 | --- | --- | --- |
 | Type / Backspace | Search titles, workspaces, and message text | Edit a workspace override |

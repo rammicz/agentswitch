@@ -10,6 +10,7 @@
     "build": "tsc",
     "dev": "npm run build && node dist/cli.js",
     "check": "tsc --noEmit",
+    "distribution:check": "node scripts/check-distribution.mjs",
     "test": "npm run build && node --test test/*.test.mjs",
     "prepack": "npm run build"
   },

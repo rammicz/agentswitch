@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import { readFileSync } from 'node:fs';
 import { runArchiveCommand } from './archive-cli.js';
 import { purgeSearchCache, runApplication, runTransferCommand } from './application.js';
 import { demoSessions } from './tui/demo.js';
@@ -16,7 +17,7 @@ Usage: agentswitch [--demo] [--global] [--help] [--version]
   --demo       Browse synthetic sessions; never launches an agent
   --global     Start in global scope
   --help       Show this help
-  --version    Show scaffold version
+  --version    Show installed package version
 
 Read-only native roots: CODEX_HOME, CODEX_SQLITE_HOME, CLAUDE_CONFIG_DIR.
 Private local state: AGENTSWITCH_STATE_DIR (default XDG_STATE_HOME/agentswitch).
@@ -37,7 +38,7 @@ async function main(): Promise<void> {
     help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
   } });
   if (values.help) { console.log(help); return; }
-  if (values.version) { console.log('0.1.0-dev.0'); return; }
+  if (values.version) { console.log(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version); return; }
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('The picker requires an interactive terminal. Use --help for commands.');
   if(values.demo) await runDemo(demoSessions(process.cwd()), process.cwd(), values.global ? 'global' : 'folder');
   else await runApplication({workspace:process.cwd(),scope:values.global?'global':'folder'});
