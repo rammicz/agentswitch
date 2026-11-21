@@ -97,7 +97,7 @@ The programmatic readers accept explicit native roots; see [Codex reader](docs/c
 | Stage | Scope | Status |
 | --- | --- | --- |
 | Foundation | Installable development CLI, shared types, keyboard demo, CI, documentation | Scaffold available |
-| [First usable release](https://github.com/rammicz/agentswitch/issues/5) | Codex and Claude Code discovery, folder/global search, transcript preview, native resume, bounded cross-agent handoff, launch and recovery | Planned; component tasks linked from integration issue |
+| [First usable release](https://github.com/rammicz/agentswitch/issues/5) | Codex and Claude Code discovery, folder/global search, transcript preview, native resume, bounded cross-agent handoff, launch and recovery | [Shipped with offline fixture and PTY verification. Authenticated consumption unverified](docs/integration.md) |
 | [Continuity](https://github.com/rammicz/agentswitch/issues/6) | Durable lineage, exact missing-history sets and conditional Codex return via native hooks; reviewed fresh fallbacks | [Offline integration](docs/continuity.md) |
 | [OpenCode](https://github.com/rammicz/agentswitch/issues/11) | Exact 1.19.6 public history, empty-request native resume and fresh transfers | [Offline fixture/PTY tested; native consumption unverified](docs/opencode-reader.md) |
 | [Antigravity CLI](https://github.com/rammicz/agentswitch/issues/9) | Exact 1.5.14 incoming fresh transfers and confirmed empty-request native open from sparse local last-ID metadata; outgoing history unavailable | [Limited profile; full issue remains open](docs/agy-reader.md) |
