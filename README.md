@@ -94,10 +94,10 @@ Persistent index storage, deletion controls, redaction, and configurable history
 | Stage | Scope | Status |
 | --- | --- | --- |
 | Foundation | Installable development CLI, shared types, keyboard demo, CI, documentation | Scaffold available |
-| First usable release | Codex and Claude Code discovery, folder/global search, transcript preview, native resume, bounded cross-agent handoff, launch and recovery | Planned |
-| Continuity | Durable transfer lineage, A → B → A missing-history delivery, archive retrieval, capability-tested native import | Planned |
-| More agents | OpenCode, agy, grokbuild | Deferred; validate each integration before promising compatibility |
-| Community requests | Other popular coding agents, based on demand | Open to proposals |
+| [First usable release](https://github.com/rammicz/agentswitch/issues/5) | Codex and Claude Code discovery, folder/global search, transcript preview, native resume, bounded cross-agent handoff, launch and recovery | Planned; component tasks linked from integration issue |
+| [Continuity](https://github.com/rammicz/agentswitch/issues/6) | Durable transfer lineage, A → B → A missing-history delivery, archive retrieval, capability-tested native import | Deferred |
+| More agents | [OpenCode](https://github.com/rammicz/agentswitch/issues/11), [agy](https://github.com/rammicz/agentswitch/issues/9), [grokbuild](https://github.com/rammicz/agentswitch/issues/12) | Deferred; validate each integration before promising compatibility |
+| [Community requests](https://github.com/rammicz/agentswitch/issues/13) | Other popular coding agents, based on demand | Open to proposals; structured intake deferred |
 
 An adapter is supported only after its discovery, history parsing, launch behavior, and compatibility fixtures pass. Listing an agent on the roadmap does not imply support today.
 
