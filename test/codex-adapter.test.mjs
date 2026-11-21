@@ -439,3 +439,29 @@ test('a final header without newline fits an exact native-read budget', async t 
   const output = observedReads(root,{maxScanBytes:bytes.length});
   withinBudget(output,bytes.length); assert.equal(output.result.length,1);
 });
+
+for (const formats of [['plain','plain'],['zstd','zstd'],['zstd','plain']]) {
+  test(`decoded lineage budget is aggregate across ${formats.join('+')} and resets for each read`, async t => {
+    const {root,cwd} = await fixture(t);
+    const parentRecords = rollout(cwd,ids[0],[completed('UserMessage','parent','P'.repeat(1000),1)]);
+    const parentBytes = encode(parentRecords), parentPath = await writeRollout(root,parentRecords);
+    const base = {thread_id:ids[0],end_ordinal_exclusive:2,end_byte_offset:parentBytes.length};
+    const childRecords = rollout(cwd,ids[1],[completed('AgentMessage','child','C'.repeat(1000),3)],{history_base:base});
+    const childBytes = encode(childRecords), childPath = await writeRollout(root,childRecords);
+    for (const [index,path,bytes] of [[0,parentPath,parentBytes],[1,childPath,childBytes]]) {
+      if (formats[index] === 'zstd') {await writeFile(`${path}.zst`,zstdCompressSync(bytes)); await rm(path);}
+    }
+    const limit = Math.max(parentBytes.length,childBytes.length) + 40;
+    assert.ok(parentBytes.length < limit && childBytes.length < limit && parentBytes.length + childBytes.length > limit);
+    const before = await tree(root);
+    const capped = new CodexSessionAdapter({root,limits:{maxDecodedBytes:limit}});
+    const result = await capped.readHistoryDetailed(ids[1]);
+    assert.equal(result.complete,false);
+    assert.deepEqual(texts(result),['C'.repeat(1000)]);
+    assert.ok(result.diagnostics.some(d=>d.code==='input-limit'));
+    assert.deepEqual(await capped.readHistoryDetailed(ids[1]),result);
+    const exact = await new CodexSessionAdapter({root,limits:{maxDecodedBytes:parentBytes.length+childBytes.length}}).readHistoryDetailed(ids[1]);
+    assert.equal(exact.complete,true); assert.deepEqual(texts(exact),['P'.repeat(1000),'C'.repeat(1000)]);
+    assert.deepEqual(await tree(root),before);
+  });
+}

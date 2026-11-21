@@ -24,11 +24,17 @@ export const defaultLimits: CodexLimits = {
 export class ReadContext {
   readonly diagnostics: CodexDiagnostic[] = [];
   complete = true;
+  private decodedBytes = 0;
   constructor(readonly limits: CodexLimits, private readonly notify?: (diagnostic: CodexDiagnostic) => void,
     private readonly budget: { bytes: number } = { bytes: 0 }) {}
   get bytes(): number { return this.budget.bytes; }
   set bytes(value: number) { this.budget.bytes = value; }
   get remaining(): number { return this.limits.maxScanBytes - this.bytes; }
+  get remainingDecoded(): number { return this.limits.maxDecodedBytes - this.decodedBytes; }
+  consumeDecoded(bytes: number): void {
+    if (bytes > this.remainingDecoded) throw new Error('input-limit');
+    this.decodedBytes += bytes;
+  }
   fork(): ReadContext { return new ReadContext(this.limits, this.notify, this.budget); }
   add(code: DiagnosticCode, source: CodexDiagnostic['source'] = 'history', line?: number, incomplete = true): void {
     if (incomplete) this.complete = false;
@@ -115,9 +121,11 @@ export async function historyHeader(path: string, root: string, ctx: ReadContext
 }
 export async function historyBytes(path: string, root: string, ctx: ReadContext): Promise<Buffer | undefined> {
   try {
-    const input = await boundedRead(path, root, ctx.limits.maxFileBytes, ctx);
+    if (ctx.remainingDecoded < 1) throw new Error('input-limit');
+    const encodedLimit = path.endsWith('.zst') ? ctx.limits.maxFileBytes : Math.min(ctx.limits.maxFileBytes, ctx.remainingDecoded);
+    const input = await boundedRead(path, root, encodedLimit, ctx);
     if (!path.endsWith('.zst')) {
-      if (input.length > ctx.limits.maxDecodedBytes) throw new Error('input-limit');
+      ctx.consumeDecoded(input.length);
       return input;
     }
     const stream = Readable.from([input]).pipe(createZstdDecompress());
@@ -127,7 +135,7 @@ export async function historyBytes(path: string, root: string, ctx: ReadContext)
       for await (const chunk of stream) {
         const data = Buffer.from(chunk as Uint8Array);
         size += data.length;
-        if (size > ctx.limits.maxDecodedBytes) throw new Error('input-limit');
+        ctx.consumeDecoded(data.length);
         chunks.push(data);
       }
       return Buffer.concat(chunks, size);
