@@ -41,10 +41,16 @@ test('current paginated public projection and SQLite-selected native metadata ar
   assert.deepEqual(sessions[0].messages,[]);
   const history = await adapter.readHistoryDetailed(ids[0]);
   assert.equal(history.complete,true);
+  assert.equal(history.retained,true);assert.deepEqual(history.itemTurns.map(({threadId,turnId})=>({threadId,turnId})),Array.from({length:3},()=>({threadId:ids[0],turnId:'turn-1'})));
   assert.deepEqual(history.items.map(({role,text,status})=>({role,text,status})),[{role:'user',text:'Public sentinel',status:'complete'},{role:'assistant',text:'Answer',status:'complete'},{role:'tool',text:'Failed output',status:'failed'}]);
   assert.deepEqual(history.items,await adapter.readHistory(ids[0]));
   assert.doesNotMatch(JSON.stringify({sessions,history,diagnostics}),/PRIVATE_/);
   assert.deepEqual(await tree(root),before);
+});
+test('paginated compaction cannot certify retained public context or native growth',async t=>{
+ const {root,cwd}=await fixture(t);
+ await writeRollout(root,rollout(cwd,ids[0],[completed('UserMessage','u','Public',1),completed('AgentMessage','a','Answer',2),completed('ContextCompaction','compact','PRIVATE_COMPACTION',3)]));
+ const history=await new CodexSessionAdapter({root}).readHistoryDetailed(ids[0]);assert.equal(history.complete,true);assert.equal(history.retained,false);assert.equal(history.itemTurns.length,2);assert.doesNotMatch(JSON.stringify(history),/PRIVATE_COMPACTION/);
 });
 
 async function metadata(root, entries) {

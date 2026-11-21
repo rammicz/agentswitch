@@ -1,5 +1,5 @@
 import { opendir, realpath, stat } from 'node:fs/promises';
-import { nativeIncarnation } from '../continuity.js';
+import { nativeIncarnation, type NativeItemTurn } from '../continuity.js';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, isAbsolute } from 'node:path';
 import type { HistoryItem, Session } from '../domain.js';
@@ -17,7 +17,7 @@ export interface CodexSession extends Session {
   createdAt: string; historyMode: 'legacy' | 'paginated'; producerVersion: string;
   metadataFidelity: 'native' | 'reduced';
 }
-export interface CodexHistory { items: readonly HistoryItem[]; complete: boolean; diagnostics: readonly CodexDiagnostic[]; incarnation?:string; retained?:boolean }
+export interface CodexHistory { items: readonly HistoryItem[]; complete: boolean; diagnostics: readonly CodexDiagnostic[]; incarnation?:string; retained?:boolean; itemTurns?:readonly NativeItemTurn[] }
 interface RolloutFile { path: string; owner: string; rolloutId: string }
 interface ParsedRollout { file: RolloutFile; meta: ObjectRecord; records: SourceRecord[] }
 const uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
@@ -227,10 +227,11 @@ export class CodexSessionAdapter implements SessionAdapter {
     if (!file) { ctx.add('selected-rollout-unavailable'); return { items: [], complete: false, diagnostics: ctx.diagnostics }; }
     const leaf = await parseFile(file, this.root, ctx);
     const records = leaf ? await this.lineage(leaf, ctx, new Set(), 0) : [];
-    const items = project(records, leaf?.meta.history_mode === 'paginated' ? 'paginated' : 'legacy', ctx);
+    const turns=new Map<string,NativeItemTurn>();
+    const items = project(records, leaf?.meta.history_mode === 'paginated' ? 'paginated' : 'legacy', ctx,turns);
     const incarnation=nativeIncarnation(await stat(file.path));
-    const retained=!records.some(record=>/compact/i.test(String(record.value.type))||/compact/i.test(String(object(record.value.payload).type)));
-    return { items, complete: ctx.complete, diagnostics: ctx.diagnostics, incarnation, retained };
+    const retained=leaf?.meta.history_mode==='paginated'&&!records.some(record=>/compact/i.test(String(record.value.type))||/compact/i.test(String(object(record.value.payload).type))||/compact/i.test(String(object(object(record.value.payload).item).type)));
+    return { items, complete: ctx.complete, diagnostics: ctx.diagnostics, incarnation, retained, itemTurns:[...turns.values()] };
   }
   private async lineage(parsed: ParsedRollout, ctx: ReadContext, seen: Set<string>, depth: number): Promise<SourceRecord[]> {
     if (seen.has(parsed.file.rolloutId)) { ctx.add('ancestry-cycle'); return []; }

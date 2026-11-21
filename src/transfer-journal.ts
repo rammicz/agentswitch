@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { AgentId } from './domain.js';
 import type { ArchiveReference } from './archive.js';
 import type { SessionSource } from './tui/contracts.js';
-import { contextKey, type ContextRef, type ContinuityIntent, type Lineage, type NativeContext } from './continuity.js';
+import { contextKey, reconcileAcceptedTurn, retainedContext, type ContextSnapshot, type ContextRef, type ContinuityIntent, type Lineage, type NativeContext } from './continuity.js';
 
 export interface TransferIntent {
   source: SessionSource;
@@ -36,6 +36,7 @@ export interface TransferRecord extends Omit<TransferIntent, 'prompt'> {
   retired: boolean; deleted: boolean; deleting: boolean;
   observation?: { target:ContextRef; turnId:string; conflicted:boolean };
   receiptTurnId?:string;
+  branchCheckpoint?:string;
 }
 /** Only trusted adapters may supply this; stdout, exit status and terminal ACKs are not receipts. */
 export interface TrustedReceipt { attemptId: string; payloadHash: string; target: AgentId; targetNativeId: string; targetRef?:ContextRef; turnId?:string }
@@ -49,7 +50,7 @@ function metadataIntent(input:ContinuityIntent):ContinuityIntent {
   const ref=(value:ContextRef):ContextRef=>({agent:value.agent,id:value.id,nativeId:value.nativeId,root:value.root,incarnation:value.incarnation,workspace:value.workspace,sourceKey:value.sourceKey});
   const lineage=input.lineage,context=input.sourceContext;
   return {lineage:{id:lineage.id,epoch:lineage.epoch,revision:lineage.revision,ids:[...lineage.ids],excludedIds:[...lineage.excludedIds??[]]},baseRevision:input.baseRevision,targetRoot:input.targetRoot,targetRef:input.targetRef?ref(input.targetRef):null,requestId:input.requestId,
-    sourceContext:{ref:ref(context.ref),lineageId:context.lineageId,epoch:context.epoch,nativeItems:context.nativeItems.map(item=>({id:item.id,revision:item.revision,ids:[...item.ids]})),ownIds:[...context.ownIds],coveredIds:[...context.coveredIds],retained:context.retained,acceptedAttempts:[...context.acceptedAttempts??[]]}};
+    sourceContext:{ref:ref(context.ref),lineageId:context.lineageId,epoch:context.epoch,nativeItems:context.nativeItems.map(item=>({id:item.id,revision:item.revision,ids:[...item.ids],...(item.turn?{turn:item.turn}:{})})),ownIds:[...context.ownIds],coveredIds:[...context.coveredIds],retained:context.retained,acceptedAttempts:[...context.acceptedAttempts??[]]}};
 }
 
 /** SQLite FULL commits make admission and intent one durable cross-process transaction. */
@@ -145,6 +146,23 @@ export class TransferJournal {
       this.accept(record,receipt);});
   }
   contexts():NativeContext[] {this.current();return this.db.prepare('SELECT data FROM contexts').all().map(row=>JSON.parse(row.data as string) as NativeContext);}
+  /** After supervised native close, certify only its already accepted main turn.
+   * Coverage is unchanged; public output remains in native history until later consent. */
+  checkpointAccepted(id:string,snapshot:ContextSnapshot):boolean {
+    return this.transaction(()=>{
+      const record=this.get(id),continuity=record.continuity;
+      if(!continuity||record.state!=='accepted'||record.launch!=='observed'||record.writer!=='unknown'||record.retired||record.deleted||record.deleting)return false;
+      const lineage=this.lineage(continuity.lineage.id),context=this.contexts().find(context=>contextKey(context.ref)===contextKey(snapshot.ref));
+      if(!lineage||!context||lineage.epoch!==continuity.lineage.epoch||context.epoch!==lineage.epoch||context.lineageId!==lineage.id)return false;
+      if(record.branchCheckpoint)return record.branchCheckpoint===digest(JSON.stringify(context.nativeItems))&&retainedContext(context,snapshot);
+      const reconciled=reconcileAcceptedTurn(context,snapshot,record);
+      if(!reconciled||reconciled.ownIds.some(item=>lineage.excludedIds?.includes(item)))return false;
+      const ids=[...new Set([...lineage.ids,...reconciled.ownIds])];
+      this.saveContext(reconciled);
+      this.db.prepare('UPDATE lineages SET data=? WHERE id=?').run(JSON.stringify({...lineage,ids,revision:lineage.revision+1}),lineage.id);
+      record.branchCheckpoint=digest(JSON.stringify(reconciled.nativeItems));this.save(record);return true;
+    });
+  }
   lineage(id:string):Lineage|undefined {this.current();const row=this.db.prepare('SELECT data FROM lineages WHERE id=?').get(id);return row?JSON.parse(row.data as string) as Lineage:undefined;}
   private saveContext(context:NativeContext):void {this.db.prepare('INSERT OR REPLACE INTO contexts(key,data) VALUES (?,?)').run(contextKey(context.ref),JSON.stringify(context));}
   private accept(record:TransferRecord,receipt:TrustedReceipt):void {
@@ -192,6 +210,6 @@ export class TransferJournal {
   delete(id: string): void { this.transaction(()=>{const record=this.assertDeletable(id);if(!record.retired && !['prepared','failed'].includes(record.state)) throw new Error('Abort the transfer before artifact deletion.');
     if(!record.deleting&&!record.deleted)this.invalidateLineage(record);
     // Minimal non-sensitive tombstone preserves the source reservation without replayable content.
-    delete record.prompt;delete record.continuity;delete record.observation;delete record.observerTokenHash;delete record.receiptTurnId;record.source={agent:record.source.agent,id:'deleted',nativeId:'deleted'};record.workspace='';record.archive=null;record.includedItemIds=[];record.omittedItemIds=[];record.targetNativeId=null;record.deleted=true;record.deleting=false;this.save(record);}); }
+    delete record.prompt;delete record.continuity;delete record.observation;delete record.observerTokenHash;delete record.receiptTurnId;delete record.branchCheckpoint;record.source={agent:record.source.agent,id:'deleted',nativeId:'deleted'};record.workspace='';record.archive=null;record.includedItemIds=[];record.omittedItemIds=[];record.targetNativeId=null;record.deleted=true;record.deleting=false;this.save(record);}); }
   close(): void { this.db.close(); }
 }

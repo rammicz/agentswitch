@@ -10,7 +10,7 @@ import { createRuntime, RuntimeError, type LaunchPlan, type RuntimeSource } from
 import { SearchIndex } from './search-index.js';
 import { digest, TransferJournal, type TransferIntent } from './transfer-journal.js';
 import { runPicker, type SessionSource } from './tui/app.js';
-import { chooseContinuation, contextKey, matchingEcho, observeContext, retainedContext, type ContextRef, type NativeContext } from './continuity.js';
+import { canonicalActivity, chooseContinuation, contextKey, matchingEcho, observeContext, retainedContext, retainedPrefix, type ContextRef, type ContextSnapshot, type NativeContext, type NativeItemTurn } from './continuity.js';
 import { observerCommand } from './native-observer.js';
 
 export interface ApplicationPaths { root: string; cache: string; archives: string; journal: string }
@@ -36,13 +36,14 @@ export async function applicationPaths(env: NodeJS.ProcessEnv=process.env): Prom
   return {root:canonical,cache:join(canonical,'search'),archives:join(canonical,'archives'),journal:join(canonical,'transfers')};
 }
 
-interface SourceSnapshot { runtime: RuntimeSource; items: readonly HistoryItem[]; complete: boolean; fingerprint: string; sourceKey: string; context?:ContextRef; retained?:boolean }
+interface SourceSnapshot { runtime: RuntimeSource; items: readonly HistoryItem[]; complete: boolean; fingerprint: string; sourceKey: string; context?:ContextRef; retained?:boolean; itemTurns?:readonly NativeItemTurn[] }
 interface Dispatch { launch: LaunchPlan; handoff: HandoffPlan | null; intent: TransferIntent; fingerprint: string; source: SessionSource; targetFingerprint?:string; targetSource?:SessionSource }
 export interface ApplicationOptions { workspace: string; scope?: Scope; env?: NodeJS.ProcessEnv; retry?: string }
 // A JSON string gives an unambiguous, lossless representation even when the wire
 // contains controls or ambiguous-width Unicode. JSON.parse reconstructs the exact bytes.
 const encodedPrompt=(prompt:string):string=>JSON.stringify(prompt).replace(/[\x7f-\x9f\u2028\u2029]|\p{Bidi_Control}/gu,unit=>`\\u${unit.charCodeAt(0).toString(16).padStart(4,'0')}`);
 const publicIdentity=(source:SessionSource):SessionSource=>({agent:source.agent,id:source.id,nativeId:source.nativeId});
+const nativeProjection=(snapshot:NativeSnapshot):ContextSnapshot=>({ref:snapshot.context,items:snapshot.history.items,retained:snapshot.retained,...(snapshot.history.itemTurns?{itemTurns:snapshot.history.itemTurns}:{})});
 
 /** Real native readers, index, reusable picker, pure consent preview, journal and runtime. */
 export async function runApplication(options:ApplicationOptions):Promise<void> {
@@ -58,13 +59,13 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         if(prior.mode==='native-resume'&&!prior.archive) {
           const fresh=await catalog.snapshot(source,signal);
           if(fresh.sourceKey!==prior.sourceKey)throw new Error('Recovery native roots differ from the original source. Restore the configured roots.');
-          return {runtime:{...fresh.runtime,workspace:prior.workspace},items:fresh.history.items,complete:fresh.history.complete,fingerprint:fresh.fingerprint,sourceKey:fresh.sourceKey,context:fresh.context,retained:fresh.retained};
+          return {runtime:{...fresh.runtime,workspace:prior.workspace},items:fresh.history.items,complete:fresh.history.complete,fingerprint:fresh.fingerprint,sourceKey:fresh.sourceKey,context:fresh.context,retained:fresh.retained,...(fresh.history.itemTurns?{itemTurns:fresh.history.itemTurns}:{})};
         }
         if(source.agent!==prior.source.agent||source.nativeId!==prior.source.nativeId) throw new Error('Recovery source identity changed.');
         return {runtime:{...prior.source,workspace:prior.workspace,nativeResume:'unknown'},items:recovered?.items??[],complete:prior.completeness==='complete',fingerprint:digest(JSON.stringify([prior.payloadHash,recovered])),sourceKey:prior.sourceKey};
       }
       const snapshot:NativeSnapshot=await catalog.snapshot(source,signal);
-      return {runtime:snapshot.runtime,items:snapshot.history.items,complete:snapshot.history.complete,fingerprint:snapshot.fingerprint,sourceKey:snapshot.sourceKey,context:snapshot.context,retained:snapshot.retained};
+      return {runtime:snapshot.runtime,items:snapshot.history.items,complete:snapshot.history.complete,fingerprint:snapshot.fingerprint,sourceKey:snapshot.sourceKey,context:snapshot.context,retained:snapshot.retained,...(snapshot.history.itemTurns?{itemTurns:snapshot.history.itemTurns}:{})};
     };
     let activeAttempt:string|undefined;
     const runtime=createRuntime({env,getSource:async(source,signal)=>(await resolveSource(source,signal)).runtime,
@@ -114,18 +115,33 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
             retainedItems.set(attempt.continuity.requestId,{id:attempt.continuity.requestId,role:'user',status:'complete',text,origin:{agent:attempt.target,context:digest(JSON.stringify([attempt.continuity.targetRoot,attempt.targetNativeId]))}});
           }
         }
+        const nativeSnapshots=new Map<string,NativeSnapshot>();
+        const sourceIds=new Set(snapshot.items.map(item=>canonicalActivity(ref,item).id)),knownIds=new Set(known?.ids);
+        // A completed native turn's new public output is metadata-only until consent.
+        // Hydrate just those known own IDs from its still-matching native prefix.
+        if(known)for(const context of contexts.filter(context=>context.lineageId===known.id&&context.epoch===known.epoch&&context.ref.root===catalog.rootKey(context.ref.agent)&&context.ownIds.some(id=>knownIds.has(id)&&!retainedItems.has(id)&&!sourceIds.has(id)))) {
+          try {
+            const native=await catalog.snapshot(context.ref,signal);nativeSnapshots.set(contextKey(context.ref),native);
+            const ownIds=new Set(context.ownIds);
+            if(native.history.complete&&retainedPrefix(context,nativeProjection(native)))for(const item of native.history.items.slice(0,context.nativeItems.length)) {
+              const canonical=canonicalActivity(native.context,item);
+              if(ownIds.has(canonical.id)&&knownIds.has(canonical.id))retainedItems.set(canonical.id,canonical);
+            }
+          } catch { /* Unavailable native output requires restored history or explicit source recovery. */ }
+        }
+        unavailableAncestry ||= Boolean(known?.ids.some(id=>!retainedItems.has(id)&&!sourceIds.has(id)));
         const sourceRecovery=Boolean(request.fresh&&unavailableAncestry);
-        const observed=observeContext({ref,items:snapshot.items,retained:snapshot.retained??false},prior?[]:contexts,[...aliases,...attempts.filter(attempt=>attempt.deleted||attempt.deleting)],[...retainedItems.values()],known,Boolean(prior||request.fresh||(redactions.length&&source.agent!==request.target)),sourceRecovery);
+        const observed=observeContext({ref,items:snapshot.items,retained:snapshot.retained??false,...(snapshot.itemTurns?{itemTurns:snapshot.itemTurns}:{})},prior?[]:contexts,[...aliases,...attempts.filter(attempt=>attempt.deleted||attempt.deleting)],[...retainedItems.values()],known,Boolean(prior||request.fresh||(redactions.length&&source.agent!==request.target)),sourceRecovery);
         const validated=new Map<string,NativeContext>();
         const targetSnapshots=new Map<string,NativeSnapshot>();
         if(!prior&&!request.fresh&&!redactions.length)for(const candidate of contexts.filter(context=>context.lineageId===observed.lineage.id&&context.epoch===observed.lineage.epoch&&context.ref.agent===request.target&&request.target==='codex'&&context.ref.root===catalog.rootKey(request.target))) {
           try {
-            const target=await catalog.snapshot(candidate.ref,signal);
+            const target=nativeSnapshots.get(contextKey(candidate.ref))??await catalog.snapshot(candidate.ref,signal);
             const echoes=candidate.acceptedAttempts?.every(id=>{
               const attempt=aliases.find(attempt=>attempt.id===id);
               return attempt?.archive&&target.history.items.some(item=>matchingEcho(item,target.context,[attempt])?.id===id);
             })??true;
-            if(target.history.complete&&target.retained&&echoes&&retainedContext(candidate,{ref:target.context,items:target.history.items,retained:target.retained})) {validated.set(contextKey(candidate.ref),candidate);targetSnapshots.set(contextKey(candidate.ref),target);sourceKeys.set(`${candidate.ref.agent}:${candidate.ref.nativeId}`,target.sourceKey);}
+            if(target.history.complete&&target.retained&&echoes&&retainedContext(candidate,nativeProjection(target))) {validated.set(contextKey(candidate.ref),candidate);targetSnapshots.set(contextKey(candidate.ref),target);sourceKeys.set(`${candidate.ref.agent}:${candidate.ref.nativeId}`,target.sourceKey);}
           } catch { /* A missing/replaced/changed target receives a reviewed fresh fallback. */ }
         }
         const choice=chooseContinuation(observed,contexts,validated,request.target,await realpath(request.workspace.path));
@@ -174,6 +190,11 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
           journal.begin(record.id);activeAttempt=record.id;
           if(dispatch.handoff) {await publishHandoffPlan(dispatch.handoff);await protectArchive(dispatch.handoff.prepared.archive,record.id);pinned=true;}
           const result=await runtime.launch(dispatch.launch,{beforeSpawn:()=>{possibleSpawn=true;},onSpawn:pid=>journal.spawned(record.id,pid),observer:{journal:paths.journal,attempt:record.id,token,root:catalog.rootKey(dispatch.intent.target),rootPath:catalog.rootPath(dispatch.intent.target)}});
+          const accepted=journal.get(record.id);
+          if(accepted.state==='accepted'&&accepted.observation)try {
+            const native=await catalog.snapshot(accepted.observation.target);
+            if(native.history.complete)journal.checkpointAccepted(record.id,nativeProjection(native));
+          } catch { /* Acceptance is durable; an uncertified branch is never reused as earlier target. */ }
           journal.exited(record.id,result.code,result.signal);
           if(pinned) await releaseArchive(dispatch.handoff!.prepared.archive,record.id);
           const completed=journal.get(record.id);

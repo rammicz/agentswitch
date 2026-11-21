@@ -58,6 +58,27 @@ Acceptance atomically commits actual identity, turn and exact selected coverage
 in one FULL transaction. Omitted IDs remain missing. Identical callbacks are
 idempotent. Receipt never releases writer admission or archive pins.
 
+After supervised native close, while its writer reservation is still held, a
+separate metadata transaction can certify the completed native branch. It
+requires the unchanged pre-turn prefix and exactly one immutable prompt echo
+followed by complete assistant/tool outputs. Every appended public item must
+have the accepted main session/turn IDs from paginated `item_completed` records;
+another user input, unrelated turn, changed prefix, compaction or missing turn
+metadata refuses certification. Exact subsequent branch validation remains in
+force. Thus a second return to the accepted target sends only newly missing IDs,
+including an empty history when that target has missed nothing.
+
+The checkpoint adds hashes and canonical IDs for the native assistant/tool
+activity, without changing imported accepted coverage. It retains no new raw
+output text. Later preparation reads those known IDs from the still-matching
+native prefix for exact preview and consent. Unrelated later growth can supply
+neither new eligible activity nor native reuse; a fresh rebuild may include the
+already certified prefix. Missing certified output requires restored native
+history or explicit F recovery. Legacy layouts without this paginated turn
+evidence, incomplete flushes and interactive sessions with additional user turns
+remain conservative fresh fallbacks. Ordinary selected-source native resume is
+still available under its existing compatibility checks.
+
 Claude Code has no implemented exact-turn receipt adapter. Its Stop lacks the
 correlation proven for this Codex surface. Cross-provider Claude selection uses
 a newly reviewed fresh bounded context and keeps uncertainty. Offline fake

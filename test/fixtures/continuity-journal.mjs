@@ -14,11 +14,21 @@ export async function preparedContinuity(directory) {
 }
 export const submit=(journal,record,target=ref('codex','A'))=>journal.observe(record.id,token,{name:'UserPromptSubmit',target,turnId:'turn-1',promptHash:record.payloadHash});
 export const stop=(journal,record,target=ref('codex','A'))=>journal.observe(record.id,token,{name:'Stop',target,turnId:'turn-1'});
+export const checkpointPrompt=JSON.stringify({history:[],currentRequest:'Checkpoint current',omissions:{id:'50000000-0000-4000-8000-000000000002'}});
+export const checkpointArchive={directory:'/synthetic',id:'50000000-0000-4000-8000-000000000002'};
+export const checkpointSnapshot=record=>({ref:ref('codex','A'),retained:true,items:[item('a1'),item('a2'),item('echo',record.prompt),{...item('new-answer','UNAPPROVED_NATIVE_ANSWER_TEXT'),role:'assistant'}],itemTurns:['a1','a2','echo','new-answer'].map((id,index)=>({id,threadId:'A',turnId:index<2?'old-turn':'turn-1'}))});
 if(process.argv[1]?.endsWith('/continuity-journal.mjs')) {
- const [directory,point]=process.argv.slice(2),{journal,record}=await preparedContinuity(directory);
+ const [directory,point]=process.argv.slice(2),{journal,record:ordinary,intent}=await preparedContinuity(directory);
+ const record=point.startsWith('checkpoint')?journal.prepare({...intent,prompt:checkpointPrompt,archive:checkpointArchive}):ordinary;
  if(point==='prepared')process.exit(73);
  journal.begin(record.id);if(point==='pending')process.exit(73);
+ if(point.startsWith('checkpoint'))journal.spawned(record.id,123456);
  submit(journal,record);if(point==='submitted')process.exit(73);
  if(point==='receipt-before-commit'){const exec=journal.db.exec.bind(journal.db);journal.db.exec=sql=>{if(sql==='COMMIT')process.exit(73);return exec(sql);};}
- stop(journal,record);process.exit(73);
+ stop(journal,record);
+ if(point.startsWith('checkpoint')) {
+  if(point==='checkpoint-before-commit'){const exec=journal.db.exec.bind(journal.db);journal.db.exec=sql=>{if(sql==='COMMIT')process.exit(73);return exec(sql);};}
+  journal.checkpointAccepted(record.id,checkpointSnapshot(record));
+ }
+ process.exit(73);
 }

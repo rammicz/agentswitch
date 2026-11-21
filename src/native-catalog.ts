@@ -67,12 +67,12 @@ export class NativeCatalog {
     signal?.throwIfAborted();this.diagnostics[source.agent]=[];
     const session=(await this.adapters[source.agent].discover()).find(session=>session.nativeId===source.nativeId&&session.id===source.id);
     if(!session) {this.report(source.agent,'selected history unavailable; cached entry may be stale');throw new Error('Selected source is unavailable. Refresh or restore its native history.');}
-    const history=await this.adapters[source.agent].readHistoryDetailed(source.nativeId);
+    const history:CodexHistory=await this.adapters[source.agent].readHistoryDetailed(source.nativeId);
     this.report(source.agent,history.complete?'':'selected public history incomplete; transfer blocked');signal?.throwIfAborted();
     const compatible=source.agent==='codex' ? session.producerVersion==='0.171.0' : !session.producerVersion||session.producerVersion==='2.1.330';
     const runtime:RuntimeSource={agent:session.agent,id:session.id,nativeId:session.nativeId,workspace:session.workspace,nativeResume:compatible?'compatible':'unknown'};
     const sourceKey=digest(JSON.stringify([source.agent,this.rootKeys[source.agent],source.nativeId]));
     const context:ContextRef={...runtime,root:this.rootKey(source.agent),incarnation:history.incarnation??'unknown',sourceKey};
-    return {session,history,runtime,fingerprint:digest(JSON.stringify([runtime,history.items,history.complete,context.incarnation,history.retained])),sourceKey,context,retained:compatible&&history.retained===true};
+    return {session,history,runtime,fingerprint:digest(JSON.stringify([runtime,history.items,history.complete,context.incarnation,history.retained,history.itemTurns])),sourceKey,context,retained:compatible&&history.retained===true};
   }
 }

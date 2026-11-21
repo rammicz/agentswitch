@@ -6,8 +6,8 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { TransferJournal } from '../dist/transfer-journal.js';
-import { contextKey, chooseContinuation } from '../dist/continuity.js';
-import { preparedContinuity, submit, stop, ref, token } from './fixtures/continuity-journal.mjs';
+import { contextKey, chooseContinuation, canonicalActivity } from '../dist/continuity.js';
+import { preparedContinuity, submit, stop, ref, token, checkpointPrompt, checkpointArchive, checkpointSnapshot } from './fixtures/continuity-journal.mjs';
 const directory=async()=>join(await mkdtemp(join(tmpdir(),'agentswitch-continuity-journal-')),'journal');
 test('migration retains legacy accepted and uncertain outcomes without manufacturing lineage coverage',async()=>{
  const path=await directory(),journal=await TransferJournal.open(path);
@@ -59,4 +59,21 @@ for(const point of ['prepared','pending','submitted','receipt-before-commit','ac
 test('continuity deletion erases the sole approved delta, including after metadata retention',async()=>{
  const path=await directory(),{journal,record}=await preparedContinuity(path);journal.begin(record.id);journal.exited(record.id,0,null);journal.abort(record.id);journal.beginDeletion(record.id);journal.delete(record.id);journal.close();
  const bytes=await readFile(join(path,'attempts.sqlite'));assert.equal(bytes.includes(Buffer.from('exact B delta')),false);
+});
+test('accepted native checkpoint atomically retains metadata only, preserves coverage and is idempotent without releasing ownership',async()=>{
+ const path=await directory(),{journal,intent}=await preparedContinuity(path),record=journal.prepare({...intent,prompt:checkpointPrompt,archive:checkpointArchive});
+ journal.begin(record.id);journal.spawned(record.id,123456);submit(journal,record);stop(journal,record);const before=journal.contexts().find(context=>context.ref.nativeId==='A'),snapshot=checkpointSnapshot(record);
+ assert.equal(journal.checkpointAccepted(record.id,snapshot),true);assert.equal(journal.checkpointAccepted(record.id,snapshot),true);
+ const after=journal.contexts().find(context=>context.ref.nativeId==='A');assert.equal(after.nativeItems.length,4);assert.equal(after.ownIds.length,before.ownIds.length+1);assert.deepEqual(after.coveredIds,before.coveredIds);
+ assert.equal(journal.get(record.id).writer,'unknown');assert.equal(journal.ownerState('target:'+contextKey(ref('codex','A'))),'unknown');
+ assert.equal(journal.checkpointAccepted(record.id,{...snapshot,items:[...snapshot.items,{id:'independent',text:'independent',role:'user',status:'complete'}]}),false);
+ journal.exited(record.id,0,null);assert.equal(journal.checkpointAccepted(record.id,snapshot),false);journal.close();
+ const reopened=await TransferJournal.open(path);assert.deepEqual(reopened.contexts().find(context=>context.ref.nativeId==='A'),after);assert.ok(reopened.get(record.id).branchCheckpoint);reopened.close();
+ assert.equal((await readFile(join(path,'attempts.sqlite'))).includes(Buffer.from('UNAPPROVED_NATIVE_ANSWER_TEXT')),false);
+});
+for(const point of ['checkpoint-before-commit','checkpointed'])test(`process death ${point} preserves acceptance and either old or complete native checkpoint`,async()=>{
+ const path=await directory(),result=spawnSync(process.execPath,[resolve('test/fixtures/continuity-journal.mjs'),path,point],{encoding:'utf8'});assert.equal(result.status,73,result.stderr);
+ const journal=await TransferJournal.open(path),[record]=journal.list(),a=journal.contexts().find(context=>context.ref.nativeId==='A');assert.equal(record.state,'accepted');assert.deepEqual(a.coveredIds,[...record.includedItemIds,record.continuity.requestId]);assert.equal(a.nativeItems.length,point==='checkpointed'?4:2);assert.equal(Boolean(record.branchCheckpoint),point==='checkpointed');
+ const output=canonicalActivity(ref('codex','A'),checkpointSnapshot(record).items.at(-1)).id;
+ assert.equal(journal.lineage(record.continuity.lineage.id).ids.includes(output),point==='checkpointed');assert.equal(a.ownIds.includes(output),point==='checkpointed');assert.equal(journal.ownerState('target:'+contextKey(ref('codex','A'))),'unknown');journal.close();
 });

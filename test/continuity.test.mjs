@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { observeContext, chooseContinuation, contextKey, retainedContext, matchingEcho } from '../dist/continuity.js';
+import { observeContext, chooseContinuation, contextKey, retainedContext, matchingEcho, reconcileAcceptedTurn, canonicalActivity } from '../dist/continuity.js';
 import { createHash } from 'node:crypto';
 
 const ref=(agent='codex',nativeId='A',root='root-a',incarnation='file-a')=>({agent,nativeId,id:agent+':'+nativeId,root,incarnation,workspace:'/workspace',sourceKey:root+nativeId});
@@ -49,4 +49,28 @@ test('only unique immutable launched nonce-bearing prompt echoes alias; arbitrar
 test('raw native public item IDs are retained only as nonreversible metadata hashes',()=>{
  const observed=observeContext({ref:ref(),items:[item('SECRET_NATIVE_ITEM_ID','public')],retained:true},[],[],[]);
  assert.equal(JSON.stringify(observed.context).includes('SECRET_NATIVE_ITEM_ID'),false);
+});
+test('accepted main-turn growth checkpoints only exact immutable echo and correlated complete public outputs',()=>{
+ const a=observeContext({ref:ref(),items:[item('a1'),item('a2')],retained:true},[],[],[]);
+ const prompt=JSON.stringify({history:[],currentRequest:'new current',omissions:{archive:'unique-nonce'}});
+ const attempt={id:'accepted-attempt',target:'codex',targetNativeId:'A',prompt,payloadHash:createHash('sha256').update(prompt).digest('hex'),includedItemIds:['accepted-import'],archive:{id:'unique-nonce'},launch:'observed',retired:false,deleted:false,deleting:false,state:'accepted',receiptTurnId:'accepted-turn',observation:{target:ref()},continuity:{requestId:'new-request',targetRoot:'root-a'}};
+ const context={...a.context,coveredIds:['accepted-import','new-request'],acceptedAttempts:[attempt.id]};
+ const outputs=[{...item('tool','PRIVATE_UNRETAINED_TOOL_OUTPUT'),role:'tool',status:'failed'},{...item('answer','PRIVATE_UNRETAINED_ASSISTANT_OUTPUT'),role:'assistant'}];
+ const snapshot={ref:ref(),retained:true,items:[item('a1'),item('a2'),item('echo',prompt),...outputs],itemTurns:['a1','a2','echo','tool','answer'].map((id,index)=>({id,threadId:'A',turnId:index<2?'base-turn':'accepted-turn'}))};
+ const checkpoint=reconcileAcceptedTurn(context,snapshot,attempt);assert.ok(checkpoint);assert.equal(checkpoint.nativeItems.length,5);assert.deepEqual(checkpoint.coveredIds,context.coveredIds);assert.ok(retainedContext(checkpoint,snapshot));
+ assert.deepEqual(checkpoint.ownIds.slice(-2),outputs.map(item=>canonicalActivity(ref(),item).id));assert.ok(!JSON.stringify(checkpoint).includes('PRIVATE_UNRETAINED'));
+ const variants=[
+  {...snapshot,itemTurns:snapshot.itemTurns.map(turn=>turn.id==='answer'?{...turn,turnId:'unrelated'}:turn)},
+  {...snapshot,itemTurns:snapshot.itemTurns.map(turn=>({...turn,threadId:'other'}))},
+  {...snapshot,itemTurns:[]},
+  {...snapshot,items:[...snapshot.items,item('intervening-user')]},
+  {...snapshot,items:[item('a1','changed'),...snapshot.items.slice(1)]},
+  {...snapshot,items:snapshot.items.slice(1)},
+  {...snapshot,ref:ref('codex','A','different-root')},
+  {...snapshot,ref:ref('codex','A','root-a','replacement')},
+  {...snapshot,items:[...snapshot.items.slice(0,-1),{...outputs[1],status:'interrupted'}]},
+ ];
+ for(const invalid of variants)assert.equal(reconcileAcceptedTurn(context,invalid,attempt),null);
+ for(const invalid of [{...attempt,state:'uncertain'},{...attempt,retired:true},{...attempt,deleting:true},{...attempt,receiptTurnId:'stale'}])assert.equal(reconcileAcceptedTurn(context,snapshot,invalid),null);
+ assert.equal(retainedContext(checkpoint,{...snapshot,itemTurns:snapshot.itemTurns.map(turn=>turn.id==='answer'?{...turn,turnId:'edited-turn'}:turn)}),false);
 });

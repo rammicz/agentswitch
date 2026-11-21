@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 const args=process.argv.slice(2),provider=process.env.FAKE_PROVIDER;
+let turnId;
 if(args.includes('--version'))console.log(provider==='codex'?'codex-cli 0.171.0':'2.1.330 (Claude Code)');
 else if(args.includes('--help'))console.log(provider==='claude'?'Usage: claude [options] [command] [prompt]\n--resume [value]':args[0]==='resume'?'Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]\n--cd <DIR>':'Usage: codex [OPTIONS] [PROMPT]\n--cd <DIR>'+ (process.env.FAKE_HOOK_MODE==='unsupported'?'':'\n-c, --config <key=value>'));
 else {
@@ -15,13 +16,15 @@ else {
  } else {
   if(!existsSync(path))writeFileSync(path,JSON.stringify({ordinal:0,type:'session_meta',payload:{id,session_id:id,timestamp:'2026-11-20T10:00:00.000Z',cwd,cli_version:'0.171.0',history_mode:'paginated'}})+'\n');
   let ordinal=readFileSync(path,'utf8').trim().split('\n').length;
-  for(const [type,text]of [['UserMessage',prompt],['AgentMessage','A response']])appendFileSync(path,JSON.stringify({ordinal:ordinal++,type:'event_msg',payload:{type:'item_completed',thread_id:id,turn_id:'native-turn-1',item:{id:'native-'+ordinal,type,content:[{type:type==='UserMessage'?'text':'Text',text}]}}})+'\n');
+  turnId='native-turn-'+ordinal;
+  for(const [type,text]of [['UserMessage',prompt],['AgentMessage','A response']])appendFileSync(path,JSON.stringify({ordinal:ordinal++,type:'event_msg',payload:{type:'item_completed',thread_id:id,turn_id:process.env.FAKE_HOOK_MODE==='unrelated-output'&&type==='AgentMessage'?'unrelated-turn':process.env.FAKE_HOOK_MODE==='missing-item-turn'?undefined:turnId,item:{id:'native-'+ordinal,type,content:[{type:type==='UserMessage'?'text':'Text',text}]}}})+'\n');
+  if(process.env.FAKE_HOOK_MODE==='intervening-user')appendFileSync(path,JSON.stringify({ordinal:ordinal++,type:'event_msg',payload:{type:'item_completed',thread_id:id,turn_id:'intervening-turn',item:{id:'intervening-'+ordinal,type:'UserMessage',content:[{type:'text',text:'Unrelated native user turn'}]}}})+'\n');
  }
  const hooks=args.filter(value=>value.startsWith('hooks.'));
  appendFileSync(process.env.RUNTIME_LOG,JSON.stringify({provider,args,cwd,tty:[process.stdin.isTTY,process.stdout.isTTY,process.stderr.isTTY],locator:!!process.env.AGENTSWITCH_OBSERVER,path})+'\n');
  if(provider==='codex'&&!['disabled','unsupported'].includes(process.env.FAKE_HOOK_MODE)) {
-  const submit={session_id:id,turn_id:'native-turn-1',cwd,transcript_path:path,hook_event_name:'UserPromptSubmit',prompt,agent_id:null,agent_type:null};
-  const stop={session_id:id,turn_id:'native-turn-1',cwd,transcript_path:path,hook_event_name:'Stop',stop_hook_active:false};
+  const submit={session_id:id,turn_id:turnId,cwd,transcript_path:path,hook_event_name:'UserPromptSubmit',prompt,agent_id:null,agent_type:null};
+  const stop={session_id:id,turn_id:turnId,cwd,transcript_path:path,hook_event_name:'Stop',stop_hook_active:false};
   const mode=process.env.FAKE_HOOK_MODE;
   if(mode==='wrong-hash')submit.prompt+='changed';
   if(mode==='wrong-turn')stop.turn_id='another-turn';

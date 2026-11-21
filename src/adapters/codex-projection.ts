@@ -1,5 +1,6 @@
 import type { HistoryItem } from '../domain.js';
 import { ReadContext } from './codex-io.js';
+import type { NativeItemTurn } from '../continuity.js';
 export type ObjectRecord = Record<string, unknown>;
 export function object(value: unknown): ObjectRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectRecord : {};
@@ -61,14 +62,17 @@ function projectItem(item: ObjectRecord, record: SourceRecord, ctx: ReadContext,
   return { id: `codex:${record.source}:${id}`, role, text: content, status: status(item.status, ctx) };
 }
 /** Public projection only: native context, instructions, reasoning and raw tool arguments are never traversed. */
-export function project(records: readonly SourceRecord[], mode: string, ctx: ReadContext): HistoryItem[] {
+export function project(records: readonly SourceRecord[], mode: string, ctx: ReadContext, turns?:Map<string,NativeItemTurn>): HistoryItem[] {
   const projected: { item: HistoryItem; mirror: boolean }[] = [];
   for (const record of records) {
     const envelope = record.value, payload = object(envelope.payload);
     if (mode === 'paginated') {
       if (envelope.type === 'event_msg' && payload.type === 'item_completed') {
         const item = projectItem(object(payload.item), record, ctx, true);
-        if (item) projected.push({ item, mirror: false });
+        if (item) {
+          projected.push({ item, mirror: false });
+          if(turns)turns.set(item.id,{id:item.id,threadId:turns.has(item.id)?'':nativeItemId(payload.thread_id),turnId:turns.has(item.id)?'':nativeItemId(payload.turn_id)});
+        }
       }
     } else if (envelope.type === 'response_item') {
       const item = projectItem(payload, record, ctx, false);

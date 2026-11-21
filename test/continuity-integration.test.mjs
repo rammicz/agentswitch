@@ -46,6 +46,33 @@ test('default CLI A→B→A resumes actual A, aliases echo, sends missing IDs on
  const journal=await TransferJournal.open(join(f.state,'transfers'));const a=journal.contexts().find(context=>context.ref.nativeId===ids[0]);assert.deepEqual(new Set(a.coveredIds),new Set([...payload.history.map(item=>item.id),accepted.continuity.requestId]));journal.close();
  const hooks=(await readFile(f.env.HOOK_LOG,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(hooks.length,3);assert.equal(new Set(hooks.map(hook=>hook.command)).size,1);for(const hook of hooks){assert.equal(hook.status,0);assert.equal(hook.stdout,'');assert.equal(hook.stderr,'');assert.ok(!hook.command.includes(accepted.id));const helper=process.env.AGENTSWITCH_TEST_ENTRY?process.env.AGENTSWITCH_TEST_ENTRY.replace(/cli\.js$/,'native-observer.js'):resolve('dist/native-observer.js');assert.ok(hook.command.includes(helper.replaceAll("'","'\\''")));}
 });
+test('default CLI A→B→A repeated returns reuse accepted A and evolve only the exact missing set',async()=>{
+ const f=await setup();const b=await switchToB(f);
+ for(let turn=0;turn<2;turn++) {
+  const result=pty(f,[...select('B response'),...confirm,{wait:'accepted — correlated native turn'}]);assert.equal(result.code,0);
+  const launch=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse).at(-1);
+  assert.equal(launch.args[0],'resume','An accepted native turn must remain reusable on the next return');assert.equal(launch.args.at(-2),ids[0]);
+  assert.deepEqual(JSON.parse(launch.args.at(-1)).history.map(item=>item.text),turn===0?['Continue the task from this conversation.','B response']:[]);
+ }
+ const entries=(await readFile(b.path,'utf8')).trim().split('\n').map(JSON.parse),base=entries.at(-1);
+ for(const [uuid,parentUuid,type,content]of [['b-next','b-answer','user','B incremental request'],['b-next-answer','b-next','assistant','B incremental answer']])entries.push({...base,uuid,parentUuid,type,message:{id:'response-'+uuid,role:type,content}});
+ await writeFile(b.path,entries.map(JSON.stringify).join('\n')+'\n');
+ pty(f,[...select('B incremental'),...confirm,{wait:'accepted — correlated native turn'}]);
+ const launches=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse),last=launches.at(-1);assert.equal(last.args[0],'resume');assert.equal(last.args.at(-2),ids[0]);
+ const payload=JSON.parse(last.args.at(-1));assert.deepEqual(payload.history.map(item=>item.text),['B incremental request','B incremental answer']);
+ const records=await record(f),priorIds=new Set(records[1].includedItemIds);assert.ok(payload.history.every(item=>!priorIds.has(item.id)));assert.equal(new Set(records.slice(0,3).map(record=>record.targetNativeId)).size,1);
+});
+for(const mode of ['unrelated-output','missing-item-turn','intervening-user'])test(`accepted receipt with ${mode} does not certify appended native branch or reuse it`,async()=>{
+ const f=await setup(mode);await switchToB(f);
+ pty(f,[...select('B response'),...confirm,{wait:'accepted — correlated native turn'}]);const [accepted]=await record(f);assert.equal(accepted.state,'accepted');assert.equal(accepted.branchCheckpoint,undefined);
+ pty(f,[...select('B response'),...confirm,{wait:'accepted — correlated native turn'}]);const launch=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse).at(-1);assert.ok(!launch.args.includes('resume'));
+});
+test('independent growth after a certified accepted turn falls fresh while preserving its known own output',async()=>{
+ const f=await setup();await switchToB(f);pty(f,[...select('B response'),...confirm,{wait:'accepted — correlated native turn'}]);assert.ok((await record(f))[0].branchCheckpoint);
+ const ordinal=(await readFile(f.aFile,'utf8')).trim().split('\n').length;await appendFile(f.aFile,JSON.stringify(completed('UserMessage','external-after-accepted','Independent native continuation',ordinal))+'\n');
+ pty(f,[...select('B response'),...confirm,{wait:'accepted — correlated native turn'}]);const launch=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse).at(-1);assert.ok(!launch.args.includes('resume'));
+ const texts=JSON.parse(launch.args.at(-1)).history.map(item=>item.text);assert.ok(texts.includes('A response'));assert.ok(!texts.includes('Independent native continuation'));
+});
 for(const change of ['growth','replacement','root'])test(`default CLI ${change} of earlier target uses reviewed fresh rebuild`,async()=>{
  const f=await setup();await switchToB(f);
  if(change==='growth')await appendFile(f.aFile,JSON.stringify(completed('UserMessage','external','Independent A continuation',3))+'\n');
