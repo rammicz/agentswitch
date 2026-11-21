@@ -5,13 +5,13 @@ title: 'Adapter proposal: '
 labels: 'enhancement, queue:dev, status:triage'
 ---
 
-Complete every section; write **unknown** or **unavailable** where evidence is missing.
+Complete every section. Write **unknown** or **unavailable** where evidence is missing.
 See the [support policy](https://github.com/rammicz/agentswitch/blob/main/docs/adapter-support.md).
-This proposal starts triage; it does not promise implementation, support or provider access.
+Maintainers assess implementation scope during triage. Provider access requires separate authorization.
 
 ## Product and distribution
 
-<!-- Exact product, CLI executable, publisher/distribution/package, version and build/revision if known. Distinguish similarly named products and source revisions from shipped binaries. Link version evidence; do not paste environment dumps. -->
+<!-- Exact product, CLI executable, publisher/distribution/package, version and build/revision if known. Distinguish similarly named products and source revisions from shipped binaries. Link version evidence. Omit environment dumps. -->
 
 ## Requested outcome
 
@@ -19,7 +19,7 @@ This proposal starts triage; it does not promise implementation, support or prov
 
 ## Demand
 
-<!-- Who needs this, how often, and what problem it solves. Link existing public requests or other verifiable demand signals; distinguish measured usage from estimates. One concrete request is useful; do not invent counts. -->
+<!-- Who needs this, how often, and what problem it solves. Link existing public requests or other verifiable demand signals. Identify measured usage and estimates. Include concrete requests and verifiable counts. -->
 
 ## Official evidence
 
@@ -27,7 +27,7 @@ This proposal starts triage; it does not promise implementation, support or prov
 
 ## Platforms
 
-<!-- Requested OS, OS version and architecture. Separate available upstream builds from combinations actually tested; note unsupported or unknown hosts. -->
+<!-- Requested OS, OS version and architecture. List available upstream builds, combinations actually tested and unsupported or unknown hosts. -->
 
 ## Public fixtures
 
@@ -35,9 +35,9 @@ This proposal starts triage; it does not promise implementation, support or prov
 
 ## Capabilities and limits
 
-<!-- Record evidence or unknown for: read-only discovery/roots, session identity/workspace, public history and omissions, native resume, fresh input transport and context limits, preview/consent, normal permissions, active sessions and launch failures. Distinguish source/help evidence, offline fake-executable/PTY results and actual authenticated consumption. -->
+<!-- Record evidence or unknown for read-only discovery/roots, session identity/workspace, public history and omissions, native resume, fresh input transport and context limits, preview/consent, normal permissions, active sessions and launch failures. Distinguish source/help evidence, offline fake-executable/PTY results and actual authenticated consumption. -->
 
 ## Privacy review
 
-- [ ] I included only public links and synthetic or sanitized redistributable fixtures; no personal transcripts, hidden reasoning, credentials/tokens, account data, environment dumps or identifying machine paths.
-- [ ] Missing capabilities and unverified behavior are explicit. This proposal does not authorize account use, paid calls or changes to native permissions/history.
+- [ ] I included only public links and synthetic or sanitized redistributable fixtures. I excluded personal transcripts, hidden reasoning, credentials/tokens, account data, environment dumps and identifying machine paths.
+- [ ] Missing capabilities and unverified behavior are explicit. Account use and paid calls require separate authorization. Native permissions/history must be preserved.
