@@ -7,8 +7,8 @@ import { searchSessions } from '../search.js';
 import type { PickerOptions, PreparedContinuation, SessionHit, SessionSource, WorkspaceChoice } from './contracts.js';
 export type * from './contracts.js';
 
-const filters = ['all', 'codex', 'claude', 'opencode'] as const;
-const targets: readonly AgentId[] = ['codex', 'claude', 'opencode'];
+const filters = ['all', 'codex', 'claude', 'opencode', 'agy'] as const;
+const targets: readonly AgentId[] = ['codex', 'claude', 'opencode', 'agy'];
 const sourceOf = ({ id, nativeId, agent }: SessionHit): SessionSource => ({ id, nativeId, agent });
 // Untrusted controls stay visible as text and never reach the terminal as instructions.
 const clean = (text: string): string => text.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]|\p{Bidi_Control}/gu,

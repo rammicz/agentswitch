@@ -50,6 +50,7 @@ async function validateDirectory(directory: string): Promise<void> {
   }
 }
 function timestamp(value: string): number {
+  if(value==='')return Number.NEGATIVE_INFINITY;
   const time = Date.parse(value);
   if (!Number.isFinite(time)) throw new Error('Search session has an invalid timestamp');
   return time;

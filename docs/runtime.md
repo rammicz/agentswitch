@@ -7,13 +7,13 @@ delivery state. [Continuity](continuity.md) resolves earlier native targets and
 conditionally observes matching Codex submit/completion hooks.
 
 The runtime performs only `--version`, `--help`, and Codex `resume --help` probes.
-It supports exactly **Codex 0.171.0**, **Claude Code 2.1.330** and **OpenCode opencode-ai 1.19.6**, with required
+It supports exactly **Codex 0.171.0**, **Claude Code 2.1.330** **OpenCode opencode-ai 1.19.6** and **Antigravity CLI 1.5.14**, with required
 interactive prompt/resume/workspace help shapes. Probes have a combined 64 KiB
 output cap per invocation and a two second default timeout (configurable up to ten
 seconds). Unknown versions, missing capabilities, nonzero results, timeout and
 excess output fail preparation. Help compatibility is advertised support, not
 proof of authentication, provider receipt, or model behavior. Tests launch only
-local fake executables; no actual provider smoke test has been run.
+local fake executables; no authenticated provider prompt smoke test has been run. The Antigravity profile retains sterile no-network real version/help/ACP handshake and missing-auth evidence; see [its limits](agy-reader.md).
 
 The matrix follows the pinned [Codex CLI source](https://github.com/openai/codex/tree/ccf9be8cc458bd6b8336fe84d68d8893f2691a5e/codex-rs/cli),
 [Codex resume cwd policy](https://github.com/openai/codex/blob/ccf9be8cc458bd6b8336fe84d68d8893f2691a5e/codex-rs/tui/src/session_resume.rs),
@@ -62,6 +62,7 @@ All provider launches use argument arrays, `shell: false`, the chosen canonical
 cwd, and inherited stdin/stdout/stderr. Codex also receives explicit `-C` so a saved
 resume cwd cannot override the approved workspace. Claude resume uses
 `--resume=<UUID>`. OpenCode uses `[workspace, --session=ses_ID]` with no prompt or `[workspace, --prompt=completeJson]` for fresh transport. Its draft must be explicitly cleared for native resume; select F to retain it in a fresh reviewed envelope. Option termination protects literal option-looking prompts.
+Antigravity uses `[--conversation, UUID]` with an explicitly empty draft and recorded workspace only, or `[--prompt-interactive, completeJson]` for fresh input. Its cache is only a native-open candidate, never a transcript or target receipt.
 No approval, sandbox, trust, system-prompt, model, print-mode or authentication
 flags are added. Normal environment/native configuration remain inherited; the
 runtime never reads or copies credentials or native history files.

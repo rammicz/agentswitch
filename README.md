@@ -4,7 +4,7 @@
 
 Find a coding conversation, choose the agent you want to continue with, and get back to work. The first target is **Codex ↔ Claude Code**: when one quota runs out, your task should not have to start over.
 
-> **Status: early integration.** The default terminal CLI now reads supported local Codex/Claude/OpenCode sessions, searches public text and offers confirmed native resume or a fresh cross-agent handoff. Private archives and a durable delivery journal support explicit recovery. Offline PTY tests use fake providers; real provider consumption is not certified. See [native integration and recovery](docs/integration.md). The package has not been published to npm.
+> **Status: early integration.** The default terminal CLI now reads supported local Codex/Claude/OpenCode sessions, searches public text and offers confirmed native resume or a fresh cross-agent handoff. Antigravity CLI 1.5.14 is also available as an incoming target and sparse metadata/native-open profile; its public history and outgoing transfers remain unavailable. Private archives and a durable delivery journal support explicit recovery. Offline PTY tests use fake providers; real provider consumption is not certified. See [native integration and recovery](docs/integration.md). The package has not been published to npm.
 
 ## The intended experience
 
@@ -47,7 +47,7 @@ agentswitch --demo
 agentswitch --demo --global
 ```
 
-`npm link` installs the local development command. You can also run `node dist/cli.js --demo` without linking. Use `npm uninstall -g agentswitch` to remove the link. Running `agentswitch` without options opens the native picker in an interactive terminal. Set `CODEX_HOME`, `CODEX_SQLITE_HOME`, `CLAUDE_CONFIG_DIR`, `OPENCODE_DB`, `XDG_DATA_HOME` or `AGENTSWITCH_STATE_DIR` to choose isolated roots; see [integration and recovery](docs/integration.md).
+`npm link` installs the local development command. You can also run `node dist/cli.js --demo` without linking. Use `npm uninstall -g agentswitch` to remove the link. Running `agentswitch` without options opens the native picker in an interactive terminal. Set `CODEX_HOME`, `CODEX_SQLITE_HOME`, `CLAUDE_CONFIG_DIR`, `OPENCODE_DB`, `XDG_DATA_HOME` `AGENTSWITCH_AGY_ROOT` or `AGENTSWITCH_STATE_DIR` to choose isolated roots; see [integration and recovery](docs/integration.md).
 
 The demo uses three synthetic sessions, including one in a different workspace. It reads no agent history, writes no history store, makes no network or model calls, and launches no agent.
 
@@ -57,7 +57,7 @@ For installation from a verified local tarball and its removal, see [installatio
 | --- | --- | --- |
 | Type / Backspace | Search titles, workspaces, and message text | Edit a workspace override |
 | ↑ / ↓ | Move selection | Scroll transcript or summary |
-| ← / → | Cycle All / Codex / Claude / OpenCode | Cycle target agent in target selection |
+| ← / → | Cycle All / Codex / Claude / OpenCode / agy | Cycle target agent in target selection |
 | Tab | Toggle folder / global scope | — |
 | Enter | Preview matches and transcript | Choose target, prepare summary, then confirm |
 | W | Search text | Explicit workspace override in target selection |
@@ -90,7 +90,7 @@ The design is local first. Session reading and indexing should require no model 
 
 Each selected target will need to be installed and authenticated independently for real continuation. agentswitch will not pool quotas, copy credentials, or bypass provider limits. Each target keeps its normal workspace instructions and approval behavior.
 
-The programmatic readers accept explicit native roots; see [Codex reader](docs/codex-reader.md), [Claude Code reader](docs/claude-reader.md), and [OpenCode 1.19.6 profile](docs/opencode-reader.md). The [programmatic search index](docs/search-index.md) supports private persistence, refresh, derived-session deletion, full rebuild and purge over explicitly configured adapters. The [handoff component](docs/handoff.md) supports explicit public-text redaction before preparation and private archive retention; the native CLI previews and confirms the exact payload before publication. The CLI has no telemetry. Native discovery indexes public text under the private application state directory; approved transfers use separate archives and a durable journal.
+The programmatic readers accept explicit native roots; see [Codex reader](docs/codex-reader.md), [Claude Code reader](docs/claude-reader.md), [OpenCode 1.19.6 profile](docs/opencode-reader.md), and [Antigravity limited profile](docs/agy-reader.md). The [programmatic search index](docs/search-index.md) supports private persistence, refresh, derived-session deletion, full rebuild and purge over explicitly configured adapters. The [handoff component](docs/handoff.md) supports explicit public-text redaction before preparation and private archive retention; the native CLI previews and confirms the exact payload before publication. The CLI has no telemetry. Native discovery indexes public text under the private application state directory; approved transfers use separate archives and a durable journal.
 
 ## Roadmap
 
@@ -100,7 +100,8 @@ The programmatic readers accept explicit native roots; see [Codex reader](docs/c
 | [First usable release](https://github.com/rammicz/agentswitch/issues/5) | Codex and Claude Code discovery, folder/global search, transcript preview, native resume, bounded cross-agent handoff, launch and recovery | Planned; component tasks linked from integration issue |
 | [Continuity](https://github.com/rammicz/agentswitch/issues/6) | Durable lineage, exact missing-history sets and conditional Codex return via native hooks; reviewed fresh fallbacks | [Offline integration](docs/continuity.md) |
 | [OpenCode](https://github.com/rammicz/agentswitch/issues/11) | Exact 1.19.6 public history, empty-request native resume and fresh transfers | [Offline fixture/PTY tested; native consumption unverified](docs/opencode-reader.md) |
-| More agents | [agy](https://github.com/rammicz/agentswitch/issues/9), [grokbuild](https://github.com/rammicz/agentswitch/issues/12) | Deferred; validate each integration before promising compatibility |
+| [Antigravity CLI](https://github.com/rammicz/agentswitch/issues/9) | Exact 1.5.14 incoming fresh transfers and confirmed empty-request native open from sparse local last-ID metadata; outgoing history unavailable | [Limited profile; full issue remains open](docs/agy-reader.md) |
+| More agents | [grokbuild](https://github.com/rammicz/agentswitch/issues/12) | Deferred; validate each integration before promising compatibility |
 | [Community requests](https://github.com/rammicz/agentswitch/issues/13) | Other popular coding agents, based on demand | Open to proposals; structured intake deferred |
 
 An adapter is supported only after its discovery, history parsing, launch behavior, and compatibility fixtures pass. Listing an agent on the roadmap does not imply support today.
@@ -122,7 +123,7 @@ There are no runtime npm dependencies. TypeScript and Node type definitions are 
 ```text
 src/cli.ts           CLI entry point, native picker and explicit recovery commands
 src/domain.ts        Sessions, history items, queries, handoff state
-src/adapters/        Read-only Codex/Claude/OpenCode readers and adapter contracts
+src/adapters/        Read-only Codex/Claude/OpenCode readers, agy metadata and contracts
 src/search.ts        In-memory demo search baseline
 src/search-index.ts  Private persistent offline query component
 src/runtime.ts       Pinned planner and inherited-terminal launch component

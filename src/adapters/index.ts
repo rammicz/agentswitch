@@ -12,6 +12,7 @@ export const agentCatalog = [
   { id: 'codex', label: 'Codex', status: 'planned' },
   { id: 'claude', label: 'Claude Code', status: 'planned' },
   { id: 'opencode', label: 'OpenCode', status: 'fixture-tested' },
+  { id: 'agy', label: 'Antigravity CLI', status: 'target-and-metadata' },
 ] as const;
 
 export { CodexSessionAdapter } from './codex.js';
@@ -22,3 +23,6 @@ export type { ClaudeAdapterOptions, ClaudeDiagnostic, ClaudeHistory, ClaudeLimit
 
 export { OpenCodeSessionAdapter, openCodePaths } from './opencode.js';
 export type { OpenCodeAdapterOptions, OpenCodeSession, OpenCodeHistory } from './opencode.js';
+
+export { AgySessionAdapter, agyPaths } from './agy.js';
+export type { AgyAdapterOptions, AgySession, AgyHistory } from './agy.js';

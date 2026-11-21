@@ -1,0 +1,8 @@
+{
+  "args": [
+    "--help"
+  ],
+  "code": 0,
+  "stdout": "",
+  "stderr": "Usage of agy:\n  --conversation                  Resume a previous conversation by ID\n  --prompt-interactive            Run an initial prompt interactively and continue the session\n"
+}

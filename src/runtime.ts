@@ -147,13 +147,15 @@ function probe(executable: string, args: string[], cwd: string, env: NodeJS.Proc
 }
 async function capabilities(target: AgentId, executable: string, cwd: string, env: NodeJS.ProcessEnv, timeout: number, signal?: AbortSignal): Promise<{version:string;observer:boolean}> {
   const version = await probe(executable, ['--version'], cwd, env, timeout, signal);
-  const expected = target === 'codex' ? 'codex-cli 0.171.0' : target==='opencode'?'1.19.6':'2.1.330 (Claude Code)';
-  if (version !== expected) return fail('UNSUPPORTED_VERSION', 'Target version is unsupported. Supported versions: Codex 0.171.0, Claude Code 2.1.330 and OpenCode opencode-ai 1.19.6. Prepare with a tested version.');
+  const expected = target === 'codex' ? 'codex-cli 0.171.0' : target==='agy'?'1.5.14':target==='opencode'?'1.19.6':'2.1.330 (Claude Code)';
+  if (version !== expected) return fail('UNSUPPORTED_VERSION', 'Target version is unsupported. Supported versions: Codex 0.171.0, Claude Code 2.1.330, OpenCode opencode-ai 1.19.6 and Antigravity CLI 1.5.14. Prepare with a tested version.');
   const help = await probe(executable, ['--help'], cwd, env, timeout, signal);
   if (target === 'codex') {
     const resume = await probe(executable, ['resume', '--help'], cwd, env, timeout, signal);
     if (!help.includes('Usage: codex [OPTIONS] [PROMPT]') || !/--cd\s+<DIR>/.test(help) || !resume.includes('Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]') || !/--cd\s+<DIR>/.test(resume))
       return fail('UNSUPPORTED_CAPABILITY', 'Codex interactive prompt, resume or workspace capability is missing.');
+  } else if(target==='agy') {
+    if(!/^Usage of agy:/m.test(help)||!/^\s+--conversation\s+Resume a previous conversation by ID\s*$/m.test(help)||!/^\s+--prompt-interactive\s+Run an initial prompt interactively and continue the session\s*$/m.test(help))return fail('UNSUPPORTED_CAPABILITY','Antigravity CLI 1.5.14 native conversation or interactive prompt capability is missing.');
   } else if(target==='opencode') {
     if(!/opencode \[project\]/.test(help)||!help.includes('--session')||!help.includes('--prompt'))return fail('UNSUPPORTED_CAPABILITY','OpenCode 1.19.6 interactive project, session or prompt capability is missing.');
   } else if (!/Usage: claude \[options\](?: \[command\])? \[prompt\]/.test(help) || !/--resume\s+\[value\]/.test(help)) {
@@ -186,7 +188,7 @@ export function createRuntime(options: RuntimeOptions) {
       const source = await options.getSource(request.source, signal);
       if (source.id !== request.source.id || source.nativeId !== request.source.nativeId || source.agent !== request.source.agent)
         return fail('SOURCE_IDENTITY', 'Source identity changed. Refresh the catalog and prepare again.');
-      if (!['codex', 'claude', 'opencode'].includes(request.target) || !['codex', 'claude', 'opencode'].includes(source.agent)) return fail('UNSUPPORTED_TARGET', 'Unsupported source or target agent.');
+      if (!['codex', 'claude', 'opencode', 'agy'].includes(request.target) || !['codex', 'claude', 'opencode', 'agy'].includes(source.agent)) return fail('UNSUPPORTED_TARGET', 'Unsupported source or target agent.');
       if (!['source', 'override'].includes(request.workspace.kind)) return fail('WORKSPACE_CHOICE', 'An explicit source or override workspace choice is required.');
       const workspace = await directory(request.workspace.path);
       if (request.workspace.kind === 'source' && workspace.path !== (await directory(source.workspace)).path)
@@ -197,8 +199,8 @@ export function createRuntime(options: RuntimeOptions) {
       if(input.resumeTarget&&targetSource.workspace!==workspace.path)return fail('WORKSPACE_CHOICE','Earlier native target workspace differs from the selected workspace.');
       if (native && !(request.target==='opencode'?openCodeNativeId:uuid).test(targetSource.nativeId)) return fail('INVALID_NATIVE_ID', 'Native resume requires the exact source UUID or provider-native ses_ identifier. Refresh or explicitly choose a fresh handoff.');
       if (native && targetSource.nativeResume !== 'compatible') return fail('INCOMPATIBLE_NATIVE', 'Native session compatibility is unavailable. Explicitly choose a fresh handoff or use the native client.');
-      if(native&&request.target==='opencode'&&(request.workspace.kind!=='source'||workspace.path!==(await directory(targetSource.workspace)).path))return fail('WORKSPACE_CHOICE','OpenCode native resume requires its recorded workspace. Select F for a reviewed fresh context.');
-      if(native&&request.target==='opencode'&&(input.currentRequest!==''||input.handoff))return fail('NATIVE_REQUEST_UNSUPPORTED','OpenCode native resume opens without an initial request. Clear the request explicitly, or select F to preserve the draft in a reviewed fresh context.');
+      if(native&&['opencode','agy'].includes(request.target)&&(request.workspace.kind!=='source'||workspace.path!==(await directory(targetSource.workspace)).path))return fail('WORKSPACE_CHOICE','Native resume requires its recorded workspace. Select F for a reviewed fresh context.');
+      if(native&&['opencode','agy'].includes(request.target)&&(input.currentRequest!==''||input.handoff))return fail('NATIVE_REQUEST_UNSUPPORTED','Native resume opens without an initial request. Clear the request explicitly, or select F to preserve the draft in a reviewed fresh context.');
       if (native) available(guard, targetSource);
       if (!native && !input.handoff) return fail('HANDOFF_REQUIRED', 'A prepared historical user prompt and distinct current request are required for a fresh handoff.');
       const prompt = input.handoff?.prompt??input.currentRequest??'';
@@ -214,7 +216,7 @@ export function createRuntime(options: RuntimeOptions) {
       const hooks=observer?['UserPromptSubmit','Stop'].flatMap(event=>['-c',`hooks.${event}=[{hooks=[{type="command",command=${JSON.stringify(input.observerCommand)},timeout=5}]}]`]):[];
       const args = request.target === 'codex'
         ? native ? ['resume',...hooks, '-C', workspace.path, '--', targetSource.nativeId, ...(prompt ? [prompt] : [])] : [...hooks,'-C', workspace.path, '--', prompt]
-        : request.target==='opencode'?[workspace.path,...(native?[`--session=${targetSource.nativeId}`]:[`--prompt=${prompt}`])]:native ? [`--resume=${targetSource.nativeId}`, ...(prompt ? ['--', prompt] : [])] : ['--', prompt];
+        : request.target==='agy'?(native?['--conversation',targetSource.nativeId]:['--prompt-interactive',prompt]):request.target==='opencode'?[workspace.path,...(native?[`--session=${targetSource.nativeId}`]:[`--prompt=${prompt}`])]:native ? [`--resume=${targetSource.nativeId}`, ...(prompt ? ['--', prompt] : [])] : ['--', prompt];
       const plan: LaunchPlan = Object.freeze({ mode: native ? 'native-resume' : 'fresh-handoff', target: request.target, executable, args: Object.freeze(args), workspace: workspace.path, version:capability.version,nativeTarget:native?{id:targetSource.id,agent:targetSource.agent,nativeId:targetSource.nativeId}:null,observer:observer?'codex-hooks':'none' });
       const identitySource = Object.freeze({ id: source.id, agent: source.agent, nativeId: source.nativeId });
       snapshots.set(plan, { source: plan.nativeTarget??identitySource, workspacePath: request.workspace.path, workspaceIdentity: workspace.identity, executableIdentity: identity, used: false });

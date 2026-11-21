@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { Scope, Session, HistoryItem } from './domain.js';
 import { deleteArchive, protectArchive, readArchiveSnapshot, releaseArchive } from './archive.js';
 import { createHandoffPlan, publishHandoffPlan, type HandoffPlan } from './handoff.js';
+import { agyPaths } from './adapters/agy.js';
 import { openCodePaths } from './adapters/opencode.js';
 import { NativeCatalog, type NativeSnapshot } from './native-catalog.js';
 import { createRuntime, RuntimeError, type LaunchPlan, type RuntimeSource } from './runtime.js';
@@ -29,7 +30,7 @@ export async function applicationPaths(env: NodeJS.ProcessEnv=process.env): Prom
   const root=resolve(env.AGENTSWITCH_STATE_DIR?.trim()||join(env.XDG_STATE_HOME?.trim()||join(homedir(),'.local','state'),'agentswitch'));
   const opencode=openCodePaths({env});
   const nativePaths=await Promise.all([
-    opencode.root,join(env.XDG_CONFIG_HOME||join(homedir(),'.config'),'opencode'),
+    agyPaths({env}).root,opencode.root,join(env.XDG_CONFIG_HOME||join(homedir(),'.config'),'opencode'),
     join(env.XDG_CACHE_HOME||join(homedir(),'.cache'),'opencode'),
     join(env.XDG_STATE_HOME||join(homedir(),'.local','state'),'opencode'),
     ...(env.OPENCODE_CONFIG_DIR?[env.OPENCODE_CONFIG_DIR]:[]),
@@ -103,9 +104,23 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
       preview:async(source,signal)=>{const snapshot=await resolveSource(source,signal);return snapshot.items;},
       prepare:async(request,signal)=>{
         const snapshot=await resolveSource(request.source,signal);
-        if(!snapshot.complete) throw new Error('Selected public history is incomplete. Restore the source before transferring; no partial snapshot has been certified.');
+        if(!snapshot.complete && snapshot.runtime.agent!=='agy') throw new Error('Selected public history is incomplete. Restore the source before transferring; no partial snapshot has been certified.');
         const source=publicIdentity(snapshot.runtime);sourceKeys.set(`${source.agent}:${source.nativeId}`,snapshot.sourceKey);
         const redactions=request.redactions??[];
+        if(source.agent==='agy') {
+          if(prior||request.fresh||request.target!=='agy')throw new Error('Antigravity cache contains metadata only. Public history is unavailable for outgoing or fresh handoffs; open the exact native session instead.');
+          if(redactions.length)throw new Error('Native open sends no history. Redactions cannot alter existing provider history.');
+          const prepared=await runtime.prepare(request,request.currentRequest===undefined?{}:{currentRequest:request.currentRequest},signal);
+          const intent:TransferIntent={source,sourceKey:snapshot.sourceKey,target:'agy',workspace:prepared.plan.workspace,mode:'native-resume',prompt:'',archive:null,includedItemIds:[],omittedItemIds:[],completeness:'unknown'};
+          return {plan:{launch:prepared.plan,handoff:null,intent,fingerprint:snapshot.fingerprint,source},summary:{...prepared.summary,previewLines:[
+            'Open the exact cached Antigravity conversation with no initial request. Type your next request in its native terminal.',
+            'This cache has no transcript, title, date, producer version or global inventory. Native identity/account is revalidated by agy.',
+            'Other native clients cannot be detected here. Stop concurrent writers first; native active-session and permission handling remain in agy.',
+            'No public history is converted or sent. No supported native receipt transport here. This launch cannot advance accepted coverage.',
+            'A missing or deleted conversation may open the native home or a fresh context. No automatic prompt is submitted.',
+            'Exact current request (0 UTF-8 bytes):', 'BEGIN EXACT PROMPT JSON STRING', '""', 'END EXACT PROMPT JSON STRING',
+          ]}};
+        }
         // Routing fields must remain exact. Never retain a selected secret through an identifier or path.
         const routes=[source.agent,source.id,source.nativeId,request.workspace.path,await realpath(request.workspace.path),paths.root];
         if(redactions.some(value=>routes.some(route=>route.includes(value)))) throw new Error('Redaction overlaps a routing identity or storage/workspace path. Choose a different source or private storage path before transfer.');

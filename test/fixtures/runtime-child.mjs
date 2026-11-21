@@ -2,11 +2,13 @@
 // Offline provider stand-in. Reads no native settings, histories or network.
 import { appendFileSync, writeFileSync } from 'node:fs';
 const args=process.argv.slice(2);
+const agy=process.env.RUNTIME_TARGET==='agy';
 const opencode=process.env.RUNTIME_TARGET==='opencode';
 const claude=process.env.RUNTIME_TARGET==='claude';
-if(args.includes('--version'))console.log(opencode?(process.env.OPENCODE_FAKE_VERSION||'1.19.6'):claude?'2.1.330 (Claude Code)':'codex-cli 0.171.0');
+if(agy&&process.env.AGY_PROBE_LOG&&(args.includes('--version')||args.includes('--help')))appendFileSync(process.env.AGY_PROBE_LOG,JSON.stringify(args)+'\n');
+if(args.includes('--version'))console.log(agy?(process.env.AGY_FAKE_VERSION||'1.5.14'):opencode?(process.env.OPENCODE_FAKE_VERSION||'1.19.6'):claude?'2.1.330 (Claude Code)':'codex-cli 0.171.0');
 else if(args.includes('--help')) {
- console.log(opencode?(process.env.OPENCODE_FAKE_HELP||'opencode [project]\n--session  session id\n--prompt  prompt to use'):claude?'Usage: claude [options] [command] [prompt]\n-r, --resume [value]':args[0]==='resume'
+ console.log(agy?(process.env.AGY_FAKE_HELP||'Usage of agy:\n  --conversation                  Resume a previous conversation by ID\n  --prompt-interactive            Run an initial prompt interactively and continue the session'):opencode?(process.env.OPENCODE_FAKE_HELP||'opencode [project]\n--session  session id\n--prompt  prompt to use'):claude?'Usage: claude [options] [command] [prompt]\n-r, --resume [value]':args[0]==='resume'
  ? 'Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]\n-C, --cd <DIR>'
  : 'Usage: codex [OPTIONS] [PROMPT]\n-C, --cd <DIR>');
  if(opencode&&process.env.OPENCODE_FAKE_DELETE_DURING_HELP){const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(process.env.OPENCODE_DB);db.exec('DELETE FROM session');db.close();}

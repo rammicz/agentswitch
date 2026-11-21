@@ -67,14 +67,14 @@ test('pre/post path, identity and sidecar races reject the entire projection wit
  }
 });
 test('catalog preserves cached public history on WAL, replacement or unsupported schema and keys configured roots',async()=>{
- const f=await setup();const env={OPENCODE_DB:f.path,XDG_DATA_HOME:join(f.root,'xdg'),CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude')};const catalog=await NativeCatalog.create(env);const index=await SearchIndex.open({directory:join(f.root,'cache'),sources:catalog.sources()});const query={text:'Safe output',scope:'folder',workspace:f.cwd,agent:'opencode'};
+ const f=await setup();const env={AGENTSWITCH_AGY_ROOT:join(f.root,'agy'),OPENCODE_DB:f.path,XDG_DATA_HOME:join(f.root,'xdg'),CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude')};const catalog=await NativeCatalog.create(env);const index=await SearchIndex.open({directory:join(f.root,'cache'),sources:catalog.sources()});const query={text:'Safe output',scope:'folder',workspace:f.cwd,agent:'opencode'};
  await catalog.refresh(index);assert.equal((await index.query(query)).length,1);const key=catalog.rootKey('opencode');assert.notEqual((await NativeCatalog.create({...env,OPENCODE_DB:join(f.root,'other.db')})).rootKey('opencode'),key);
  await writeFile(f.path+'-wal','active');await catalog.refresh(index);assert.equal((await index.query(query)).length,1);assert.match(catalog.notices().join(' '),/opencode: degraded/);await unlink(f.path+'-wal');
  mutate(f.path,db=>db.exec("UPDATE session SET version='2.3.2'"));await catalog.refresh(index);assert.equal((await index.query(query)).length,1);
  mutate(f.path,db=>db.exec('DROP TABLE part'));await catalog.refresh(index);assert.equal((await index.query(query)).length,1);await index.close();
 });
 test('state overlap with OpenCode native roots, exact database or sidecars rejects before writes, including aliases',async()=>{
- const f=await setup();const env={XDG_DATA_HOME:join(f.root,'data'),OPENCODE_DB:f.path,CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude')};
+ const f=await setup();const env={AGENTSWITCH_AGY_ROOT:join(f.root,'agy'),XDG_DATA_HOME:join(f.root,'data'),OPENCODE_DB:f.path,CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude')};
  for(const state of [f.path,f.path+'-wal',f.path+'-shm',f.path+'-journal',f.path+'-mj123',join(f.root,'data','opencode','application')]){await assert.rejects(applicationPaths({...env,AGENTSWITCH_STATE_DIR:state}),/separate/);if(state!==f.path)await assert.rejects(lstat(state));}
  const alias=join(f.root,'native-alias');await symlink(f.path,alias);await assert.rejects(applicationPaths({...env,AGENTSWITCH_STATE_DIR:alias}),/separate/);
  await writeFile(f.path+'-wal','synthetic sidecar');const sidecarAlias=join(f.root,'sidecar-alias');await symlink(f.path+'-wal',sidecarAlias);await assert.rejects(applicationPaths({...env,AGENTSWITCH_STATE_DIR:sidecarAlias}),/separate/);
@@ -94,7 +94,7 @@ test('a reverted message with no parts still excludes all following messages, an
  mutate(f.path,db=>db.prepare('UPDATE session SET revert=?').run(JSON.stringify({messageID:'msg_a',partID:''})));assert.equal((await adapter.readHistoryDetailed(id)).complete,false);
 });
 test('an external OpenCode DB may share a home/parent ancestor with separate application state',async()=>{
- const f=await setup();const env={XDG_DATA_HOME:join(f.root,'data'),XDG_CONFIG_HOME:join(f.root,'config'),XDG_CACHE_HOME:join(f.root,'cache'),XDG_STATE_HOME:join(f.root,'state'),OPENCODE_DB:join(f.root,'opencode.db'),CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude')};await fixture(env.OPENCODE_DB,f.cwd);
+ const f=await setup();const env={AGENTSWITCH_AGY_ROOT:join(f.root,'agy'),XDG_DATA_HOME:join(f.root,'data'),XDG_CONFIG_HOME:join(f.root,'config'),XDG_CACHE_HOME:join(f.root,'cache'),XDG_STATE_HOME:join(f.root,'state'),OPENCODE_DB:join(f.root,'opencode.db'),CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude')};await fixture(env.OPENCODE_DB,f.cwd);
  const paths=await applicationPaths({...env,AGENTSWITCH_STATE_DIR:join(f.root,'.local','state','agentswitch')});assert.equal(paths.root,await realpath(join(f.root,'.local','state','agentswitch')));assert.equal((await new OpenCodeSessionAdapter({env}).discover()).length,1);
  for(const native of [join(env.XDG_DATA_HOME,'opencode'),join(env.XDG_CONFIG_HOME,'opencode'),join(env.XDG_CACHE_HOME,'opencode'),join(env.XDG_STATE_HOME,'opencode')])await assert.rejects(applicationPaths({...env,AGENTSWITCH_STATE_DIR:join(native,'child')}),/separate/);
 });
@@ -122,7 +122,7 @@ test('unknown selected shape retains its prior cache while healthy OpenCode sibl
  const f=await setup();mutate(f.path,db=>{
   db.prepare('INSERT INTO session SELECT ?,directory,workspace_id,parent_id,?,version,time_created,time_updated,time_archived,revert FROM session WHERE id=?').run('ses_healthy','Healthy OpenCode',id);
   db.prepare('INSERT INTO message VALUES (?,?,?,?,?)').run('msg_healthy','ses_healthy',3,3,JSON.stringify({role:'user',time:{created:3}}));db.prepare('INSERT INTO part VALUES (?,?,?,?,?,?)').run('prt_healthy','msg_healthy','ses_healthy',3,3,JSON.stringify({type:'text',text:'healthy original'}));
- });const env={OPENCODE_DB:f.path,XDG_DATA_HOME:join(f.root,'data'),CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude')};const catalog=await NativeCatalog.create(env);const index=await SearchIndex.open({directory:join(f.root,'cache'),sources:catalog.sources()});const query={text:'',agent:'opencode',scope:'folder',workspace:f.cwd};
+ });const env={AGENTSWITCH_AGY_ROOT:join(f.root,'agy'),OPENCODE_DB:f.path,XDG_DATA_HOME:join(f.root,'data'),CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude')};const catalog=await NativeCatalog.create(env);const index=await SearchIndex.open({directory:join(f.root,'cache'),sources:catalog.sources()});const query={text:'',agent:'opencode',scope:'folder',workspace:f.cwd};
  try {
   await catalog.refresh(index);assert.equal((await index.query(query)).length,2);
   mutate(f.path,db=>{db.prepare('INSERT INTO part VALUES (?,?,?,?,?,?)').run('prt_unknown','msg_b',id,3,3,JSON.stringify({type:'future-public-shape',text:'UNCLASSIFIED_PUBLIC_TEXT'}));db.prepare('UPDATE part SET data=? WHERE id=?').run(JSON.stringify({type:'text',text:'healthy updated'}),'prt_healthy');});

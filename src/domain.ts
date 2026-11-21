@@ -1,5 +1,5 @@
 /** Provider-native identifiers are meaningful only within their adapter. */
-export type AgentId = 'codex' | 'claude' | 'opencode';
+export type AgentId = 'codex' | 'claude' | 'opencode' | 'agy';
 export type Scope = 'folder' | 'global';
 
 export interface Session {
@@ -8,6 +8,7 @@ export interface Session {
   nativeId: string;
   title: string;
   workspace: string;
+  /** ISO timestamp, or empty when sparse native metadata has no recorded date. */
   updatedAt: string;
   /** Searchable, public conversation text; never hidden reasoning. */
   messages: readonly HistoryItem[];

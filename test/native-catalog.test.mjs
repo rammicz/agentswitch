@@ -12,7 +12,7 @@ import { entry,encode,ids as claudeIds } from './fixtures/claude/native.mjs';
 const query=cwd=>({text:'',agent:'all',scope:'folder',workspace:cwd});
 async function fixture(){
  const root=await mkdtemp(join(tmpdir(),'agentswitch-catalog-')),cwd=join(root,'workspace'),codex=join(root,'codex'),claude=join(root,'claude');await mkdir(cwd);await mkdir(join(claude,'projects','bucket'),{recursive:true});
- const env={XDG_DATA_HOME:join(root,'xdg-data'),OPENCODE_DB:join(root,'opencode','opencode.db'),CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:join(root,'state')};
+ const env={AGENTSWITCH_AGY_ROOT:join(root,'agy'),XDG_DATA_HOME:join(root,'xdg-data'),OPENCODE_DB:join(root,'opencode','opencode.db'),CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:join(root,'state')};
  const path=await writeRollout(codex,rollout(cwd,ids[0],[completed('UserMessage','u','original public message',1)]));
  const claudePath=join(claude,'projects','bucket',claudeIds[0]+'.jsonl');await writeFile(claudePath,encode([entry(claudeIds[0],cwd,'u',null,'user','healthy sibling')]));
  const catalog=await NativeCatalog.create(env);const index=await SearchIndex.open({directory:join(root,'search'),sources:catalog.sources()});return {root,cwd,codex,claude,env,path,claudePath,catalog,index};

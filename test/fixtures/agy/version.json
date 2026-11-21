@@ -1,0 +1,8 @@
+{
+  "args": [
+    "--version"
+  ],
+  "code": 0,
+  "stdout": "1.5.14\n",
+  "stderr": ""
+}

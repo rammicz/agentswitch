@@ -23,7 +23,7 @@ async function setup(target='claude') {
  await writeFile(claudePath,encode([entry(claudeIds[0],cwd,'u',null,'user','Claude public NEEDLE_SECRET',{version:'2.1.330'}),entry(claudeIds[0],cwd,'a','u','assistant','Claude answer',{version:'2.1.330'})]));files.push(claudePath);
  const bin=join(root,'bin');await mkdir(bin);
  for(const name of ['codex','claude']) {const path=join(bin,name);await writeFile(path,`#!${process.execPath}\nprocess.on('SIGHUP',()=>{});\nawait import('${join(repo,'test/fixtures/runtime-child.mjs')}');\n`,{mode:0o700});}
- const env={XDG_DATA_HOME:join(root,'xdg-data'),OPENCODE_DB:join(root,'opencode','opencode.db'),CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:state,RUNTIME_TARGET:target,RUNTIME_LOG:join(root,'launches'),RUNTIME_SCENARIO:'interactive',PATH:bin+':'+process.env.PATH,NODE_NO_WARNINGS:'1'};
+ const env={AGENTSWITCH_AGY_ROOT:join(root,'agy'),XDG_DATA_HOME:join(root,'xdg-data'),OPENCODE_DB:join(root,'opencode','opencode.db'),CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:state,RUNTIME_TARGET:target,RUNTIME_LOG:join(root,'launches'),RUNTIME_SCENARIO:'interactive',PATH:bin+':'+process.env.PATH,NODE_NO_WARNINGS:'1'};
  return {root,cwd,other,child,codex,claude,state,files,env,before:await Promise.all(files.map(hash))};
 }
 function pty(f,actions,args=[],terminal={}) {
