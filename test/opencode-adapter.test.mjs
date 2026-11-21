@@ -101,3 +101,31 @@ test('an external OpenCode DB may share a home/parent ancestor with separate app
 test('a v2-style part ordinal/foreign schema is not accepted as the exact 1.19.6 projection',async()=>{
  const f=await setup();mutate(f.path,db=>db.exec('ALTER TABLE part ADD COLUMN ordinal INTEGER'));const diagnostics=[];assert.deepEqual(await new OpenCodeSessionAdapter({dbPath:f.path,onDiagnostic:x=>diagnostics.push(x)}).discover(),[]);assert.ok(diagnostics.some(x=>x.code==='unsupported-shape'));
 });
+test('unknown or malformed selected part types and tool states cannot certify complete history',async()=>{
+ for(const data of [{type:'future-public-shape',text:'UNCLASSIFIED_PUBLIC_TEXT'}, {type:'future-public-shape',synthetic:true,ignored:true,text:'UNCLASSIFIED_PUBLIC_TEXT'}, {type:null,text:'UNCLASSIFIED_PUBLIC_TEXT'}, {text:'UNCLASSIFIED_PUBLIC_TEXT'}, {type:42,text:'UNCLASSIFIED_PUBLIC_TEXT'}, {type:{nested:'future'},text:'UNCLASSIFIED_PUBLIC_TEXT'}, {type:'tool',state:{status:'future-state',output:'UNCLASSIFIED_PUBLIC_TEXT'}}, {type:'tool',ignored:true,state:{status:'future-state',output:'UNCLASSIFIED_PUBLIC_TEXT'}}, {type:'tool',state:null}, {type:'tool',state:{status:42}}, {type:'tool',state:{status:{future:true}}}]) {
+  const f=await setup();mutate(f.path,db=>db.prepare('INSERT INTO part VALUES (?,?,?,?,?,?)').run('prt_unknown','msg_b',id,3,3,JSON.stringify(data)));
+  const history=await new OpenCodeSessionAdapter({dbPath:f.path}).readHistoryDetailed(id);
+  assert.equal(history.complete,false,'unsupported selected shape must block completeness: '+JSON.stringify(data));assert.ok(history.diagnostics.some(d=>d.code==='unsupported-shape'));assert.equal(history.items.length,5);assert.doesNotMatch(JSON.stringify(history),/UNCLASSIFIED_PUBLIC_TEXT/);
+ }
+});
+test('every intentionally excluded pinned 1.19.6 part kind and unsettled tool state preserves known public completeness',async()=>{
+ const f=await setup();mutate(f.path,db=>{
+  const parts=[
+   ...['subtask','reasoning','file','step-start','step-finish','snapshot','patch','agent','retry','compaction'].map(type=>({type,text:'PRIVATE_EXCLUDED_PAYLOAD'})),
+   {type:'text',synthetic:true,text:'PRIVATE_EXCLUDED_PAYLOAD'}, {type:'text',ignored:true,text:'PRIVATE_EXCLUDED_PAYLOAD'},
+   ...['pending','running'].map(status=>({type:'tool',state:{status,output:'PRIVATE_EXCLUDED_PAYLOAD'}})),
+  ];
+  parts.forEach((data,index)=>db.prepare('INSERT INTO part VALUES (?,?,?,?,?,?)').run('prt_excluded'+index,'msg_b',id,3,3,JSON.stringify(data)));
+ });const history=await new OpenCodeSessionAdapter({dbPath:f.path}).readHistoryDetailed(id);assert.equal(history.complete,true);assert.deepEqual(history.diagnostics,[]);assert.equal(history.items.length,5);assert.doesNotMatch(JSON.stringify(history),/PRIVATE_/);
+});
+test('unknown selected shape retains its prior cache while healthy OpenCode sibling history refreshes',async()=>{
+ const f=await setup();mutate(f.path,db=>{
+  db.prepare('INSERT INTO session SELECT ?,directory,workspace_id,parent_id,?,version,time_created,time_updated,time_archived,revert FROM session WHERE id=?').run('ses_healthy','Healthy OpenCode',id);
+  db.prepare('INSERT INTO message VALUES (?,?,?,?,?)').run('msg_healthy','ses_healthy',3,3,JSON.stringify({role:'user',time:{created:3}}));db.prepare('INSERT INTO part VALUES (?,?,?,?,?,?)').run('prt_healthy','msg_healthy','ses_healthy',3,3,JSON.stringify({type:'text',text:'healthy original'}));
+ });const env={OPENCODE_DB:f.path,XDG_DATA_HOME:join(f.root,'data'),CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude')};const catalog=await NativeCatalog.create(env);const index=await SearchIndex.open({directory:join(f.root,'cache'),sources:catalog.sources()});const query={text:'',agent:'opencode',scope:'folder',workspace:f.cwd};
+ try {
+  await catalog.refresh(index);assert.equal((await index.query(query)).length,2);
+  mutate(f.path,db=>{db.prepare('INSERT INTO part VALUES (?,?,?,?,?,?)').run('prt_unknown','msg_b',id,3,3,JSON.stringify({type:'future-public-shape',text:'UNCLASSIFIED_PUBLIC_TEXT'}));db.prepare('UPDATE part SET data=? WHERE id=?').run(JSON.stringify({type:'text',text:'healthy updated'}),'prt_healthy');});
+  await catalog.refresh(index);assert.equal((await index.query({...query,text:'OpenCode public'})).length,1);assert.equal((await index.query({...query,text:'healthy updated'})).length,1);assert.equal((await index.query({...query,text:'UNCLASSIFIED_PUBLIC_TEXT'})).length,0);assert.match(catalog.notices().join(' '),/opencode: degraded.*unsupported-shape/);const selected=(await index.query({...query,text:'OpenCode public'}))[0];assert.equal((await catalog.snapshot(selected)).history.complete,false);
+ }finally{await index.close();}
+});

@@ -24,13 +24,17 @@ export function openCodePaths(options:OpenCodeAdapterOptions={}):{root:string;db
   const chosen=options.dbPath??(env.OPENCODE_DB||'opencode.db');
   return {root,dbPath:chosen===':memory:'?chosen:isAbsolute(chosen)?chosen:join(root,chosen)};
 }
+// SessionV1.Part union at pinned 1.19.6 schema/v1/session.ts:357. These
+// carriers are intentionally excluded from the public-text projection without reading payloads.
+const excludedPartTypes=new Set(['subtask','reasoning','file','step-start','step-finish','snapshot','patch','agent','retry','compaction']);
+const toolStates=new Set(['pending','running','completed','error']);
 const defaults={maxDatabaseBytes:64*1024*1024,maxRows:10000,maxTextBytes:32*1024*1024,maxDiagnostics:100};
 const key=(info:{dev:bigint;ino:bigint;size:bigint;mtimeNs:bigint;ctimeNs:bigint})=>[info.dev,info.ino,info.size,info.mtimeNs,info.ctimeNs].join(':');
 const validId=(value:unknown):value is string=>typeof value==='string'&&/^[A-Za-z0-9_]{1,220}$/.test(value);
 const timestamp=(value:unknown):string=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0&&value<=8640000000000000?new Date(value).toISOString():'';
 const safeString=(value:unknown):value is string=>typeof value==='string'&&!value.includes('\0');
 
-/** No DB copies, provider imports or native PRAGMAs. Only a quiescent immutable 1.19.6 projection. */
+/** No DB copies, provider imports or native mutation PRAGMAs. Only a quiescent immutable 1.19.6 projection. */
 export class OpenCodeSessionAdapter implements SessionAdapter {
   readonly id='opencode' as const;
   private readonly limits;
@@ -138,8 +142,13 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
         if(session.reverted&&(positions.get(message.id)!>boundary||message.id===session.message&&!session.part||session.part===part.id))break;
         if(!part.valid||!validId(part.id)){this.diagnostic(diagnostics,'malformed-record');continue;}
         if(!message.valid||!validId(message.id)||!['user','assistant'].includes(String(message.role))||!timestamp(message.time_created))continue;
-        if(part.type!=='text'&&part.type!=='tool'||part.synthetic||part.ignored)continue;
-        if(part.type==='tool'&&!['completed','error'].includes(String(part.status)))continue;
+        if(typeof part.type==='string'&&excludedPartTypes.has(part.type))continue;
+        if(part.type!=='text'&&part.type!=='tool'){this.diagnostic(diagnostics,'unsupported-shape');continue;}
+        if(part.type==='text'&&(part.synthetic||part.ignored))continue;
+        if(part.type==='tool') {
+          if(typeof part.status!=='string'||!toolStates.has(part.status)){this.diagnostic(diagnostics,'unsupported-shape');continue;}
+          if(part.status==='pending'||part.status==='running')continue;
+        }
         if(!safeString(part.text)){this.diagnostic(diagnostics,'malformed-record');continue;}
         bytes+=Buffer.byteLength(part.text);if(bytes>this.limits.maxTextBytes)throw new Error('input-limit');
         if(!part.text)continue;

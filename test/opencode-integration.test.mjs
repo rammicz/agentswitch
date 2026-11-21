@@ -94,3 +94,8 @@ test('matching OpenCode version with incompatible help fails before publication 
 test('default CLI accepts an external OpenCode DB with a shared ancestor and separate application state',async()=>{
  const f=await setup();f.env.OPENCODE_DB=await fixture(join(f.root,'opencode.db'),f.cwd);const result=pty(f,[...select('codex'),...target('opencode'),...finish]);assert.equal(result.code,0);assert.equal((await launches(f)).length,1);
 });
+test('default CLI refuses cached OpenCode source with an unknown selected shape before archive or launch',async()=>{
+ const f=await setup('codex');pty(f,[...select('opencode'),{send:'\x03'}]);
+ const db=new DatabaseSync(f.path);db.prepare('INSERT INTO part VALUES (?,?,?,?,?,?)').run('prt_unknown','msg_b',id,3,3,JSON.stringify({type:'future-public-shape',text:'UNCLASSIFIED_PUBLIC_TEXT'}));db.close();const before=await hash(f.path);
+ const result=pty(f,[...select('opencode'),{send:'\r'},{wait:'Selected public history is incomplete'},{send:'\x03'}]);assert.equal(result.restored,true);assert.equal(result.code,0);assert.doesNotMatch(result.output,/UNCLASSIFIED_PUBLIC_TEXT/);await assert.rejects(access(f.env.RUNTIME_LOG));await assert.rejects(access(join(f.state,'archives')));assert.equal((await records(f)).length,0);assert.equal(await hash(f.path),before);
+});
