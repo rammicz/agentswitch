@@ -1,0 +1,11 @@
+# Claude synthetic compatibility fixtures
+
+`native.mjs` fabricates ordinary native JSONL records based on the official Agent SDK reader/tests pinned in [provenance.json](provenance.json). The SDK is 0.2.187 and its bundled CLI is 2.1.330. These are source-derived synthetic fixtures, not transcripts generated or captured by that CLI. Native producer `version` is optional; fixtures do not invent a required schema header.
+
+The suite writes isolated config roots and real temporary workspace directories, then exercises the programmatic adapter directly. It covers file identity, metadata precedence, exact canonical folder identity, active main-branch selection, parallel sibling/result recovery, writer boundaries, compaction replacement, public block positions/status, malformed lines, partial appends, unknown shapes, duplicate identity, cycles, caps and stable repeated reads. All IDs, paths, timestamps, text and private sentinels are fabricated. No personal history or provider session was read or created.
+
+`offline.mjs` denies network/process entry points before adapter import; it compares output with the ordinary read. The parent test snapshots all native fixture entries/bytes before and after. On Linux, run `unshare --user --map-root-user --net node --test test/claude-adapter.test.mjs` after building to also isolate the tests in a network namespace. `read-budget.mjs` observes actual native file-handle read requests to check the remaining operation budget before I/O. Neither helper runs a native agent executable.
+
+Public extraction is an explicit schema allowlist. Deliberate thinking/input/system/binary/opaque sentinels must stay absent from normalized history and diagnostics. Real secrets written as ordinary public text would remain public text; fixtures do not imply heuristic secret detection. Unsupported spilled output remains an inline reference with an omission diagnostic; no referenced path is opened. Subagent, orphaned and superseded storage and unverified error/cancellation shapes remain outside this compatibility profile.
+
+The native graph semantics are informed by Anthropic's MIT-licensed SDK. Its notice is retained in [docs/claude-sdk-license.txt](../../../docs/claude-sdk-license.txt), which is included in package distributions.

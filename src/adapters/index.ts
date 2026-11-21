@@ -7,7 +7,7 @@ export interface SessionAdapter {
   readHistory(nativeId: string): Promise<readonly HistoryItem[]>;
 }
 
-/** Catalog tracks end-to-end provider support; a read-only Codex reader is available separately. */
+/** Catalog tracks end-to-end provider support; read-only Codex and Claude readers are available separately. */
 export const agentCatalog = [
   { id: 'codex', label: 'Codex', status: 'planned' },
   { id: 'claude', label: 'Claude Code', status: 'planned' },
@@ -15,3 +15,6 @@ export const agentCatalog = [
 
 export { CodexSessionAdapter } from './codex.js';
 export type { CodexAdapterOptions, CodexDiagnostic, CodexHistory, CodexLimits, CodexSession } from './codex.js';
+
+export { ClaudeSessionAdapter } from './claude.js';
+export type { ClaudeAdapterOptions, ClaudeDiagnostic, ClaudeHistory, ClaudeLimits, ClaudeSession } from './claude.js';

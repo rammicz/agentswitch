@@ -1,0 +1,23 @@
+{
+  "provider": "Claude Code",
+  "fixtureMethod": "Source-derived synthetic JSONL factories; not captured from a provider session",
+  "sdkVersion": "0.2.187",
+  "bundledCliVersion": "2.1.330",
+  "sourceRevision": "3184360393a92ca8a6ec7bbbdee571afd1ce1c56",
+  "sources": {
+    "nativeRootsAndMetadata": "https://github.com/anthropics/claude-agent-sdk-python/blob/3184360393a92ca8a6ec7bbbdee571afd1ce1c56/src/claude_agent_sdk/_internal/sessions.py#L122",
+    "graphAndCompaction": "https://github.com/anthropics/claude-agent-sdk-python/blob/3184360393a92ca8a6ec7bbbdee571afd1ce1c56/src/claude_agent_sdk/_internal/sessions.py#L931",
+    "parallelRecovery": "https://github.com/anthropics/claude-agent-sdk-python/blob/3184360393a92ca8a6ec7bbbdee571afd1ce1c56/src/claude_agent_sdk/_internal/sessions.py#L1086",
+    "syntheticNativeFactories": "https://github.com/anthropics/claude-agent-sdk-python/blob/3184360393a92ca8a6ec7bbbdee571afd1ce1c56/tests/test_sessions.py#L56",
+    "parallelFactoryAndTests": "https://github.com/anthropics/claude-agent-sdk-python/blob/3184360393a92ca8a6ec7bbbdee571afd1ce1c56/tests/test_sessions.py#L682",
+    "publicContentTypes": "https://github.com/anthropics/claude-agent-sdk-python/blob/3184360393a92ca8a6ec7bbbdee571afd1ce1c56/src/claude_agent_sdk/types.py#L1245",
+    "sdkVersion": "https://github.com/anthropics/claude-agent-sdk-python/blob/3184360393a92ca8a6ec7bbbdee571afd1ce1c56/src/claude_agent_sdk/_version.py#L3",
+    "cliVersion": "https://github.com/anthropics/claude-agent-sdk-python/blob/3184360393a92ca8a6ec7bbbdee571afd1ce1c56/src/claude_agent_sdk/_cli_version.py#L3"
+  },
+  "fabricated": ["UUIDs", "message IDs", "temporary workspaces", "timestamps", "titles", "public text", "private sentinels"],
+  "profiles": ["ordinary direct UUID JSONL transcripts", "absent optional producer version", "active main branch", "parallel tool fanout and stray results", "compaction replacement", "inline textual tool results", "malformed and partially appended records"],
+  "statusPolicy": "Only inline tool_result is_error=true means failed. Exact native interruption marker records mean interrupted. EOF, absent stop_reason and unanswered tools do not imply interruption.",
+  "limits": ["Subagent and orphaned/superseded directories are not scanned", "Spilled output paths are never dereferenced", "Other producer error/cancellation variants are unverified", "Unknown producer versions warn while known shapes remain readable"],
+  "privacy": "No personal transcripts, credentials, account data or provider calls used. Native fixture trees are temporary and remain byte-identical after reads.",
+  "licenseNotice": "../../../docs/claude-sdk-license.txt"
+}

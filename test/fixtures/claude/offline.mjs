@@ -1,0 +1,22 @@
+import net from 'node:net';
+import http from 'node:http';
+import https from 'node:https';
+import dns from 'node:dns';
+import child from 'node:child_process';
+import fs from 'node:fs';
+import {join,relative} from 'node:path';
+import {syncBuiltinESMExports} from 'node:module';
+const deny=()=>{throw new Error('Network and subprocess forbidden');};
+net.connect=net.createConnection=net.Socket.prototype.connect=deny;
+http.request=http.get=https.request=https.get=deny;dns.lookup=dns.resolve=deny;
+for(const name of ['spawn','spawnSync','exec','execSync','execFile','execFileSync','fork']) child[name]=deny;
+globalThis.fetch=deny;
+const root=await fs.promises.realpath(process.env.AGENTSWITCH_FIXTURE_ROOT),originalOpen=fs.promises.open;
+fs.promises.open=async(path,flags,...rest)=>{
+  const managed=relative(join(root,'projects'),String(path));
+  if(!/^[^/]+\/[0-9a-f-]{36}\.jsonl$/i.test(managed) || (flags & 3)!==fs.constants.O_RDONLY) throw new Error('Only managed read-only transcript opens allowed');
+  return originalOpen(path,flags,...rest);
+};syncBuiltinESMExports();
+const {ClaudeSessionAdapter}=await import('../../../dist/adapters/index.js');
+const reader=new ClaudeSessionAdapter({root:process.env.AGENTSWITCH_FIXTURE_ROOT});
+const sessions=await reader.discover();process.stdout.write(JSON.stringify({sessions,history:await reader.readHistoryDetailed(sessions[0].nativeId)}));
