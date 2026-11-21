@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import { runArchiveCommand } from './archive-cli.js';
 import { demoSessions } from './tui/demo.js';
 import { runDemo } from './tui/app.js';
 
 const help = `agentswitch — coding-agent session switcher (development scaffold)
 
 Usage: agentswitch [--demo] [--global] [--help] [--version]
+       agentswitch archive list|read|delete --directory <dir> --archive <id>
+         [--item <ordinal>] [--cursor <offset>] [--limit <count>] [--max-bytes <bytes>]
 
   --demo       Browse synthetic sessions; never launches an agent
   --global     Start demo in global scope (requires --demo)
@@ -16,6 +19,7 @@ Real Codex/Claude discovery and conversation transfer are planned.
 Run agentswitch --demo to explore the proposed interaction.`;
 
 async function main(): Promise<void> {
+  if (process.argv[2] === 'archive') { console.log(await runArchiveCommand(process.argv.slice(3))); return; }
   const { values } = parseArgs({ options: {
     demo: { type: 'boolean' }, global: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },

@@ -22,7 +22,7 @@ Start in the recorded source workspace by default. Show it before launch, handle
 
 Build deterministic history from intact public messages and relevant textual tool outcomes. Favor the latest user, latest assistant, first user, then other recent items, emitting selected items chronologically. Budget the serialized envelope including escaped Unicode, attribution and omission references; reserve space for the current request and future work. A byte budget is a conservative heuristic, not a token guarantee. Offer a preview and explicit transfer confirmation; historical content has no system authority and commands are not replayed.
 
-Store complete normalized source content locally for retrieval, with private permissions and deletion controls. Any artifact referenced by the target must actually remain readable. Mark omissions clearly and provide a usable archive path or retrieval command. Do not add a model-generated summarizer to the initial dependency path: quota exhaustion is a primary use case.
+The [handoff/archive component](handoff.md) implements deterministic preparation, explicit literal redaction, private immutable publication and bounded local retrieval. Interactive confirmation and launch-journal composition remain separate. Store complete normalized source content locally for retrieval, with private permissions and deletion controls. Any artifact referenced by the target must actually remain readable. Mark omissions clearly and provide a usable archive path or retrieval command. Do not add a model-generated summarizer to the initial dependency path: quota exhaustion is a primary use case.
 
 ## Delivery and lifecycle
 
