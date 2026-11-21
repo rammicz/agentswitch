@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from unittest.mock import Mock
 
 spec = importlib.util.spec_from_file_location('terminal_driver', Path(__file__).with_name('drive-terminal.py'))
 driver = importlib.util.module_from_spec(spec)
@@ -76,5 +77,33 @@ class IntegrationReaderTest(unittest.TestCase):
    integration.until(state,'READY')
    with self.assertRaisesRegex(Exception,'Missing'):
     integration.until(state,'PID_COMMIT_DONE')
+
+class IntegrationCleanupTest(unittest.TestCase):
+ def state(self,alive=False):
+  return {'child':SimpleNamespace(pid=12345,poll=lambda: None if alive else -9,wait=Mock()),'providerPids':{12346}}
+
+ def test_dead_leader_cleanup_targets_only_observed_provider_pid(self):
+  state=self.state()
+  with patch.object(integration.os,'getpgid',return_value=12345),patch.object(integration.os,'kill') as kill,patch.object(integration.os,'killpg') as killpg:
+   integration.cleanup_processes(state)
+   kill.assert_called_once_with(12346,integration.signal.SIGKILL);killpg.assert_not_called();state['child'].wait.assert_called_once()
+
+ def test_live_leader_cleanup_targets_its_isolated_group(self):
+  with patch.object(integration.os,'kill') as kill,patch.object(integration.os,'killpg') as killpg:
+   integration.cleanup_processes(self.state(alive=True))
+   killpg.assert_called_once_with(12345,integration.signal.SIGKILL);kill.assert_not_called()
+
+ def test_unexplained_permission_error_is_not_swallowed(self):
+  with patch.object(integration.os,'getpgid',return_value=12345),patch.object(integration.os,'kill',side_effect=PermissionError('unexplained')):
+   with self.assertRaisesRegex(PermissionError,'unexplained'):integration.cleanup_processes(self.state())
+
+ def test_changed_group_is_refused_before_any_signal(self):
+  with patch.object(integration.os,'getpgid',return_value=99999),patch.object(integration.os,'kill') as kill:
+   with self.assertRaisesRegex(Exception,'changed its process group'):integration.cleanup_processes(self.state())
+   kill.assert_not_called()
+
+ def test_already_exited_owned_provider_needs_no_signal(self):
+  with patch.object(integration.os,'getpgid',side_effect=ProcessLookupError),patch.object(integration.os,'kill') as kill:
+   integration.cleanup_processes(self.state());kill.assert_not_called()
 
 if __name__ == '__main__': unittest.main()

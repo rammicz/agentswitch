@@ -14,6 +14,30 @@ def until(state,marker,timeout=15,retained=False):
   elif state['child'].poll() is not None:break
  raise Exception('Missing '+repr(marker)+'; output='+repr(state['output']))
 
+def remember_provider(state,env):
+ # The private fake-provider log is controlled by this test. Resolve ownership
+ # before killing the live session leader, not from a recycled process-group ID.
+ with open(env['RUNTIME_LOG']) as log:pid=json.loads(log.readlines()[-1])['pid']
+ if not isinstance(pid,int) or pid<=1 or os.getpgid(pid)!=state['child'].pid:raise Exception('Fake child is outside the driver-owned process group')
+ state.setdefault('providerPids',set()).add(pid)
+ return pid
+
+def cleanup_processes(state):
+ child=state['child']
+ if child.poll() is None:
+  # A live leader identifies the isolated group created by this driver.
+  try:os.killpg(child.pid,signal.SIGKILL)
+  except ProcessLookupError:pass
+ else:
+  # Darwin can reject killpg on a dead leader's orphaned/revoked-PTY group.
+  # Signal only fake child PIDs observed in that group while its leader lived.
+  for pid in state.get('providerPids',()):
+   try:
+    if os.getpgid(pid)!=child.pid:raise Exception('Owned fake child changed its process group')
+    os.kill(pid,signal.SIGKILL)
+   except ProcessLookupError:pass
+ child.wait()
+
 def main():
  config=json.load(sys.stdin);instances=[]
  def start():
@@ -39,7 +63,8 @@ def main():
    if 'waitPostPidCommit' in action:until(state,'PID_COMMIT_DONE',retained=True)
    if 'assertWrapperAlive' in action:
     if state['child'].poll() is not None:raise Exception('Wrapper exited before the driver observed child READY')
-   if 'killWrapper' in action:state['child'].kill();state['child'].wait(timeout=5)
+   if 'killWrapper' in action:
+    remember_provider(state,config['env']);state['child'].kill();state['child'].wait(timeout=5)
    if 'collectPreview' in action:
     until(state,'Enter confirm continuation')
     def body():return state['output'].rsplit('\x1b[2J\x1b[H',1)[-1].split('\r\n')[4:4+config.get('rows',44)-8]
@@ -52,6 +77,7 @@ def main():
      state['preview'].append(current[-1])
     else:raise Exception('Preview did not reach its final row')
    if 'assertLiveChild' in action:
+    if not config['env'].get('CLI_CHILD_HEARTBEAT'):raise Exception('Crash liveness requires a fake-child heartbeat, not just a PID')
     with open(config['env']['RUNTIME_LOG']) as log:pid=json.loads(log.readline())['pid']
     os.kill(pid,0)
     if config['env'].get('CLI_CHILD_HEARTBEAT'):
@@ -61,7 +87,8 @@ def main():
        with open(heartbeat) as log:beat=json.load(log)
        if beat['pid']!=pid:raise Exception('Heartbeat belongs to another child')
        if before is None:before=beat['sequence']
-       elif beat['sequence']>before:break
+       elif beat['sequence']>before:
+        state.setdefault('liveChildChecks',[]).append({'pid':pid,'before':before,'after':beat['sequence']});break
       except (FileNotFoundError,json.JSONDecodeError):pass
       time.sleep(0.01)
      else:raise Exception('Fake child heartbeat did not advance independently of the revoked PTY')
@@ -70,13 +97,15 @@ def main():
    if state['child'].poll() is None:
     until(state,'CLI_DONE');after=termios.tcgetattr(state['slave']);alive=state['child'].poll() is None
     os.write(state['ack'],b'T');os.close(state['ack']);state['ack']=None;state['child'].wait(timeout=5)
-    results.append({'output':state['output'],'code':state['child'].returncode,'restored':after==state['before'],'sampledWhileAlive':alive,'preview':state['preview']})
-   else:results.append({'output':state['output'],'code':state['child'].returncode})
+    results.append({'output':state['output'],'code':state['child'].returncode,'restored':after==state['before'],'sampledWhileAlive':alive,'preview':state['preview'],'liveChildChecks':state.get('liveChildChecks',[])})
+   else:results.append({'output':state['output'],'code':state['child'].returncode,'liveChildChecks':state.get('liveChildChecks',[])})
   print(json.dumps(results))
  finally:
+  cleanup_errors=[]
   for state in instances:
    if state['ack'] is not None:os.close(state['ack'])
-   try:os.killpg(state['child'].pid,signal.SIGKILL)
-   except ProcessLookupError:pass
-   state['child'].wait();os.close(state['master']);os.close(state['slave'])
+   try:cleanup_processes(state)
+   except Exception as error:cleanup_errors.append(error)
+   finally:os.close(state['master']);os.close(state['slave'])
+  if cleanup_errors:raise cleanup_errors[0]
 if __name__=='__main__':main()

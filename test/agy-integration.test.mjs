@@ -21,7 +21,7 @@ async function setup(t) {
  const env={AGENTSWITCH_AGY_ROOT:agy,OPENCODE_DB:join(root,'absent.db'),XDG_DATA_HOME:join(root,'xdg'),CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:state,PATH:bin+':'+process.env.PATH,RUNTIME_TARGET:'agy',RUNTIME_LOG:join(root,'launches'),RUNTIME_SCENARIO:'interactive',AGY_PROBE_LOG:join(root,'probes'),NODE_NO_WARNINGS:'1',...(process.env.AGENTSWITCH_TEST_ENTRY?{CLI_ENTRY_MODULE:process.env.AGENTSWITCH_TEST_ENTRY}:{})};
  const files=[cache,codexPath,claudePath];return {root,cwd,other,cache,bin,state,env,files,before:await Promise.all(files.map(hash))};
 }
-function pty(f,actions,args=[]) {const r=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,rows:60,columns:210}),timeout:40000,maxBuffer:8*1024*1024});assert.equal(r.status,0,r.stderr);return JSON.parse(r.stdout)[0];}
+function pty(f,actions,args=[],all=false) {const r=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,rows:60,columns:210}),timeout:40000,maxBuffer:8*1024*1024});assert.equal(r.status,0,r.stderr);return all?JSON.parse(r.stdout):JSON.parse(r.stdout)[0];}
 const select=source=>[{wait:'Enter preview'},{send:source==='agy'?id:source==='codex'?'Codex fixture':'Claude fixture'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
 const target=[{send:'\x1b[D'},{wait:'Target: agy'}];
 const clear=[{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request: '}];
@@ -72,6 +72,9 @@ test('agy changed metadata after confirmation cannot dispatch or publish a journ
  const f=await setup(t);const r=pty(f,[...select('agy'),...target,...clear,{send:'\r'},{wait:'Exact current request'},{append:{path:f.cache,text:'invalid changed suffix'}},{send:'\r'},{wait:'Selected source is unavailable'}]);assert.equal(r.code,1);assert.equal(r.restored,true);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
 });
 test('agy native open refuses an app-owned crashed unknown writer without takeover',async t=>{
- const f=await setup(t);pty(f,[...select('agy'),...target,...clear,{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{killWrapper:true}]);const [prior]=await records(f);assert.equal(prior.writer,'unknown');
- const r=pty(f,[...select('agy'),...target,...clear,{send:'\r'},{wait:'ownership is unknown'},{send:'\x03'}]);assert.equal(r.restored,true);assert.equal((await launches(f)).length,1);assert.equal((await records(f)).length,1);
+ const f=await setup(t);f.env.CLI_TRACK_PID_COMMIT='1';f.env.CLI_CHILD_HEARTBEAT=join(f.root,'child-heartbeat');
+ const first=[...select('agy'),...target,...clear,{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{waitPostPidCommit:true},{assertWrapperAlive:true},{killWrapper:true}];
+ const results=pty(f,[...first,{assertLiveChild:true},{start:true},...select('agy'),...target,...clear,{send:'\r'},{wait:'ownership is unknown'},{send:'\x03'},{assertLiveChild:true}],[],true);
+ const [prior]=await records(f);assert.equal(prior.writer,'unknown');assert.equal(prior.state,'pending');assert.equal(results[0].code,-9);assert.equal(results[1].restored,true);assert.equal(results[1].sampledWhileAlive,true);assert.match(results[0].output,/PID_COMMIT_DONE/);assert.equal(prior.childPid,(await launches(f))[0].pid);assert.equal((await launches(f)).length,1);assert.equal((await records(f)).length,1);
+ for(const result of results){assert.equal(result.liveChildChecks.length,1);assert.equal(result.liveChildChecks[0].pid,prior.childPid);assert.ok(result.liveChildChecks[0].after>result.liveChildChecks[0].before);}
 });
