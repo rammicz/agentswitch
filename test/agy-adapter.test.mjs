@@ -38,6 +38,14 @@ test('agy cache aliases inside root work, symlink escape and symlink leaf are re
  await rm(f.path);const outside=join(f.root,'outside');await writeFile(outside,f.text);await symlink(outside,f.path);assert.deepEqual(await f.adapter.discover(),[]);assert.equal(await readFile(outside,'utf8'),f.text);
  await rm(f.path);await rm(join(f.native,'cache'),{recursive:true});await symlink(f.root,join(f.native,'cache'));await writeFile(join(f.root,'last_conversations.json'),f.text);assert.deepEqual(await f.adapter.discover(),[]);
 });
+test('agy rejects invalid UTF-8 metadata instead of inventing a replacement-character workspace',async t=>{
+ const f=await fixture(t);const bytes=Buffer.concat([Buffer.from('{"'+f.cwd+'/'),Buffer.from([255]),Buffer.from('":"'+id+'"}')]);await writeFile(f.path,bytes);
+ assert.deepEqual(await f.adapter.discover(),[]);assert.deepEqual(await readFile(f.path),bytes);
+});
+test('agy isolates escaped lone surrogates while retaining exact healthy Unicode workspace identities',async t=>{
+ const f=await fixture(t),unicode=join(f.other,'📁');await mkdir(unicode);await writeFile(f.path,JSON.stringify({[f.cwd]:id,[f.other+'\ud800']:'22345678-1234-1234-1234-123456789abc',[unicode]:'32345678-1234-1234-1234-123456789abc'}));
+ assert.deepEqual(new Set((await f.adapter.discover()).map(x=>x.workspace)),new Set([f.cwd,unicode]));
+});
 test('agy catalog searches sparse metadata offline, preserves incomplete public-history boundary and rejects state overlap',async t=>{
  const f=await fixture(t);const env={AGENTSWITCH_AGY_ROOT:f.native,CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude'),OPENCODE_DB:join(f.root,'opencode.db'),XDG_DATA_HOME:join(f.root,'xdg')};
  const catalog=await NativeCatalog.create(env),index=await SearchIndex.open({directory:join(f.root,'search'),sources:catalog.sources()});t.after(()=>index.close());await catalog.refresh(index);

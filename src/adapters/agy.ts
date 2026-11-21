@@ -51,12 +51,15 @@ export class AgySessionAdapter implements SessionAdapter {
         while(offset<data.length){const read=await handle.read(data,offset,data.length-offset,offset);if(!read.bytesRead)throw new Error('metadata-unstable');offset+=read.bytesRead;}
         if(identity(before)!==identity(await handle.stat())||identity(before)!==identity(await lstat(path))||await realpath(cache)!==path)throw new Error('metadata-unstable');
       } finally {await handle.close();}
-      const parsed:unknown=JSON.parse(data.toString('utf8'));
+      let parsed:unknown;
+      try {parsed=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(data));}
+      catch {throw new Error('malformed-record');}
       if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('malformed-record');
       const entries=Object.entries(parsed);if(entries.length>this.limits.maxEntries)this.diagnostic(diagnostics,'input-limit');
       const sessions=new Map<string,AgySession>(),ambiguous=new Set<string>();
       for(const [recorded,id] of entries.slice(0,this.limits.maxEntries)) {
-        if(!isAbsolute(recorded)||/[\x00-\x1f\x7f-\x9f]/.test(recorded)||Buffer.byteLength(recorded)>4096||typeof id!=='string'||!agyNativeId.test(id)){this.diagnostic(diagnostics,'malformed-record');continue;}
+        // Unicode mode matches lone surrogate code units but preserves valid astral pairs.
+        if(!isAbsolute(recorded)||/[\x00-\x1f\x7f-\x9f\ud800-\udfff]/u.test(recorded)||Buffer.byteLength(recorded)>4096||typeof id!=='string'||!agyNativeId.test(id)){this.diagnostic(diagnostics,'malformed-record');continue;}
         let workspace=resolve(recorded);try{workspace=await realpath(workspace);}catch{this.diagnostic(diagnostics,'workspace-unavailable');}
         if(sessions.has(id)&&sessions.get(id)!.workspace!==workspace){ambiguous.add(id);this.diagnostic(diagnostics,'ambiguous-rollout');continue;}
         const key=createHash('sha256').update(JSON.stringify([id,workspace])).digest('hex');
