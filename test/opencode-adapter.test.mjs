@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp,readFile,readdir,writeFile } from 'node:fs/promises';
+import { mkdtemp,readFile,readdir,writeFile,realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fixture,id } from './fixtures/opencode/native.mjs';
@@ -9,7 +9,7 @@ test('1.19.6 discovers lazy metadata and ordered public projection without nativ
  const {OpenCodeSessionAdapter}=await import('../dist/adapters/opencode.js');
  const root=await mkdtemp(join(tmpdir(),'agentswitch-opencode-'));const path=await fixture(join(root,'opencode.db'),root);const before=await readFile(path),files=await readdir(root);
  const adapter=new OpenCodeSessionAdapter({dbPath:path});const sessions=await adapter.discover();
- assert.equal(sessions.length,1);assert.equal(sessions[0].nativeId,id);assert.equal(sessions[0].workspace,root);assert.equal(sessions[0].producerVersion,'1.19.6');assert.deepEqual(sessions[0].messages,[]);
+ assert.equal(sessions.length,1);assert.equal(sessions[0].nativeId,id);assert.equal(sessions[0].workspace,await realpath(root));assert.equal(sessions[0].producerVersion,'1.19.6');assert.deepEqual(sessions[0].messages,[]);
  const history=await adapter.readHistoryDetailed(id);assert.equal(history.complete,true);assert.deepEqual(history.items.map(x=>[x.role,x.text,x.status]),[['user','First public','complete'],['user','OpenCode public NEEDLE_SECRET','complete'],['tool','Safe output','complete'],['tool','Safe error','failed'],['assistant','OpenCode answer','complete']]);assert.equal(new Set(history.items.map(x=>x.id)).size,5);assert.doesNotMatch(JSON.stringify(history),/PRIVATE_/);
  assert.deepEqual(await readFile(path),before);assert.deepEqual(await readdir(root),files);
  await writeFile(path+'-wal','synthetic active WAL');assert.deepEqual(await adapter.discover(),[]);assert.equal((await adapter.readHistoryDetailed(id)).complete,false);
@@ -95,7 +95,7 @@ test('a reverted message with no parts still excludes all following messages, an
 });
 test('an external OpenCode DB may share a home/parent ancestor with separate application state',async()=>{
  const f=await setup();const env={XDG_DATA_HOME:join(f.root,'data'),XDG_CONFIG_HOME:join(f.root,'config'),XDG_CACHE_HOME:join(f.root,'cache'),XDG_STATE_HOME:join(f.root,'state'),OPENCODE_DB:join(f.root,'opencode.db'),CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude')};await fixture(env.OPENCODE_DB,f.cwd);
- const paths=await applicationPaths({...env,AGENTSWITCH_STATE_DIR:join(f.root,'.local','state','agentswitch')});assert.equal(paths.root,join(f.root,'.local','state','agentswitch'));assert.equal((await new OpenCodeSessionAdapter({env}).discover()).length,1);
+ const paths=await applicationPaths({...env,AGENTSWITCH_STATE_DIR:join(f.root,'.local','state','agentswitch')});assert.equal(paths.root,await realpath(join(f.root,'.local','state','agentswitch')));assert.equal((await new OpenCodeSessionAdapter({env}).discover()).length,1);
  for(const native of [join(env.XDG_DATA_HOME,'opencode'),join(env.XDG_CONFIG_HOME,'opencode'),join(env.XDG_CACHE_HOME,'opencode'),join(env.XDG_STATE_HOME,'opencode')])await assert.rejects(applicationPaths({...env,AGENTSWITCH_STATE_DIR:join(native,'child')}),/separate/);
 });
 test('a v2-style part ordinal/foreign schema is not accepted as the exact 1.19.6 projection',async()=>{
