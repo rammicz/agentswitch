@@ -4,7 +4,7 @@
 
 Find a coding conversation, choose the agent you want to continue with, and get back to work. The first target is **Codex ↔ Claude Code**: when one quota runs out, your task should not have to start over.
 
-> **Status: early development scaffold.** The CLI, shared types, in-memory search, injected-service picker, and an interactive demo exist. Read-only Codex and Claude Code readers have offline compatibility fixtures. CLI integration, persistent search, native resume, and cross-agent handoffs are tracked in [GitHub Issues](https://github.com/rammicz/agentswitch/issues). The default CLI does not yet use native readers or launch providers. The package has not been published to npm.
+> **Status: early development scaffold.** The CLI, shared types, in-memory search, a private persistent search component, injected-service picker, and an interactive demo exist. Read-only Codex and Claude Code readers have offline compatibility fixtures. CLI integration, native resume, and cross-agent handoffs are tracked in [GitHub Issues](https://github.com/rammicz/agentswitch/issues). The default CLI does not yet use native readers or launch providers. The package has not been published to npm.
 
 ## The intended experience
 
@@ -88,7 +88,7 @@ The design is local first. Session reading and indexing should require no model 
 
 Codex and Claude Code will need to be installed and authenticated independently for real continuation. agentswitch will not pool quotas, copy credentials, or bypass provider limits. Each target keeps its normal workspace instructions and approval behavior.
 
-The programmatic readers accept explicit native roots; see [Codex reader](docs/codex-reader.md) and [Claude Code reader](docs/claude-reader.md). Persistent index storage, deletion controls and redaction are planned work. The scaffold has no telemetry and creates no application data directory.
+The programmatic readers accept explicit native roots; see [Codex reader](docs/codex-reader.md) and [Claude Code reader](docs/claude-reader.md). The [programmatic search index](docs/search-index.md) supports private persistence, refresh, derived-session deletion, full rebuild and purge over explicitly configured adapters. CLI integration and redaction remain planned. The scaffold has no telemetry; the CLI creates no application data directory.
 
 ## Roadmap
 
@@ -120,7 +120,8 @@ There are no runtime npm dependencies. TypeScript and Node type definitions are 
 src/cli.ts           CLI entry point and honest scaffold status
 src/domain.ts        Sessions, history items, queries, handoff state
 src/adapters/        Read-only Codex/Claude readers, contract and planned agent catalog
-src/search.ts        In-memory search baseline
+src/search.ts        In-memory demo search baseline
+src/search-index.ts  Private persistent offline query component
 src/tui/             Synthetic data and keyboard interaction prototype
 test/                Search, CLI, offline PTY and terminal lifecycle checks
 docs/                Architecture, research references, contribution guidance

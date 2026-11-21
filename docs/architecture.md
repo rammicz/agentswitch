@@ -2,7 +2,7 @@
 
 ## Boundaries
 
-The CLI coordinates a session catalog, query service, terminal UI, continuation planner, handoff builder, delivery journal, and provider adapters. The scaffold implements shared types, synthetic search and a picker with injected asynchronous query, lazy preview and continuation preparation services. Fixture-tested read-only Codex and Claude Code adapters exist separately; CLI integration, persistence, real continuation planning and launch are pending. The default CLI still prints scaffold help; `--demo` supplies only synthetic services.
+The CLI coordinates a session catalog, query service, terminal UI, continuation planner, handoff builder, delivery journal, and provider adapters. The scaffold implements shared types, synthetic search and a picker with injected asynchronous query, lazy preview and continuation preparation services. Fixture-tested read-only Codex and Claude Code adapters exist separately. A private persistent query component is also available; CLI integration, real continuation planning and launch are pending. The default CLI still prints scaffold help; `--demo` supplies only synthetic services.
 
 TypeScript on Node >=22.15 keeps installation straightforward for CLI users while allowing native subprocess launch. Avoid runtime dependencies until a concrete feature warrants them.
 
@@ -10,7 +10,7 @@ TypeScript on Node >=22.15 keeps installation straightforward for CLI users whil
 
 Adapter reads must be non-destructive. Discover configured native roots, including environment overrides; identify session IDs, source workspace, timestamps and searchable public text. Malformed records should yield bounded diagnostics without hiding healthy sessions. Never index credentials or hidden reasoning. Separate metadata discovery from lazy transcript reads and a rebuildable persistent full-text index. The readers return metadata with empty messages; query/index integration must hydrate public history explicitly. See [Codex reader limits](codex-reader.md) and [Claude Code reader limits](claude-reader.md).
 
-Folder scope means an exact canonical workspace match, not descendants. Global scope means all supported local history roots for the current user, not all files on the machine or remote accounts. Production code must resolve symlinks and platform path semantics; the scaffold uses lexical absolute paths only.
+Folder scope means an exact canonical workspace match, not descendants. Global scope means all supported local history roots for the current user, not all files on the machine or remote accounts. The persistent search component resolves existing paths with realpath; the synthetic demo uses lexical absolute paths. See [search index behavior and limits](search-index.md).
 
 Sort recent sessions first with deterministic ID tie breaking. Provider filtering and scope combine with one text query. Search must reach message content, not just session names. Preview shows matching excerpts and provenance. A reusable adapter contract permits parser, TUI and planner development against sanitized fixtures in parallel.
 
