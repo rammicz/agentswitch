@@ -117,3 +117,8 @@ test('obsolete preview cannot replace the list after backing out',()=>{
  const r=run([key('\r','Loading…'),key('\x1b','Enter preview'),{wait:'LATE PREVIEW'},key('\x03','DONE')],'obsolete-preview');
  assert.doesNotMatch(r.output.slice(r.output.indexOf('LATE PREVIEW')),/Public transcript|\x1b\[2J/);noDispatch(r);
 });
+
+test('PTY reader preserves ordered markers across split and coalesced output',()=>{
+ const result=spawnSync('python3',['test/fixtures/terminal_reader_test.py'],{encoding:'utf8',timeout:5000});
+ assert.equal(result.status,0,result.stderr);
+});
