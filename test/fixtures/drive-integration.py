@@ -33,6 +33,10 @@ def main():
    if 'instance' in action:state=instances[action['instance']]
    if 'wait' in action:until(state,action['wait'])
    if 'send' in action:os.write(state['master'],action['send'].encode())
+   if 'waitPrePidBarrier' in action:
+    if 'PID_COMMIT_PAUSED' not in state['output']:until(state,'PID_COMMIT_PAUSED')
+   if 'assertWrapperAlive' in action:
+    if state['child'].poll() is not None:raise Exception('Wrapper exited before the driver observed child READY')
    if 'killWrapper' in action:state['child'].kill();state['child'].wait(timeout=5)
    if 'collectPreview' in action:
     until(state,'Enter confirm continuation')
@@ -48,6 +52,17 @@ def main():
    if 'assertLiveChild' in action:
     with open(config['env']['RUNTIME_LOG']) as log:pid=json.loads(log.readline())['pid']
     os.kill(pid,0)
+    if config['env'].get('CLI_CHILD_HEARTBEAT'):
+     heartbeat=config['env']['CLI_CHILD_HEARTBEAT'];before=None;deadline=time.monotonic()+5
+     while time.monotonic()<deadline:
+      try:
+       with open(heartbeat) as log:beat=json.load(log)
+       if beat['pid']!=pid:raise Exception('Heartbeat belongs to another child')
+       if before is None:before=beat['sequence']
+       elif beat['sequence']>before:break
+      except (FileNotFoundError,json.JSONDecodeError):pass
+      time.sleep(0.01)
+     else:raise Exception('Fake child heartbeat did not advance independently of the revoked PTY')
   results=[]
   for state in instances:
    if state['child'].poll() is None:

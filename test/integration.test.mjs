@@ -83,11 +83,12 @@ test('two real CLI processes choosing the same source admit exactly one launch',
 });
 
 for(const gap of [false,true])test(`wrapper death ${gap?'before durable child PID':'after READY'} leaves source and live archive protected on restart`,async()=>{
- const f=await setup();if(gap)f.env.CLI_CRASH_POINT='spawn-before-pid';
- const first=[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},...(gap?[{wait:'READY'}]:[{wait:'READY'},{killWrapper:true}])];
+ const f=await setup();f.env.CLI_CHILD_HEARTBEAT=join(f.root,'child-heartbeat');if(gap){f.env.CLI_CRASH_POINT='spawn-before-pid';f.env.RUNTIME_READY_DELAY_MS='100';}
+ const first=[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},...(gap?[{waitPrePidBarrier:true}]:[]),{assertWrapperAlive:true},{killWrapper:true}];
  // A later wrapper reads the same native source. Ownership cannot be stolen even
  // when the original parent is dead and the target PID was never committed.
- const result=pty(f,[...first,{assertLiveChild:true},{start:true},...list,...select('codex'),{send:'\r'},{wait:'ownership is unknown'},{send:'\u0003'}]);
+ const result=pty(f,[...first,{assertLiveChild:true},{start:true},...list,...select('codex'),{send:'\r'},{wait:'ownership is unknown'},{send:'\u0003'},{assertLiveChild:true}]);
+ assert.equal(result[0].code,-9,'the driver must SIGKILL the live wrapper explicitly');
  const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));const [record]=journal.list();
  assert.equal(record.state,'pending');assert.equal(record.writer,'unknown');assert.equal(record.childPid===null,gap);assert.equal(journal.ownerState(record.sourceKey),'unknown');
  assert.throws(()=>journal.beginDeletion(record.id),/writer/);journal.abort(record.id);assert.equal(journal.get(record.id).state,'pending');
