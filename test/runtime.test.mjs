@@ -81,7 +81,7 @@ import { realpathSync } from 'node:fs';
 const terminalRun=async(t,scenario,actions,extra={})=>{
  const f=await fixture(t);const executable=realpathSync('test/fixtures/runtime-child.mjs');
  const r=spawnSync('python3',['test/fixtures/drive-runtime.py'],{input:JSON.stringify({env:{RUNTIME_WORKSPACE:f.workspace,RUNTIME_EXECUTABLE:executable,RUNTIME_LOG:f.log,RUNTIME_SCENARIO:scenario,...extra},actions}),encoding:'utf8',timeout:15000});
- assert.equal(r.status,0,r.stderr);const result=JSON.parse(r.stdout);assert.equal(result.code,0,result.output);assert.equal(result.restored,true,result.output);
+ assert.equal(r.status,0,r.stderr);const result=JSON.parse(r.stdout);assert.equal(result.code,0,result.output);assert.equal(result.restored,true,result.output);assert.equal(result.sampledWhileAlive,true,'termios must be sampled while the controlling session leader is alive');
  const done=JSON.parse(result.output.match(/DONE (.*)\r?\n/)[1]);assert.deepEqual(done.before,done.after);assert.equal(done.calls,1);
  assert.match(result.output,/DISPATCH \{"raw":false,"calls":1\}/);if(!['spawn-error','cancel-acquire'].includes(scenario))assert.match(result.output,/RETRY INVALID_PLAN/);
  if(['spawn-error','cancel-acquire'].includes(scenario)){assert.match(result.output,scenario==='spawn-error'?/EXPECTED_ERROR LAUNCH_FAILED/:/EXPECTED_ERROR CANCELLED/);assert.match(result.output,/RELEASE/);assert.equal((await f.events()).length,0);return {result};}

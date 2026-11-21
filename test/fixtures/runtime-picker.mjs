@@ -1,6 +1,9 @@
 import { createRuntime, createOwnedSessionGuard } from '../../dist/runtime.js';
 import { runPicker } from '../../dist/tui/app.js';
-import { realpathSync, chmodSync } from 'node:fs';
+import { realpathSync, chmodSync, read, closeSync } from 'node:fs';
+const ackFd=Number(process.env.RUNTIME_ACK_FD);
+delete process.env.RUNTIME_ACK_FD;
+if(!Number.isInteger(ackFd)||ackFd<3)throw Error('Missing terminal-sampling acknowledgement descriptor');
 const workspace=realpathSync(process.env.RUNTIME_WORKSPACE);
 const source={id:'synthetic',nativeId:'12345678-1234-1234-1234-123456789abc',agent:process.env.RUNTIME_SOURCE||'codex'};
 const events=['SIGINT','SIGTERM'];const before=events.map(e=>process.listenerCount(e));
@@ -37,3 +40,16 @@ try {
   }});
  console.log('DONE '+JSON.stringify({before,after:events.map(e=>process.listenerCount(e)),calls,raw:process.stdin.isRaw}));
 }catch(error){console.log('ERROR '+error.code+' '+error.message);process.exitCode=1;}
+
+// Keep the controlling session leader alive until the harness samples termios.
+// The acknowledgement is private fixture synchronization, never provider input.
+await new Promise((resolve,reject)=>{
+ const timer=setTimeout(()=>{console.error('Terminal-sampling acknowledgement timed out');process.exit(1);},5000);
+ const token=Buffer.alloc(1);
+ read(ackFd,token,0,1,null,(error,count)=>{
+  clearTimeout(timer);closeSync(ackFd);
+  if(error)reject(error);
+  else if(count!==1||token[0]!==84)reject(Error('Invalid terminal-sampling acknowledgement'));
+  else resolve();
+ });
+});
