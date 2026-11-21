@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { arch, platform, release, tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -42,6 +42,16 @@ function command(file, argv, cwd = workspace, expected = 0) {
 }
 const npm = (argv, cwd = workspace) => command(process.execPath, [npmCli, ...argv], cwd);
 function checked(name, action) { const value = action(); report.checks.push(name); return value; }
+function executableFromPath(name) {
+  for (const directory of (process.env.PATH || '').split(delimiter)) {
+    try {
+      const candidate = realpathSync(resolve(directory || '.', name));
+      accessSync(candidate, constants.X_OK);
+      if (lstatSync(candidate).isFile()) return candidate;
+    } catch { /* Try the next directory without reading user configuration. */ }
+  }
+  throw new Error(`Required executable is missing from PATH: ${name}`);
+}
 const json = path => JSON.parse(readFileSync(path, 'utf8'));
 const hash = (buffer, algorithm = 'sha256', encoding = 'hex') => createHash(algorithm).update(buffer).digest(encoding);
 const installed = join(prefix, 'node_modules/agentswitch');
@@ -57,6 +67,8 @@ try {
   report.sourceDirty = command('git', ['status', '--porcelain'], root).stdout.trim() !== '';
   assert.throws(() => lstatSync(join(root, '.npmrc')), { code: 'ENOENT' }, 'Project npm configuration must be absent; move it outside the candidate checkout before packaging');
   report.npm = npm(['--version']).stdout.trim();
+  const python = executableFromPath('python3');
+  report.python = command(python, ['--version']).stdout.trim();
   const source = json(join(root, 'package.json'));
   const lock = json(join(root, 'package-lock.json'));
   checked('checkout and lockfile metadata agree', () => {
@@ -79,7 +91,7 @@ try {
     assert.equal(hash(bytes, 'sha1'), manifest.shasum);
     assert.equal(`sha512-${hash(bytes, 'sha512', 'base64')}`, manifest.integrity);
   });
-  const archiveResult = command('python3', [join(root, 'scripts/inspect-package.py'), tarball]);
+  const archiveResult = command(python, [join(root, 'scripts/inspect-package.py'), tarball]);
   const archive = JSON.parse(archiveResult.stdout);
   writeFileSync(join(output, 'archive.json'), archiveResult.stdout);
   checked('actual archive matches manifest and reviewed runtime/doc allowlist', () => {

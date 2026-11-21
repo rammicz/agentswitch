@@ -23,7 +23,6 @@ jobs:
       - run: npm pack --dry-run
       - run: npm run distribution:check -- --output "$RUNNER_TEMP/agentswitch-distribution"
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: agentswitch-${{ github.sha }}-${{ runner.os }}-node-${{ matrix.node }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/agentswitch-distribution/
