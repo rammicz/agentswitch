@@ -53,6 +53,8 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   let hits: readonly SessionHit[] = [];
   let selected = 0;
   let selectionMoved = false;
+  let showingSources = false;
+  let sourceOffset = 0;
   let target = 0;
   let stage: 'list' | 'preview' | 'target' | 'workspace' | 'request' | 'redaction' | 'summary' = 'list';
   let picked: SessionHit | undefined;
@@ -119,13 +121,21 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     const width = Math.max(1, (output.columns || 80) - 1);
     const height = Math.max(1, output.rows || 24);
     const bodyRows = Math.max(1, height - 8);
+    const sourceNotices = options.notices?.() ?? [];
     let body: string[];
     let footer: string;
-    if (stage === 'list') {
+    if (showingSources) {
+      const lines = wrap(sourceNotices.length ? sourceNotices : ['No source warnings.'], width);
+      sourceOffset = Math.max(0, Math.min(sourceOffset, lines.length - bodyRows));
+      body = lines.slice(sourceOffset, sourceOffset + bodyRows);
+      footer = '↑ ↓ Scroll · Esc back';
+    } else if (stage === 'list') {
       const start = Math.max(0, selected - bodyRows + 1);
+      const progress = query.text.trim() ? 'Searching history…' : 'Finding local sessions…';
       body = hits.length ? hits.slice(start, start + bodyRows).map((hit, i) => `${start + i === selected ? '›' : ' '} ${hit.agent.padEnd(6)} ${searchResultLabel(hit, query.text)}`)
-        : [busy ? 'Searching…' : 'No matching sessions. Clear the search or change scope.'];
-      footer = busy ? '↑ ↓ Select · Enter open session · Esc quit · Searching…' : '↑ ↓ Select · Enter preview · Esc quit';
+        : [busy ? progress : 'No matching sessions. Clear the search or change scope.'];
+      footer = '↑ ↓ Select · Enter preview · Esc quit';
+      if (busy) footer = hits.length ? `↑ ↓ Select · Enter open session · Esc quit · ${progress}` : 'Esc quit';
     } else if (stage === 'preview') {
       const source = picked!;
       const provenance = `${source.agent}/${source.id}`;
@@ -159,10 +169,12 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
         `Workspace: ${choice!.path} (${choice!.kind})`, 'W override workspace', ...(options.compose ? [`Current request: ${currentRequest}`, `Redactions: ${redactions.length} literal selection(s)`, `Fresh context: ${fresh ? 'explicitly selected' : 'automatic same-agent resume'}`, 'C edit request · X add redaction · F toggle fresh context'] : [])];
       footer = 'Enter prepare summary · Esc back';
     }
-    const lines = [options.label ?? 'agentswitch', `Search: ${query.text || 'type to search history…'}`,
-      `← → Agent: ${query.agent}     Tab Scope: ${query.scope}`, '', ...body, '',
-      busy && (stage !== 'list' || !hits.length) ? 'Loading… · Esc back' : footer, ...(stage === 'list' && updateNotice ? [updateNotice] : []),
-      [notice + (retry ? (stage === 'list' ? ' · Ctrl+R retry' : ' · R retry') : ''), ...(options.notices?.() ?? [])].filter(Boolean).join(' · ')];
+    const statusHint = stage === 'list' && sourceNotices.length ? 'F2 source status' : '';
+    const retryHint = retry ? (stage === 'list' ? ' · Ctrl+R retry' : ' · R retry') : '';
+    const lines = showingSources ? ['Source status', '', ...body, '', footer] : [options.label ?? 'agentswitch',
+      `Search: ${query.text || 'type to search history…'}`, `← → Agent: ${query.agent}     Tab Scope: ${query.scope}`,
+      '', ...body, '', busy && stage !== 'list' ? 'Loading… · Esc back' : footer,
+      ...(stage === 'list' && updateNotice ? [updateNotice] : []), [notice + retryHint, statusHint].filter(Boolean).join(' · ')];
     output.write('\x1b[2J\x1b[H' + lines.slice(0, height).map(line => wrap([line], width)[0]!).join('\n'));
   };
   const redraw = (): void => { try { draw(); } catch (error) { finish(error); } };
@@ -225,6 +237,15 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     if (!active) return;
     try {
       if (key.ctrl && key.name === 'c') { finish(); return; }
+      if (showingSources) {
+        if (key.name === 'escape' || key.name === 'f2') showingSources = false;
+        else if (key.name === 'up') sourceOffset--;
+        else if (key.name === 'down') sourceOffset++;
+        redraw(); return;
+      }
+      if (stage === 'list' && key.name === 'f2' && options.notices) {
+        showingSources = true; sourceOffset = 0; redraw(); return;
+      }
       if (key.name === 'escape') {
         invalidate(); notice = '';
         if (stage === 'list') { finish(); return; }

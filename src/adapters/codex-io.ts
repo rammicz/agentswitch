@@ -84,7 +84,7 @@ export async function historyHeader(path: string, root: string, ctx: ReadContext
         const chunks: Buffer[] = [];
         let size = 0;
         while (true) {
-          const requested = Math.min(256, ctx.limits.maxLineBytes + 1 - size, ctx.remaining);
+          const requested = Math.min(16 * 1024, ctx.limits.maxLineBytes + 1 - size, ctx.remaining);
           if (requested < 1) throw new Error('input-limit');
           const buffer = Buffer.alloc(requested);
           const { bytesRead } = await handle.read(buffer, 0, requested, size);

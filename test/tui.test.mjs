@@ -24,6 +24,12 @@ test('search shows a message excerpt in the list and attribution in the preview'
  const r=run([key('needle','Beta task · the hidden needle'),key('\r','Enter choose target'),key('\x1b','Enter preview'),key('\x1b','DONE')]);
  assert.match(r.output,/b7 \[assistant\]: the hidden needle/);assert.doesNotMatch(r.output,/DISPATCH/);
 });
+test('source warnings stay off the session list and open with F2',()=>{
+ const r=run([key('\x1bOQ','untested-producer'),key('\x1b','Alpha task'),key('\x03','DONE')],'source-status');
+ assert.match(r.frames[0],/F2 source status/);
+ assert.doesNotMatch(r.frames[0],/untested-producer/);
+ assert.match(r.frames[1],/Source status/);
+});
 
 const openTarget=[key('\r','Enter choose target'),key('\r','Target:')];
 const noDispatch=r=>assert.doesNotMatch(r.output,/DISPATCH/);

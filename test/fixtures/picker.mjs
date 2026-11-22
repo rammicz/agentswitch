@@ -16,6 +16,7 @@ let prepared;
 let calls=0;
 try {
   await runPicker({ workspace, scope: scenario === 'global' || scenario === 'missing' ? 'global' : 'folder',
+    ...(scenario === 'source-status' ? {notices: () => ['Codex source warning (untested-producer)']} : {}),
     query: async (q) => {
       if (scenario === 'query-error' && reads++ === 0) throw Error('offline query failed');
       if (q.text === 'slow') { await later(); console.log('LATE QUERY'); }

@@ -405,6 +405,17 @@ function withinBudget(output,budget) {
   assert.ok(total <= budget);
 }
 
+test('large session metadata is discovered in a few bounded reads', async t => {
+  const {root,cwd} = await fixture(t);
+  const records = rollout(cwd,ids[0],[],{fixturePadding:'x'.repeat(64 * 1024)});
+  await writeRollout(root,records);
+  const budget = encode(records).length;
+  const output = observedReads(root,{maxScanBytes:budget});
+  withinBudget(output,budget);
+  assert.equal(output.result.length,1);
+  assert.ok(output.reads.length < 10);
+});
+
 test('native header read requests and transferred bytes stay within the remaining operation budget', async t => {
   const {root,cwd} = await fixture(t);
   const records = rollout(cwd,ids[0],[completed('UserMessage','u','x'.repeat(100000),1)]);

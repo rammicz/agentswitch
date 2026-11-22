@@ -66,6 +66,7 @@ The CI release gate tests the actual package on Linux, macOS, and Windows with N
 | ← / → | Cycle All / Codex / Claude / OpenCode / agy / Grok | Cycle target agent in target selection |
 | Tab | Toggle folder / global scope | — |
 | Enter | Preview matches and transcript | Choose target, prepare summary, then confirm |
+| F2 | Show source warnings | — |
 | W | Search text | Explicit workspace override in target selection |
 | Esc | Exit | Return to previous view |
 | Ctrl+C | Exit | Exit |
