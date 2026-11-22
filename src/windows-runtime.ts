@@ -64,7 +64,8 @@ $outputRestored = [AgentSwitchConsole]::SetConsoleMode($outputHandle, [uint32]${
 if (!$inputRestored -or !$outputRestored) { exit 1 }
 [Console]::WriteLine('ok')
 `;
-  const result = spawnSync(ps, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', consoleBoilerplate + script], {
+  const encoded = Buffer.from(consoleBoilerplate + script, 'utf16le').toString('base64');
+  const result = spawnSync(ps, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
     shell: false, stdio: [0, 'pipe', 'ignore'], encoding: 'utf8', timeout: 12_000, maxBuffer: 4096,
   });
   if (result.status === 0 && (state === undefined ? /^\d{1,10}:\d{1,10}$/.test(result.stdout.trim()) : result.stdout.trim() === 'ok')) {

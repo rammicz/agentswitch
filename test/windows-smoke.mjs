@@ -60,8 +60,17 @@ test('native Windows package installs, searches and hands off literal text in Co
   });
 
   const runner = join(workspaceRoot, 'check-console.mjs');
+  const diagnostics = join(workspaceRoot, 'diagnostic.log');
   await writeFile(runner, `
 import { windowsConsoleMode } from ${JSON.stringify(pathToFileURL(join(installed, 'dist', 'windows-runtime.js')).href)};
+import { appendFileSync } from 'node:fs';
+const record = message => appendFileSync(${JSON.stringify(diagnostics)}, String(message) + String.fromCharCode(10));
+process.on('uncaughtExceptionMonitor', error => record(error.stack));
+const stderr = process.stderr.write.bind(process.stderr);
+process.stderr.write = (message, ...args) => {
+  record(message);
+  return stderr(message, ...args);
+};
 console.log('WINDOWS_BASELINE');
 if (!process.stdin.isTTY) throw Error('No Windows console input');
 const before = windowsConsoleMode();
@@ -69,14 +78,20 @@ if (!before) throw Error('Cannot read initial console mode');
 process.once('beforeExit', () => {
   if (windowsConsoleMode() !== before) throw Error('Windows console modes did not restore');
   console.log('CONSOLE_RESTORED');
+  // Leave enough time for the server's ConPTY output pump before the console closes.
+  setTimeout(() => {}, 250);
 });
 await import(${JSON.stringify(pathToFileURL(cli).href)});
 `);
-  driver([{ wait: 'Enter preview' }, { send: 'Windows fixture' }, { wait: 'Enter preview' }, { send: '\r' },
-    { wait: 'Enter choose target' }, { send: '\r' }, { wait: 'Target: codex' },
-    { send: '\x1b[C' }, { wait: 'Target: claude' }, { send: '\r' }, { wait: 'Enter confirm continuation' },
-    { send: '\r' }, { wait: 'READY' }, { send: 'quit\r' }, { wait: 'uncertain' }, { wait: 'CONSOLE_RESTORED' }],
-    [process.execPath, runner]);
+  try {
+    driver([{ wait: 'Enter preview' }, { send: 'Windows fixture' }, { wait: 'Enter preview' }, { send: '\r' },
+      { wait: 'Enter choose target' }, { send: '\r' }, { wait: 'Target: codex' },
+      { send: '\x1b[C' }, { wait: 'Target: claude' }, { send: '\r' }, { wait: 'Enter confirm continuation' },
+      { send: '\r' }, { wait: 'READY' }, { send: 'quit\r' }, { wait: 'uncertain' }, { wait: 'CONSOLE_RESTORED' }],
+      [process.execPath, runner]);
+  } catch (error) {
+    throw new Error(`${await readFile(diagnostics, 'utf8').catch(() => '')}\n${error.message}`);
+  }
   const actual = JSON.parse((await readFile(log, 'utf8')).trim());
   assert.deepEqual(actual.tty, [true, true, true]);
   assert.equal(actual.cwd, workspace);
