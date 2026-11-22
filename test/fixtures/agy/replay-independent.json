@@ -1,0 +1,149 @@
+{
+  "artifact": {
+    "product": "Google Antigravity CLI",
+    "sha512": "83311d3f354567612dc16c1ae2ea9b503d6f6833aa4e138d39aa229da3f3bb99b0e4d7cca0bce4796b0060d6a51d8113eb7449ed5dc0e7900bf217107ea5bff9",
+    "source_provenance": "test/fixtures/agy/provenance.json",
+    "version": "1.5.14"
+  },
+  "generation": {
+    "argv": [
+      "agy",
+      "acp",
+      "--log-file",
+      "/dev/null",
+      "--include-default-customizations=false",
+      "--disable-telemetry",
+      "--gemini-dir",
+      "<private-home>/.gemini",
+      "--app-data-dir",
+      "antigravity-cli"
+    ],
+    "initialize": "ok",
+    "local_stub_generation_requests": 2,
+    "new": "ok",
+    "private_profile_files_after_generation": 62,
+    "prompt": "ok",
+    "prompt_completed": true,
+    "protocol": [
+      "initialize",
+      "session/new(cwd=/work)",
+      "session/prompt(synthetic input)"
+    ],
+    "synthetic_session_id": "188218f8-d4a8-4e1f-bf92-b63a124eb2e2",
+    "synthetic_workspace_file_count": 0,
+    "version": "1.5.14"
+  },
+  "isolation": {
+    "credentials": "only a synthetic placeholder GEMINI_API_KEY was present during session creation; no real account/config/credential files were mounted.",
+    "host_home_or_native_account_mounted": false,
+    "network": "no external network namespace access; fake Gemini endpoint bound to 127.0.0.1 inside the same namespace.",
+    "real_provider_calls": false,
+    "sandbox": "bwrap --unshare-all; executable and /usr mounted read-only; private /tmp; private synthetic HOME; workspace /work is an empty sandbox directory."
+  },
+  "ordinary_read_only_replay": {
+    "argv": [
+      "agy",
+      "acp",
+      "--log-file",
+      "/dev/null",
+      "--include-default-customizations=false",
+      "--disable-telemetry",
+      "--gemini-dir",
+      "<same-private-home>/.gemini",
+      "--app-data-dir",
+      "antigravity-cli"
+    ],
+    "exact_id_and_workspace_matched": true,
+    "initialize": "ok",
+    "list": "ok",
+    "load": "ok",
+    "local_stub_call_delta": 0,
+    "profile_file_count": 62,
+    "profile_hash_changes_after_initialize_list_load": 0,
+    "profile_mount": "whole .gemini tree read-only",
+    "replayed_public_chunk_kinds": [
+      "user_message_chunk",
+      "agent_message_chunk"
+    ],
+    "replayed_public_text_chunk_count": 2,
+    "version": "1.5.14",
+    "workspace_file_count_after_read": 0
+  },
+  "open_writer_check": {
+    "after_writer_followup_and_exit": {
+      "exact_id_matched": true,
+      "list": "ok",
+      "load": "ok",
+      "local_stub_call_delta": 0,
+      "profile_hash_changes_during_read": 0,
+      "public_chunk_kinds": [
+        "user_message_chunk",
+        "agent_message_chunk",
+        "user_message_chunk",
+        "agent_message_chunk"
+      ],
+      "public_text_chunk_count": 4
+    },
+    "catalog_status_at_concurrent_read": "not retained in the ACP list result; a later post-close SQLite inspection showed IDLE / not_fully_idle=0, so that status is not evidence for its value during the open-writer read.",
+    "identity_matched": true,
+    "list": "ok",
+    "load": "ok",
+    "local_stub_call_delta": 0,
+    "preexisting_sqlite_sidecars_at_read_start": [
+      "antigravity-cli/conversation_summaries.db-shm",
+      "antigravity-cli/conversation_summaries.db-wal",
+      "antigravity-cli/conversations/8ab9e678-09fe-457b-bd46-7126b3f7fb88.db-shm",
+      "antigravity-cli/conversations/8ab9e678-09fe-457b-bd46-7126b3f7fb88.db-wal"
+    ],
+    "profile_file_count_at_read_start": 67,
+    "profile_hash_changes_during_read": 0,
+    "replay_update_kind_count": 0,
+    "replayed_public_text_chunk_count": 0,
+    "synthetic_session_id": "8ab9e678-09fe-457b-bd46-7126b3f7fb88",
+    "transcript_snapshot": {
+      "rows_at_snapshot": 2,
+      "size_bytes": 801,
+      "snapshot_was_byte_identical_to_first_two_rows_after_followup": true
+    },
+    "writer_state": "one synthetic ACP process remained open between two completed prompts; no generation was pending during the separate reader call."
+  },
+  "path_flag_observations": [
+    {
+      "flags": [
+        "--gemini-dir",
+        "<private-home>/.gemini",
+        "--app-data-dir",
+        "antigravity-cli"
+      ],
+      "result": "same synthetic identity listed and loaded read-only."
+    },
+    {
+      "flags": [
+        "--gemini-dir",
+        "<private-home>/.gemini",
+        "--app-data-dir",
+        "<absolute final antigravity-cli path>",
+        "--cli_dir_name",
+        "antigravity-cli"
+      ],
+      "result": "session/list returned -32603; do not assume the final native profile path is a valid absolute --app-data-dir value."
+    },
+    {
+      "flags": [
+        "--gemini-dir",
+        "<private-home>/.gemini",
+        "--app-data-dir",
+        "antigravity-cli",
+        "--cli_dir_name",
+        "antigravity-cli"
+      ],
+      "result": "session/list returned -32000; explicit cli_dir_name changed lookup away from the generated session."
+    }
+  ],
+  "provenance": "Independent scout capture, 2026-11-22. Separate synthetic sessions and profile; retained generator reproduces owner-open and owner-exited behavior.",
+  "limits": [
+    "No genuine account or external model used",
+    "Concurrent catalog idle status was not captured",
+    "Owner was between completed ACP turns; in-flight generation and TUI ownership unverified"
+  ]
+}

@@ -1,0 +1,423 @@
+{
+  "version": "1.5.14",
+  "platform": "linux-x64",
+  "archiveSha512": "83311d3f354567612dc16c1ae2ea9b503d6f6833aa4e138d39aa229da3f3bb99b0e4d7cca0bce4796b0060d6a51d8113eb7449ed5dc0e7900bf217107ea5bff9",
+  "isolation": {
+    "externalNetwork": false,
+    "hostProfileMounted": false,
+    "workspace": "fresh synthetic tmpfs directories",
+    "authentication": "synthetic API key to private loopback mock only"
+  },
+  "acp": {
+    "initialize": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "load_session": true,
+        "promptCapabilities": {
+          "image": true,
+          "audio": false,
+          "embeddedContext": true
+        },
+        "sessionCapabilities": {
+          "resume": {},
+          "close": {},
+          "load": {},
+          "list": {},
+          "additionalDirectories": {}
+        },
+        "session_capabilities": {
+          "resume": {},
+          "close": {},
+          "load": {},
+          "list": {},
+          "additionalDirectories": {}
+        },
+        "auth": {
+          "logout": {}
+        },
+        "_meta": {
+          "antigravity": {
+            "tier": true,
+            "systemPrompt": {
+              "append": true
+            }
+          }
+        }
+      },
+      "agentInfo": {
+        "name": "Antigravity ACP Server",
+        "version": "1.5.14"
+      },
+      "authMethods": [
+        {
+          "id": "oauth-personal",
+          "name": "Log in with Google",
+          "description": "Log in with your Google account"
+        },
+        {
+          "id": "oauth-business",
+          "name": "Log in with Gemini Enterprise",
+          "description": "Log in with your Gemini Enterprise account"
+        },
+        {
+          "id": "gemini-api-key",
+          "name": "Gemini API key",
+          "description": "Use an API key with Gemini Developer API"
+        },
+        {
+          "id": "agent-platform",
+          "name": "Gemini Enterprise Agent Platform",
+          "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials"
+        }
+      ]
+    },
+    "sessionId": "64ade0e9-7b89-46a2-8535-45817b403190",
+    "cwd": "/work-acp",
+    "initialListEmpty": true,
+    "workspaceListIds": [
+      "64ade0e9-7b89-46a2-8535-45817b403190"
+    ],
+    "globalListIds": [
+      "64ade0e9-7b89-46a2-8535-45817b403190"
+    ],
+    "workspaceNextCursor": null,
+    "globalNextCursor": null,
+    "paginationLimit": "single-session listing only; multi-page traversal unverified",
+    "publicReplay": [
+      {
+        "role": "user",
+        "text": "synthetic-request-cedar"
+      },
+      {
+        "role": "assistant",
+        "text": "synthetic-reply-oak"
+      }
+    ],
+    "publicReplayComplete": true,
+    "completionAnchor": "successful session/load response after both public chunks",
+    "loadResult": "ok",
+    "modelCallsDuringLoad": 0,
+    "callbacksDuringLoad": [],
+    "replayedUpdateKinds": [
+      "agent_message_chunk",
+      "agent_thought_chunk",
+      "user_message_chunk"
+    ],
+    "excludedReplayKinds": [
+      "agent_thought_chunk",
+      "usage_update"
+    ],
+    "publicUpdateAnchors": [
+      {
+        "sessionId": "64ade0e9-7b89-46a2-8535-45817b403190",
+        "update": {
+          "sessionUpdate": "user_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "synthetic-request-cedar"
+          }
+        }
+      },
+      {
+        "sessionId": "64ade0e9-7b89-46a2-8535-45817b403190",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "synthetic-reply-oak"
+          }
+        }
+      }
+    ],
+    "profileChangesAcrossSeparateListLoad": [
+      "cache/conversation_metadata.json",
+      "cache/onboarding.json",
+      "conversation_summaries.db",
+      "jetbox_summaries_proto.pb"
+    ],
+    "workspaceUnchangedAcrossSeparateListLoad": true,
+    "unavailableSyntheticSessionLoad": {
+      "hasResult": true,
+      "errorCode": null,
+      "updateCount": 0,
+      "callbacks": [],
+      "modelCalls": 0
+    }
+  },
+  "activeAttachment": {
+    "sessionId": "f5473f46-e6ca-48f6-a293-eb206ee77341",
+    "cwd": "/work-acp",
+    "mount": "nested read-only namespace root; shared private loopback only",
+    "nativeFlags": [
+      "--include-default-customizations=false",
+      "--disable-telemetry"
+    ],
+    "ownerOpenAfterCompletedTurn": {
+      "listIdentityMatched": true,
+      "loadResult": "ok",
+      "publicReplay": [],
+      "updateCount": 0,
+      "modelCallsDuringLoad": 0,
+      "callbacks": [],
+      "profileUnchanged": true,
+      "workspaceUnchanged": true
+    },
+    "ownerExitedAfterSecondTurn": {
+      "listIdentityMatched": true,
+      "loadResult": "ok",
+      "publicReplay": [
+        {
+          "role": "user",
+          "text": "synthetic-request-cedar"
+        },
+        {
+          "role": "assistant",
+          "text": "synthetic-reply-oak"
+        },
+        {
+          "role": "user",
+          "text": "synthetic-second-request"
+        },
+        {
+          "role": "assistant",
+          "text": "synthetic-reply-oak"
+        }
+      ],
+      "updateCount": 7,
+      "modelCallsDuringLoad": 0,
+      "callbacks": [],
+      "profileUnchanged": true,
+      "workspaceUnchanged": true
+    },
+    "limit": "open ACP owner after a completed turn; in-flight generation and TUI ownership unverified"
+  },
+  "storage": {
+    "readOnlySnapshotUnchanged": true,
+    "profiles": [
+      {
+        "kind": "acp",
+        "summarySchema": "CREATE TABLE `conversation_summaries` (`conversation_id` text,`title` text NOT NULL DEFAULT \"\",`preview` text NOT NULL DEFAULT \"\",`step_count` integer NOT NULL DEFAULT 0,`last_modified_time` datetime NOT NULL,`workspace_uris` text NOT NULL,`status` text NOT NULL DEFAULT \"\",`source` text NOT NULL DEFAULT \"\",`project_id` text NOT NULL DEFAULT \"\",`agent_name` text NOT NULL DEFAULT \"\",`parent_conversation_id` text NOT NULL DEFAULT \"\",`nesting_depth` integer NOT NULL DEFAULT 0,`battle_id` text NOT NULL DEFAULT \"\",`winning_conversation_id` text NOT NULL DEFAULT \"\",`not_fully_idle` numeric NOT NULL DEFAULT false,`killed` numeric NOT NULL DEFAULT false,`last_user_input_time` datetime NOT NULL,`last_user_input_step_index` integer NOT NULL DEFAULT -1,`app_data_dir` text NOT NULL DEFAULT \"\",`raw_summary` blob,`group_id` text NOT NULL DEFAULT \"\",PRIMARY KEY (`conversation_id`))",
+        "sessions": [
+          {
+            "summary": {
+              "conversation_id": "64ade0e9-7b89-46a2-8535-45817b403190",
+              "title": "synthetic-reply-oak",
+              "preview": "synthetic-reply-oak",
+              "step_count": 2,
+              "last_modified_time": "2026-01-01 00:00:00.000000000+00:00",
+              "workspace_uris": "[\"file:///work-acp\"]",
+              "status": "CASCADE_RUN_STATUS_IDLE",
+              "not_fully_idle": 0,
+              "killed": 0,
+              "last_user_input_time": "2026-01-01 00:00:00.000000000+00:00",
+              "app_data_dir": "antigravity-cli"
+            },
+            "transcriptPath": "brain/64ade0e9-7b89-46a2-8535-45817b403190/.system_generated/logs/transcript.jsonl",
+            "publicExpected": [
+              {
+                "role": "user",
+                "text": "synthetic-request-cedar"
+              },
+              {
+                "role": "assistant",
+                "text": "synthetic-reply-oak"
+              }
+            ],
+            "wrapperAmbiguous": false,
+            "omittedStepIndexes": [],
+            "outgoingPolicy": "requires-reviewed-wrapper-parser",
+            "transcriptFixture": "transcripts/acp/64ade0e9-7b89-46a2-8535-45817b403190.jsonl"
+          }
+        ],
+        "lastConversations": {},
+        "readOnlySnapshotUnchanged": true,
+        "terminalConsumptionCertified": false
+      },
+      {
+        "kind": "print",
+        "summarySchema": "CREATE TABLE `conversation_summaries` (`conversation_id` text,`title` text NOT NULL DEFAULT \"\",`preview` text NOT NULL DEFAULT \"\",`step_count` integer NOT NULL DEFAULT 0,`last_modified_time` datetime NOT NULL,`workspace_uris` text NOT NULL,`status` text NOT NULL DEFAULT \"\",`source` text NOT NULL DEFAULT \"\",`project_id` text NOT NULL DEFAULT \"\",`agent_name` text NOT NULL DEFAULT \"\",`parent_conversation_id` text NOT NULL DEFAULT \"\",`nesting_depth` integer NOT NULL DEFAULT 0,`battle_id` text NOT NULL DEFAULT \"\",`winning_conversation_id` text NOT NULL DEFAULT \"\",`not_fully_idle` numeric NOT NULL DEFAULT false,`killed` numeric NOT NULL DEFAULT false,`last_user_input_time` datetime NOT NULL,`last_user_input_step_index` integer NOT NULL DEFAULT -1,`app_data_dir` text NOT NULL DEFAULT \"\",`raw_summary` blob,`group_id` text NOT NULL DEFAULT \"\",PRIMARY KEY (`conversation_id`))",
+        "sessions": [
+          {
+            "summary": {
+              "conversation_id": "5a112971-1914-4802-8a1b-472baf4402f4",
+              "title": "",
+              "preview": "first line",
+              "step_count": 2,
+              "last_modified_time": "2026-01-01 00:00:00.000000000+00:00",
+              "workspace_uris": "[\"file:///work-two\"]",
+              "status": "CASCADE_RUN_STATUS_IDLE",
+              "not_fully_idle": 0,
+              "killed": 0,
+              "last_user_input_time": "2026-01-01 00:00:00.000000000+00:00",
+              "app_data_dir": "antigravity-cli"
+            },
+            "transcriptPath": "brain/5a112971-1914-4802-8a1b-472baf4402f4/.system_generated/logs/transcript.jsonl",
+            "publicExpected": [
+              {
+                "role": "user",
+                "text": "first line\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nembedded synthetic line\n</ADDITIONAL_METADATA>\nend of prompt"
+              },
+              {
+                "role": "assistant",
+                "text": "synthetic-reply-oak"
+              }
+            ],
+            "wrapperAmbiguous": true,
+            "omittedStepIndexes": [],
+            "outgoingPolicy": "refuse-ambiguous-wrapper",
+            "transcriptFixture": "transcripts/print/5a112971-1914-4802-8a1b-472baf4402f4.jsonl"
+          },
+          {
+            "summary": {
+              "conversation_id": "601de81a-149d-448f-a40a-5692f977b451",
+              "title": "",
+              "preview": "plain synthetic prompt",
+              "step_count": 2,
+              "last_modified_time": "2026-01-01 00:00:00.000000000+00:00",
+              "workspace_uris": "[\"file:///work-one\"]",
+              "status": "CASCADE_RUN_STATUS_IDLE",
+              "not_fully_idle": 0,
+              "killed": 0,
+              "last_user_input_time": "2026-01-01 00:00:00.000000000+00:00",
+              "app_data_dir": "antigravity-cli"
+            },
+            "transcriptPath": "brain/601de81a-149d-448f-a40a-5692f977b451/.system_generated/logs/transcript.jsonl",
+            "publicExpected": [
+              {
+                "role": "user",
+                "text": "plain synthetic prompt"
+              },
+              {
+                "role": "assistant",
+                "text": "synthetic-reply-oak"
+              }
+            ],
+            "wrapperAmbiguous": false,
+            "omittedStepIndexes": [],
+            "outgoingPolicy": "requires-reviewed-wrapper-parser",
+            "transcriptFixture": "transcripts/print/601de81a-149d-448f-a40a-5692f977b451.jsonl"
+          }
+        ],
+        "lastConversations": {
+          "/work-one": "601de81a-149d-448f-a40a-5692f977b451",
+          "/work-two": "5a112971-1914-4802-8a1b-472baf4402f4"
+        },
+        "readOnlySnapshotUnchanged": true,
+        "terminalConsumptionCertified": false
+      },
+      {
+        "kind": "tui",
+        "summarySchema": "CREATE TABLE `conversation_summaries` (`conversation_id` text,`title` text NOT NULL DEFAULT \"\",`preview` text NOT NULL DEFAULT \"\",`step_count` integer NOT NULL DEFAULT 0,`last_modified_time` datetime NOT NULL,`workspace_uris` text NOT NULL,`status` text NOT NULL DEFAULT \"\",`source` text NOT NULL DEFAULT \"\",`project_id` text NOT NULL DEFAULT \"\",`agent_name` text NOT NULL DEFAULT \"\",`parent_conversation_id` text NOT NULL DEFAULT \"\",`nesting_depth` integer NOT NULL DEFAULT 0,`battle_id` text NOT NULL DEFAULT \"\",`winning_conversation_id` text NOT NULL DEFAULT \"\",`not_fully_idle` numeric NOT NULL DEFAULT false,`killed` numeric NOT NULL DEFAULT false,`last_user_input_time` datetime NOT NULL,`last_user_input_step_index` integer NOT NULL DEFAULT -1,`app_data_dir` text NOT NULL DEFAULT \"\",`raw_summary` blob,`group_id` text NOT NULL DEFAULT \"\",PRIMARY KEY (`conversation_id`))",
+        "sessions": [
+          {
+            "summary": {
+              "conversation_id": "731118a3-db24-464e-b389-9a3358818f16",
+              "title": "synthetic-reply-oak",
+              "preview": "synthetic-reply-oak",
+              "step_count": 2,
+              "last_modified_time": "2026-01-01 00:00:00.000000000+00:00",
+              "workspace_uris": "",
+              "status": "CASCADE_RUN_STATUS_IDLE",
+              "not_fully_idle": 0,
+              "killed": 0,
+              "last_user_input_time": "2026-01-01 00:00:00.000000000+00:00",
+              "app_data_dir": "antigravity-cli"
+            },
+            "transcriptPath": "brain/731118a3-db24-464e-b389-9a3358818f16/.system_generated/logs/transcript.jsonl",
+            "publicExpected": [
+              {
+                "role": "user",
+                "text": "synthetic-interactive-cedar"
+              },
+              {
+                "role": "assistant",
+                "text": "synthetic-reply-oak"
+              }
+            ],
+            "wrapperAmbiguous": false,
+            "omittedStepIndexes": [],
+            "outgoingPolicy": "requires-reviewed-wrapper-parser",
+            "transcriptFixture": "transcripts/tui/731118a3-db24-464e-b389-9a3358818f16.jsonl"
+          }
+        ],
+        "lastConversations": {
+          "/work-tui": "731118a3-db24-464e-b389-9a3358818f16"
+        },
+        "readOnlySnapshotUnchanged": true,
+        "terminalConsumptionCertified": false
+      },
+      {
+        "kind": "tool",
+        "summarySchema": "CREATE TABLE `conversation_summaries` (`conversation_id` text,`title` text NOT NULL DEFAULT \"\",`preview` text NOT NULL DEFAULT \"\",`step_count` integer NOT NULL DEFAULT 0,`last_modified_time` datetime NOT NULL,`workspace_uris` text NOT NULL,`status` text NOT NULL DEFAULT \"\",`source` text NOT NULL DEFAULT \"\",`project_id` text NOT NULL DEFAULT \"\",`agent_name` text NOT NULL DEFAULT \"\",`parent_conversation_id` text NOT NULL DEFAULT \"\",`nesting_depth` integer NOT NULL DEFAULT 0,`battle_id` text NOT NULL DEFAULT \"\",`winning_conversation_id` text NOT NULL DEFAULT \"\",`not_fully_idle` numeric NOT NULL DEFAULT false,`killed` numeric NOT NULL DEFAULT false,`last_user_input_time` datetime NOT NULL,`last_user_input_step_index` integer NOT NULL DEFAULT -1,`app_data_dir` text NOT NULL DEFAULT \"\",`raw_summary` blob,`group_id` text NOT NULL DEFAULT \"\",PRIMARY KEY (`conversation_id`))",
+        "sessions": [
+          {
+            "summary": {
+              "conversation_id": "784f7bcb-916b-4739-8421-0e4b72eeeebe",
+              "title": "",
+              "preview": "synthetic tool demonstration",
+              "step_count": 4,
+              "last_modified_time": "2026-01-01 00:00:00.000000000+00:00",
+              "workspace_uris": "[\"file:///work-tool\"]",
+              "status": "CASCADE_RUN_STATUS_IDLE",
+              "not_fully_idle": 0,
+              "killed": 0,
+              "last_user_input_time": "2026-01-01 00:00:00.000000000+00:00",
+              "app_data_dir": "antigravity-cli"
+            },
+            "transcriptPath": "brain/784f7bcb-916b-4739-8421-0e4b72eeeebe/.system_generated/logs/transcript.jsonl",
+            "publicExpected": [
+              {
+                "role": "user",
+                "text": "synthetic tool demonstration"
+              },
+              {
+                "role": "assistant",
+                "text": "synthetic-reply-oak"
+              }
+            ],
+            "wrapperAmbiguous": false,
+            "omittedStepIndexes": [
+              1,
+              2
+            ],
+            "outgoingPolicy": "requires-tool-omission-policy",
+            "transcriptFixture": "transcripts/tool/784f7bcb-916b-4739-8421-0e4b72eeeebe.jsonl"
+          }
+        ],
+        "lastConversations": {
+          "/work-tool": "784f7bcb-916b-4739-8421-0e4b72eeeebe"
+        },
+        "readOnlySnapshotUnchanged": true,
+        "terminalConsumptionCertified": false
+      }
+    ]
+  },
+  "loopbackEndpointCategories": [
+    "generate",
+    "generate",
+    "generate",
+    "generate",
+    "generate",
+    "generate",
+    "function-request",
+    "generate",
+    "generate",
+    "generate",
+    "generate"
+  ],
+  "normalization": [
+    "generated timestamps replaced",
+    "native metadata/settings bodies excluded",
+    "thinking value excluded; field presence retained",
+    "summary columns allowlisted; raw_summary omitted",
+    "synthetic UUIDs retained for exact within-capture identity"
+  ],
+  "limits": {
+    "realAccount": "unverified",
+    "platformsOtherThanLinuxX64": "unverified",
+    "toolsAndRichContent": "one local read_file carrier observed; GENERIC tool-result visibility and other tool/rich-content schemas unverified",
+    "nativeTui": "disk evidence only; bounded SIGTERM, no terminal consumption claim",
+    "stableItemIdentity": "session UUID plus observed step_index within this snapshot; rewind/rewrite unverified"
+  }
+}
