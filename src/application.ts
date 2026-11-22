@@ -73,8 +73,10 @@ const nativeProjection=(snapshot:NativeSnapshot):ContextSnapshot=>({ref:snapshot
 export async function runApplication(options:ApplicationOptions):Promise<void> {
   const env=options.env??process.env;const paths=await applicationPaths(env);const journal=await TransferJournal.open(paths.journal);
   const discovery=new AbortController();
+  let cache:Promise<SearchIndex|undefined>|undefined;
   try {
     const catalog=await NativeCatalog.create(env);
+    const searchCache=()=>cache??=SearchIndex.open({directory:paths.cache,sources:catalog.sources()},{load:false}).catch(()=>undefined);
     const prior=options.retry?journal.get(options.retry):undefined;
     if(prior?.deleted||prior?.deleting) throw new Error('Deleted transfer cannot be retried.');
     const recovered=prior?.archive?await readArchiveSnapshot(prior.archive):undefined;
@@ -107,7 +109,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
       ...(checkNotice ? { checkNotice: (signal: AbortSignal) => checkNotice(paths.root, signal) } : {}),
       query:async(query,signal,publish)=>{
         if(recoverySession) {const {messages,...hit}=recoverySession;return [{...hit,matches:[]}];}
-        return catalog.search(query,signal,discovery.signal,publish);
+        return catalog.search(query,signal,discovery.signal,publish,searchCache);
       },
       preview:async(source,signal)=>{const snapshot=await resolveSource(source,signal);return snapshot.items;},
       prepare:async(request,signal)=>{
@@ -250,7 +252,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         }
       },
     });
-  } finally {discovery.abort();journal.close();}
+  } finally {discovery.abort();await (await cache)?.close();journal.close();}
 }
 
 export async function runTransferCommand(args:readonly string[],env:NodeJS.ProcessEnv=process.env):Promise<string|undefined> {

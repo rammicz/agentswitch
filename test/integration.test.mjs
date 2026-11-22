@@ -40,10 +40,12 @@ const finish=[{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'
 test('cold picker shows folder and global results without building a transcript cache',async t=>{
  const f=await setup();
  t.after(()=>rm(f.root,{recursive:true,force:true}));
- const [result]=pty(f,[{wait:'Search:'},...list,{send:'other-folder-only'},{wait:'No matching sessions.'},
+ const [startup]=pty(f,[{wait:'Search:'},...list,{send:'\x03'}]);
+ assert.equal(startup.restored,true);
+ await assert.rejects(access(join(f.state,'search')),{code:'ENOENT'});
+ const [result]=pty(f,[...list,{send:'other-folder-only'},{wait:'No matching sessions.'},
   {send:'\t'},{wait:'Scope: global'},{wait:`Codex ${codexIds[2]}`},{send:'\x03'}]);
  assert.equal(result.restored,true);
- await assert.rejects(access(join(f.state,'search')),{code:'ENOENT'});
 });
 
 for(const [source,target]of [['codex','claude'],['claude','codex']]) test(`real CLI ${source}→${target}: exact consented redacted payload, cwd, disclosure and unchanged native bytes`,async()=>{

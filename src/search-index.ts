@@ -173,10 +173,33 @@ export class SearchIndex {
     this.operations = next.catch(() => {});
     return next;
   }
-  private transaction(write: () => void): void {
+  private transaction(write: () => void, reload = true): void {
     this.database.exec('BEGIN IMMEDIATE');
     try { write(); this.database.exec('COMMIT'); } catch (error) { this.database.exec('ROLLBACK'); throw error; }
-    this.reload();
+    if (reload) this.reload();
+    else this.dataVersion = undefined;
+  }
+
+  /** Cache a complete matched transcript without loading any other cached records. */
+  remember(session: Session): Promise<void> {
+    const source = this.sources.find(item => item.adapter.id === session.agent);
+    if (!source) throw new Error('Provider is not configured');
+    const {id, nativeId, agent, title, workspace, updatedAt, messages} = session;
+    const data = JSON.stringify({id, nativeId, agent, title, workspace, updatedAt,
+      messages: messages.map(({id, role, status, text}) => ({id, role, status, text}))});
+    return this.enqueue(async () => this.transaction(() => {
+      this.database.prepare('INSERT OR REPLACE INTO sessions(source, native_id, data) VALUES (?, ?, ?)').run(sourceKey(source), nativeId, data);
+    }, false));
+  }
+
+  async remembered(session: Session, text: string): Promise<SessionHit | undefined> {
+    await this.assertCurrentCache();
+    const source = this.sources.find(item => item.adapter.id === session.agent);
+    if (!source) return;
+    const row = this.database.prepare('SELECT data FROM sessions WHERE source=? AND native_id=?').get(sourceKey(source), session.nativeId);
+    if (!row) return;
+    const cached = JSON.parse(row.data as string) as Session;
+    return matchSession({...session, messages:cached.messages}, text);
   }
 
   /** Rehydrate and atomically replace selected provider generations, even at unchanged timestamps. */

@@ -43,7 +43,8 @@ export class NativeCatalog {
     this.warnings[agent]=codes.length||extra ? `${agent}: ${extra||'source warnings'}${codes.length?' ('+codes.slice(0,5).join(', ')+(codes.length>5?', …':'')+')':''}` : '';
   }
   /** List with metadata first and read one relevant transcript at a time for text searches. */
-  async search(query:SessionQuery, signal:AbortSignal, lifetime:AbortSignal, publish:(hits:readonly SessionHit[])=>void):Promise<readonly SessionHit[]> {
+  async search(query:SessionQuery, signal:AbortSignal, lifetime:AbortSignal, publish:(hits:readonly SessionHit[])=>void,
+    searchCache:()=>Promise<SearchIndex|undefined>):Promise<readonly SessionHit[]> {
     const text=query.text.trim();
     if(text) await setTimeout(120,undefined,{signal});
     const workspace=query.scope==='folder'?(await canonical(query.workspace)).normalize('NFC'):undefined;
@@ -81,9 +82,13 @@ export class NativeCatalog {
           if('metadataOnly' in session&&session.metadataOnly)continue;
           const history=await this.adapters[agent].readCatalogHistoryDetailed(session.nativeId).catch(()=>undefined);
           signal.throwIfAborted();
-          if(!history?.complete)continue;
-          const hit=matchSession({...session,messages:history.items},text);
+          const readable=history?.complete ? {...session,messages:history.items} : undefined;
+          const hit=readable ? matchSession(readable,text)
+            : await searchCache().then(cache=>cache?.remembered(session,text)).catch(()=>undefined);
+          signal.throwIfAborted();
           if(hit){
+            if(readable) await searchCache().then(cache=>cache?.remember(readable)).catch(()=>undefined);
+            signal.throwIfAborted();
             hits.set(session.id,hit);
             if(Date.now()-lastPublish>=200)update();
           }
