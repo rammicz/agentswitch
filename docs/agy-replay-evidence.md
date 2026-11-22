@@ -1,6 +1,6 @@
 # Antigravity 1.5.14 synthetic replay evidence
 
-On 2026-11-22, the exact Linux x64 Antigravity CLI **1.5.14**, verified against the publisher's SHA-512, completed owned synthetic turns against a loopback mock in a private network namespace. No Google account, genuine API key, personal session, installed agy, external model or native permission bypass was used. This evidence supplies [issue #14](https://github.com/rammicz/agentswitch/issues/14)'s prerequisite for [issue #9](https://github.com/rammicz/agentswitch/issues/9). The shipped [limited agy profile](agy-reader.md) remains unchanged.
+On 2026-11-22, the exact Linux x64 Antigravity CLI **1.5.14**, verified against the publisher's SHA-512, completed owned synthetic turns against a loopback mock in a private network namespace. No Google account, genuine API key, personal session, installed agy, external model or native permission bypass was used. This evidence supplies [issue #14](https://github.com/rammicz/agentswitch/issues/14)'s prerequisite for [issue #9](https://github.com/rammicz/agentswitch/issues/9). The [agy storage profile](agy-reader.md) documents the resulting reader and its supported boundaries.
 
 ## Retained evidence
 
@@ -44,13 +44,13 @@ brain/<native-uuid>/.system_generated/logs/transcript.jsonl
 cache/last_conversations.json
 ```
 
-A future adapter can investigate a local file reader without starting or opening another native session. Its required refusal boundaries follow.
+The local adapter reads these files without starting or opening another native session. Its refusal boundaries follow.
 
 1. Use an explicit read root, bounded files/rows, regular leaves, contained canonical paths, validated canonical UUIDs and a coherent before/after snapshot. Never read opaque conversation databases or native configuration for credentials. Reject changed files and summary WAL/SHM sidecars before an immutable database read. Plain SQLite `mode=ro` alone created native sidecars during this investigation. It is insufficient for the promised preservation boundary. Reading a profile with sidecars needs a separately validated snapshot design.
 2. Accept a single unambiguous absolute workspace URI from the catalog, or investigate a uniquely agreeing last-ID cache mapping when the catalog has none. The interactive sample establishes the need for this second association source. Refuse conflicting or multiple mappings, orphan logs and missing workspaces. Workspace inference from titles, cwd, prompt text or protobuf guesses is unsafe. A documented explicit user workspace choice would need separate policy and tests.
 3. Require observed idle status, `not_fully_idle: 0`, `killed: 0`, consistent step order/counts and completed records. Treat active or changing sessions as unavailable. Two quiet reads and an idle flag establish a bounded snapshot. Unrelated native clients can still write later. Open-session ACP replay can be empty even after a completed turn. Active native writers need a separately validated coordination policy.
 4. Recognize reviewed public records, explicitly account for excluded tool carriers, and require a proven unambiguous user wrapper. Exclude metadata/settings/thinking independently of public content. Refuse ambiguous delimiters, unsupported types, unexplained count gaps, missing public text or incomplete steps. Keep empty and incomplete results distinct. The nested-delimiter fixture is an explicit refusal case until a trustworthy boundary exists.
-5. Keep origin attribution and snapshot completeness visible. Never manufacture native history, import these fixtures into a personal profile, or equate successful process launch with consumption. This prerequisite implements no production adapter, search, native resume or outgoing transfer.
+5. Keep origin attribution and snapshot completeness visible. Never manufacture native history, import these fixtures into a personal profile, or equate successful process launch with consumption. Issue #14 supplies the evidence. Issue #9 implements the local reader and confirmed outgoing flow.
 
 ## Reproduction
 
@@ -71,4 +71,4 @@ python3 test/fixtures/agy/regenerate.py \
 
 The output directory must not exist. The script checks the archive hash and single regular executable member, then runs it through `bwrap --unshare-all --clearenv`. Only system binaries/libraries, the capture script and that executable enter read-only. Profiles and workspaces are disposable tmpfs directories. A loopback-only mock and a synthetic key are created inside the namespace. No host profile, host workspace, account socket or external network interface is carried in. The PTY case ends after persisted synthetic output, or at its time bound. Only reduced JSON/JSONL leaves the namespace. Review fresh output before replacing committed fixtures. Generated UUIDs and some native metadata can differ between runs.
 
-Real-account authentication, permissions for tools beyond the synthetic local-file case, in-flight writer safety, macOS/Windows runtimes and producers other than the pinned 1.5.14 binary remain unverified. Public history and outgoing handoffs remain unavailable in the shipped adapter until #9 implements and verifies its chosen contract.
+Real-account authentication, permissions for tools beyond the synthetic local-file case, in-flight writer safety, macOS/Windows runtimes and producers other than the pinned 1.5.14 binary remain unverified. The shipped reader implements the bounded local public-text contract described in [the agy profile](agy-reader.md).

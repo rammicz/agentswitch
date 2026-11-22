@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { rollout,writeRollout,completed,ids } from './fixtures/codex/native.mjs';
 import { entry,encode,ids as claudeIds } from './fixtures/claude/native.mjs';
 import { TransferJournal } from '../dist/transfer-journal.js';
+import { fixture as agyFixture } from './fixtures/agy/native.mjs';
 const repo=resolve('.'),id='12345678-1234-1234-1234-123456789abc';
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(t) {
@@ -22,12 +23,41 @@ async function setup(t) {
  const files=[cache,codexPath,claudePath];return {root,cwd,other,cache,bin,state,env,files,before:await Promise.all(files.map(hash))};
 }
 function pty(f,actions,args=[],all=false) {const r=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,rows:60,columns:210}),timeout:40000,maxBuffer:8*1024*1024});assert.equal(r.status,0,r.stderr);return all?JSON.parse(r.stdout):JSON.parse(r.stdout)[0];}
-const select=source=>[{wait:'Enter preview'},{send:source==='agy'?id:source==='codex'?'Codex fixture':'Claude fixture'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
+const select=(source,publicText=false)=>[{wait:'Enter preview'},{send:source==='agy'?(publicText?'Agy public fixture':id):source==='codex'?'Codex fixture':'Claude fixture'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
 const target=[{send:'\x1b[D'},{wait:'Target: grok'},{send:'\x1b[D'},{wait:'Target: agy'}];
 const clear=[{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request: '}];
 const finish=[{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'hello\n'},{wait:'INPUT "hello\\n"'},{send:'quit\n'},{wait:'uncertain — process exited'}];
 const launches=async f=>(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse);
 async function records(f){const j=await TransferJournal.open(join(f.state,'transfers'));try{return j.list();}finally{j.close();}}
+async function publicSource(f,options={}) {
+ const native=await agyFixture(f.env.AGENTSWITCH_AGY_ROOT,f.cwd,{nativeId:id,...options});
+ f.files.push(native.path,native.history);f.before=await Promise.all(f.files.map(hash));return native;
+}
+for(const destination of ['codex','claude'])test(`default CLI agy→${destination} transfers reviewed public text and keeps excluded native content private`,async t=>{
+ const f=await setup(t);const native=await publicSource(f,{kind:'tool'});f.env.RUNTIME_TARGET=destination;
+ const r=pty(f,[...select('agy',true),...(destination==='claude'?[{send:'\x1b[C'},{wait:'Target: claude'}]:[]),{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions: 1'},{send:'\r'},{wait:'Excluded native tool step indexes: 1, 2'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'hello\n'},{wait:'INPUT "hello\\n"'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ assert.equal(r.restored,true);const [launch]=await launches(f);assert.equal(launch.cwd,f.cwd);assert.deepEqual(launch.tty,[true,true,true]);const wire=launch.args.at(-1),payload=JSON.parse(wire);
+ assert.equal(payload.history.length,2);assert.ok(payload.history.every(x=>x.origin.agent==='agy'));assert.match(wire,/\[REDACTED\]/);assert.doesNotMatch(wire,/PRIVATE_|NEEDLE_SECRET|GENERIC|EXCLUDED_TOOL/);
+ const [record]=await records(f);assert.equal(record.state,'uncertain');assert.equal(record.completeness,'complete');const {readArchiveSnapshot}=await import('../dist/archive.js');const archive=await readArchiveSnapshot(record.archive);assert.equal(archive.items.length,2);assert.doesNotMatch(JSON.stringify(archive),/PRIVATE_|NEEDLE_SECRET/);assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
+ const before=(await launches(f)).length;pty(f,[{wait:'EXPLICIT FRESH RECOVERY'},{wait:'Enter preview'},{send:'\x03'}],['transfers','retry',record.id]);assert.equal((await launches(f)).length,before);
+});
+test('agy public outgoing cancellation, omission retrieval and explicit workspace override use shared consent flow',async t=>{
+ const f=await setup(t);await publicSource(f,{user:'Agy public fixture '+'large '.repeat(5000)});f.env.RUNTIME_TARGET='claude';
+ pty(f,[...select('agy',true),{send:'\x1b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Exact initial user prompt'},{send:'\x03'}]);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
+ pty(f,[...select('agy',true),{send:'\x1b[C'},{wait:'Target: claude'},{send:'w'},{wait:'Explicit workspace override'},{send:f.other+'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ const [launch]=await launches(f);assert.equal(launch.cwd,f.other);const payload=JSON.parse(launch.args.at(-1));assert.ok(Buffer.byteLength(launch.args.at(-1))<=16384);assert.equal(payload.omissions.count,1);const [record]=await records(f);const {readArchiveSnapshot}=await import('../dist/archive.js');const archive=await readArchiveSnapshot(record.archive);assert.ok(archive.items.some(x=>x.text.includes('large '.repeat(100))));assert.equal(record.omittedItemIds.length,1);
+});
+test('agy public source revalidation blocks changed native bytes before publishing or launch',async t=>{
+ const f=await setup(t);const native=await publicSource(f);f.env.RUNTIME_TARGET='claude';const r=pty(f,[...select('agy',true),{send:'\x1b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Exact initial user prompt'},{append:{path:native.history,text:'{}\n'}},{send:'\r'},{wait:'Source changed after preview'}]);assert.equal(r.code,1);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
+});
+test('agy complete local public source preserves exact empty-request native open',async t=>{
+ const f=await setup(t);await publicSource(f);pty(f,[...select('agy',true),...target,...clear,{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ assert.deepEqual((await launches(f))[0].args,['--conversation',id]);const [record]=await records(f);assert.equal(record.archive,null);assert.equal(record.prompt,'');assert.equal(record.completeness,'complete');assert.equal(record.targetNativeId,null);
+});
+test('agy outgoing missing target refuses preparation without archive, journal or launch',async t=>{
+ const f=await setup(t);await publicSource(f);await unlink(join(f.bin,'claude'));f.env.PATH=f.bin+':'+dirname(process.execPath)+':/usr/bin:/bin';
+ pty(f,[...select('agy',true),{send:'\x1b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'not found or is not executable'},{send:'\x03'}]);await assert.rejects(access(f.env.RUNTIME_LOG));await assert.rejects(access(join(f.state,'archives')));assert.equal((await records(f)).length,0);
+});
 for(const source of ['codex','claude'])test(`default CLI ${source}→agy uses reviewed bounded redacted context and inherited terminal`,async t=>{
  const f=await setup(t);const r=pty(f,[...select(source),...target,{send:'c'},{wait:'Current request (sent separately'},{send:'\x15--literal $(touch sentinel); `echo no` NEEDLE_SECRET\r'},{wait:'Current request: --literal'},{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions: 1'},...finish]);
  assert.equal(r.code,0);assert.equal(r.restored,true);assert.equal(r.sampledWhileAlive,true);const [launch]=await launches(f);assert.equal(launch.cwd,f.cwd);assert.deepEqual(launch.tty,[true,true,true]);assert.equal(launch.args.length,2);assert.equal(launch.args[0],'--prompt-interactive');

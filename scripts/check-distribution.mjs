@@ -208,6 +208,11 @@ try {
     try {command(process.execPath,['--test','--test-name-pattern=^(default CLI .*→agy|agy native open requires)',join(root,'test/agy-integration.test.mjs')],root);}
     finally {delete env.AGENTSWITCH_TEST_ENTRY;}
   });
+  checked('installed Antigravity outgoing public-text transfers use synthetic local storage and fake targets',()=>{
+    env.AGENTSWITCH_TEST_ENTRY=join(installed,'dist/cli.js');
+    try {command(process.execPath,['--test','--test-name-pattern=^default CLI agy→',join(root,'test/agy-integration.test.mjs')],root);}
+    finally {delete env.AGENTSWITCH_TEST_ENTRY;}
+  });
   checked('installed Grok four-direction transfers and empty-request native resume use synthetic roots and fake targets',()=>{
     env.AGENTSWITCH_TEST_ENTRY=join(installed,'dist/cli.js');
     try {command(process.execPath,['--test','--test-name-pattern=^(default CLI .*→|Grok native requires)',join(root,'test/grok-integration.test.mjs')],root);}

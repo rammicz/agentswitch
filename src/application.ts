@@ -54,7 +54,7 @@ export async function applicationPaths(env: NodeJS.ProcessEnv=process.env): Prom
   return {root:canonical,cache:join(canonical,'search'),archives:join(canonical,'archives'),journal:join(canonical,'transfers')};
 }
 
-interface SourceSnapshot { runtime: RuntimeSource; items: readonly HistoryItem[]; complete: boolean; fingerprint: string; sourceKey: string; context?:ContextRef; retained?:boolean; itemTurns?:readonly NativeItemTurn[] }
+interface SourceSnapshot { runtime: RuntimeSource; items: readonly HistoryItem[]; complete: boolean; fingerprint: string; sourceKey: string; context?:ContextRef; retained?:boolean; itemTurns?:readonly NativeItemTurn[]; metadataOnly?:boolean; projectionNotice?:string }
 interface Dispatch { launch: LaunchPlan; handoff: HandoffPlan | null; intent: TransferIntent; fingerprint: string; source: SessionSource; targetFingerprint?:string; targetSource?:SessionSource }
 export interface ApplicationOptions { workspace: string; scope?: Scope; env?: NodeJS.ProcessEnv; retry?: string }
 // A JSON string gives an unambiguous, lossless representation even when the wire
@@ -83,7 +83,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         return {runtime:{...prior.source,workspace:prior.workspace,nativeResume:'unknown'},items:recovered?.items??[],complete:prior.completeness==='complete',fingerprint:digest(JSON.stringify([prior.payloadHash,recovered])),sourceKey:prior.sourceKey};
       }
       const snapshot:NativeSnapshot=await catalog.snapshot(source,signal);
-      return {runtime:snapshot.runtime,items:snapshot.history.items,complete:snapshot.history.complete,fingerprint:snapshot.fingerprint,sourceKey:snapshot.sourceKey,context:snapshot.context,retained:snapshot.retained,...(snapshot.history.itemTurns?{itemTurns:snapshot.history.itemTurns}:{})};
+      return {runtime:snapshot.runtime,items:snapshot.history.items,complete:snapshot.history.complete,fingerprint:snapshot.fingerprint,sourceKey:snapshot.sourceKey,context:snapshot.context,retained:snapshot.retained,...(snapshot.metadataOnly!==undefined?{metadataOnly:snapshot.metadataOnly}:{}),...(snapshot.projectionNotice?{projectionNotice:snapshot.projectionNotice}:{}),...(snapshot.history.itemTurns?{itemTurns:snapshot.history.itemTurns}:{})};
     };
     let activeAttempt:string|undefined;
     const runtime=createRuntime({env,getSource:async(source,signal)=>(await resolveSource(source,signal)).runtime,
@@ -105,10 +105,10 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
       preview:async(source,signal)=>{const snapshot=await resolveSource(source,signal);return snapshot.items;},
       prepare:async(request,signal)=>{
         const snapshot=await resolveSource(request.source,signal);
-        if(!snapshot.complete && snapshot.runtime.agent!=='agy') throw new Error('Selected public history is incomplete. Restore the source before transferring; no partial snapshot has been certified.');
+        if(!snapshot.complete && !(snapshot.runtime.agent==='agy'&&snapshot.metadataOnly)) throw new Error('Selected public history is incomplete. Restore the source before transferring; no partial snapshot has been certified.');
         const source=publicIdentity(snapshot.runtime);sourceKeys.set(`${source.agent}:${source.nativeId}`,snapshot.sourceKey);
         const redactions=request.redactions??[];
-        if(source.agent==='agy') {
+        if(source.agent==='agy'&&snapshot.metadataOnly) {
           if(prior||request.fresh||request.target!=='agy')throw new Error('Antigravity cache contains metadata only. Public history is unavailable for outgoing or fresh handoffs; open the exact native session instead.');
           if(redactions.length)throw new Error('Native open sends no history. Redactions cannot alter existing provider history.');
           const prepared=await runtime.prepare(request,request.currentRequest===undefined?{}:{currentRequest:request.currentRequest},signal);
@@ -177,10 +177,10 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
           } catch { /* A missing/replaced/changed target receives a reviewed fresh fallback. */ }
         }
         const choice=chooseContinuation(observed,contexts,validated,request.target,await realpath(request.workspace.path));
-        const ordinaryNative=!prior&&!request.fresh&&(!['opencode','grok'].includes(source.agent)||request.workspace.kind==='source')&&!observed.reason&&source.agent===request.target&&snapshot.runtime.nativeResume==='compatible';
+        const ordinaryNative=!prior&&!request.fresh&&(!['opencode','agy','grok'].includes(source.agent)||request.workspace.kind==='source')&&!observed.reason&&source.agent===request.target&&snapshot.runtime.nativeResume==='compatible';
         let target=ordinaryNative?null:choice.target;
         let fresh=!ordinaryNative&&!target;
-        let reason=sourceRecovery?'Required ancestry is unavailable. Explicit fresh recovery includes only available active source and known included echoes; unavailable application ancestry is excluded.':ordinaryNative?(['opencode','grok'].includes(source.agent)?`Open the selected existing ${source.agent} session without an initial request.`:'Resume the selected source; send only the new current request.'):choice.reason;
+        let reason=sourceRecovery?'Required ancestry is unavailable. Explicit fresh recovery includes only available active source and known included echoes; unavailable application ancestry is excluded.':ordinaryNative?(['opencode','agy','grok'].includes(source.agent)?`Open the selected existing ${source.agent} session without an initial request.`:'Resume the selected source; send only the new current request.'):choice.reason;
         const makeHandoff=(items:readonly HistoryItem[])=>createHandoffPlan({directory:paths.archives,source,items,currentRequest:request.currentRequest??'Continue the task from this conversation.',redactions,completeness:'complete'});
         let handoff=ordinaryNative?null:makeHandoff(target?choice.items:observed.items);
         // Use the same redaction implementation for native current-request-only transport.
@@ -198,10 +198,11 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         return {plan:{launch:prepared.plan,handoff,intent,fingerprint:snapshot.fingerprint,source,...(targetSnapshot?{targetFingerprint:targetSnapshot.fingerprint,targetSource:publicIdentity(targetSnapshot.runtime)}:{})},summary:{...prepared.summary,previewLines:[
           ...(prior?[`Earlier delivery: ${prior.state}; possible duplicate context. This is a NEW fresh attempt.`]:[]),
           reason,
+          ...(snapshot.projectionNotice?[snapshot.projectionNotice]:[]),
           ...(source.agent==='opencode'&&ordinaryNative?['OpenCode opens the exact native session without an initial request. Type the next request in its native terminal.']:[]),
           ...(target?[`Selected history source: ${source.agent} ${source.nativeId}. Actual resumed target: ${target.agent} ${target.nativeId}.`]:[]),
           ...(redactions.length?[handoff?'Selected history redactions require a new context; they cannot erase content already retained by an earlier native context.':'Redactions apply only to this new request. Earlier native context remains retained by its provider.']:[]),
-          `Disclosure: ${request.target} receives ${handoff?'selected public history and the current request':source.agent==='opencode'?'no initial request; its existing native history remains in the selected session':'only the new current request; native history stays with its existing provider'} under its own account and data policies.`,
+          `Disclosure: ${request.target} receives ${handoff?'selected public history and the current request':['opencode','agy','grok'].includes(source.agent)?'no initial request; its existing native history remains in the selected session':'only the new current request; native history stays with its existing provider'} under its own account and data policies.`,
           'Hidden reasoning, credentials and native permissions do not transfer. No historical commands are replayed.',
           'Process launch/exit is not proof of prompt consumption. Delivery remains uncertain without a trusted receipt.',
           prepared.plan.observer==='codex-hooks'?'Codex launch-local submit/Stop observation is conditional on native hook enablement, trust and managed policy. Existing callbacks and permissions remain native.':'No supported native receipt transport here. This launch cannot advance accepted coverage.',

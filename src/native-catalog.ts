@@ -13,7 +13,7 @@ import type { ContextRef } from './continuity.js';
 const agents: readonly AgentId[] = ['codex','claude','opencode','agy','grok'];
 const canonical = async (path: string): Promise<string> => realpath(resolve(path)).catch(()=>resolve(path));
 const harmless = new Set(['workspace-unavailable','metadata-unavailable','metadata-schema','metadata-unstable','untested-producer']);
-export interface NativeSnapshot { session: CodexSession | ClaudeSession | OpenCodeSession | AgySession | GrokSession; history: CodexHistory; fingerprint: string; runtime: RuntimeSource; sourceKey: string; context:ContextRef; retained:boolean }
+export interface NativeSnapshot { session: CodexSession | ClaudeSession | OpenCodeSession | AgySession | GrokSession; history: CodexHistory; fingerprint: string; runtime: RuntimeSource; sourceKey: string; context:ContextRef; retained:boolean; metadataOnly?:boolean; projectionNotice?:string }
 
 /** Captures native quality before committing generations; healthy siblings remain searchable. */
 export class NativeCatalog {
@@ -54,15 +54,20 @@ export class NativeCatalog {
         let degraded=isDegraded();
         const healthy:Session[]=[];
         for(const session of sessions) {
-          if(agent==='agy'){healthy.push(session);continue;}
+          if(agent==='agy'&&'metadataOnly' in session&&session.metadataOnly){healthy.push(session);continue;}
           const history=await this.adapters[agent].readCatalogHistoryDetailed(session.nativeId);
           if(!history.complete) {degraded=true;continue;}
-          healthy.push({...session,messages:history.items});
+          let title=session.title;
+          if(agent==='agy') {
+            const line=history.items.find(item=>item.role==='user')?.text.split(/\r?\n/).find(line=>line.trim());
+            if(line)title=Array.from(line.trim()).slice(0,100).join('');
+          }
+          healthy.push({...session,title,messages:history.items});
         }
         degraded ||= isDegraded();
         this.staged.set(agent,new Map(healthy.map(session=>[session.nativeId,session])));
         await index.refresh(agent,{preserveMissing:degraded});
-        this.report(agent,agent==='agy'?'metadata only; last cached IDs, no public transcript or full inventory':degraded?'degraded source; earlier entries retained, healthy sessions refreshed':'');
+        this.report(agent,agent==='agy'?'public text from quiescent local histories. Sparse cached IDs remain metadata only':degraded?'degraded source; earlier entries retained, healthy sessions refreshed':'');
       } catch {
         this.warnings[agent]=`${agent}: refresh failed; previous search data retained`;
       }
@@ -73,12 +78,12 @@ export class NativeCatalog {
     const session=(await this.adapters[source.agent].discover()).find(session=>session.nativeId===source.nativeId&&session.id===source.id);
     if(!session) {this.report(source.agent,'selected history unavailable; cached entry may be stale');throw new Error('Selected source is unavailable. Refresh or restore its native history.');}
     const history:CodexHistory=await this.adapters[source.agent].readHistoryDetailed(source.nativeId);
-    this.report(source.agent,source.agent==='agy'?'metadata only; native open available, outgoing public history unavailable':history.complete?'':'selected public history incomplete; transfer blocked');signal?.throwIfAborted();
+    this.report(source.agent,source.agent==='agy'&&'metadataOnly' in session&&session.metadataOnly?'metadata only. Native open available, outgoing public history unavailable':history.complete?'':'selected public history incomplete. Transfer blocked');signal?.throwIfAborted();
     const producer='producerVersion' in session?session.producerVersion:undefined;
     const compatible=session.agent==='grok'?true:session.agent==='agy'?true:session.agent==='opencode'?producer==='1.19.6':session.agent==='codex' ? producer==='0.171.0' : !producer||producer==='2.1.330';
     const runtime:RuntimeSource={agent:session.agent,id:session.id,nativeId:session.nativeId,workspace:session.workspace,nativeResume:compatible?'compatible':'unknown'};
     const sourceKey=digest(JSON.stringify([source.agent,this.rootKeys[source.agent],source.nativeId]));
     const context:ContextRef={...runtime,root:this.rootKey(source.agent),incarnation:history.incarnation??'unknown',sourceKey};
-    return {session,history,runtime,fingerprint:digest(JSON.stringify([runtime,history.items,history.complete,context.incarnation,history.retained,history.itemTurns])),sourceKey,context,retained:compatible&&history.retained===true};
+    return {session,history,runtime,fingerprint:digest(JSON.stringify([runtime,history.items,history.complete,context.incarnation,history.retained,history.itemTurns,'snapshotIdentity' in history?history.snapshotIdentity:null,'excludedSteps' in history?history.excludedSteps:[]])),sourceKey,context,retained:compatible&&history.retained===true,...(source.agent==='agy'?{metadataOnly:'metadataOnly' in session&&session.metadataOnly===true,projectionNotice:`Antigravity public-text projection excludes internal metadata, settings, thinking and raw tool data. Excluded native tool step indexes: ${'excludedSteps' in history&&Array.isArray(history.excludedSteps)&&history.excludedSteps.length?history.excludedSteps.join(', '):'none'}. Archive completeness describes this public-text projection.`}:{})};
   }
 }

@@ -12,7 +12,7 @@ export const agentCatalog = [
   { id: 'codex', label: 'Codex', status: 'planned' },
   { id: 'claude', label: 'Claude Code', status: 'planned' },
   { id: 'opencode', label: 'OpenCode', status: 'fixture-tested' },
-  { id: 'agy', label: 'Antigravity CLI', status: 'target-and-metadata' },
+  { id: 'agy', label: 'Antigravity CLI', status: 'fixture-tested' },
   { id: 'grok', label: 'Grok Build', status: 'fixture-tested' },
 ] as const;
 
