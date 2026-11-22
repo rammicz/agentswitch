@@ -57,4 +57,4 @@ The linked documentation records evidence and limitations for these delivered pr
 | [Antigravity CLI](agy-reader.md) | Observed 1.5.14 quiescent local public-text shape, incoming/outgoing fresh transfers and sparse metadata/confirmed empty-request native open. Real-account and external provider consumption remain unverified. |
 | [Grok Build](grok-reader.md) | Public v1 source schema and `grok 1.0.45 (c33bff361a6f)` runtime build are independently pinned. Empty-request native open and fresh transport are offline tested. Storage equivalence and authenticated consumption remain unverified. |
 
-Linux and macOS are the initial agentswitch platforms. Additional hosts require agentswitch validation for their OS/architecture. Windows needs validation. See [runtime constraints](runtime.md), [architecture](architecture.md) and [integration limits](integration.md).
+The CLI targets Linux, macOS and native Windows. Each adapter keeps its own provider version, storage and native runtime limits. See [platform verification](releasing.md), [runtime constraints](runtime.md) and [integration limits](integration.md).

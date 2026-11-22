@@ -30,6 +30,8 @@ agentswitch.cmd
 
 On Windows, add the directory printed by `npm.cmd prefix --global` to your user `PATH` if the command is unavailable. Use `agentswitch.cmd` in PowerShell when execution policy restricts npm's PowerShell shim. Install each provider's compatible Windows executable separately. The launcher recognizes native EXEs and the supported npm shims for Codex, Claude Code, and OpenCode. The Codex receipt hook is available on Linux and macOS. Windows keeps delivery status uncertain after launch.
 
+Windows stores application data under `%LOCALAPPDATA%\agentswitch` by default and inherits that folder's Windows access controls. Use a directory private to your account if you override the state location.
+
 Remove the installed command with:
 
 ```sh

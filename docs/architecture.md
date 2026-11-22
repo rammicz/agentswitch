@@ -32,7 +32,7 @@ Restore terminal state before handing stdin/stdout to the child. Propagate exit 
 
 ## Scope and verification
 
-Initial targets are Linux and macOS. Windows needs explicit subprocess, terminal and path validation. Parsers and planners use sanitized fixtures with no paid provider calls. TUI behavior and child launch use PTY tests and fake agent executables; an optional opt-in provider smoke test documents tested versions without consuming quotas in CI. Persistent state must be tested for crash recovery and concurrent processes.
+The CLI targets Linux, macOS and native Windows. The Windows launcher uses console modes and supported npm entry points. Parsers and planners use sanitized fixtures. Linux and macOS run PTY tests, and Windows runs an installed-package ConPTY smoke test with a fake provider. Persistent state tests cover crash recovery and concurrent processes. [Platform verification](releasing.md)
 
 ## Picker service boundary
 

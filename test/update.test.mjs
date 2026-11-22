@@ -70,16 +70,26 @@ test('explicit update validates the tarball and replaces the same global npm ins
   const { directory, root, metadata, executable } = await fixture(t);
   const input = join(directory, 'candidate');
   await mkdir(join(input, 'dist'), { recursive: true });
-  await writeFile(join(input, 'package.json'), JSON.stringify({
-    name: 'agentswitch', version: '0.1.0-dev.1', bin: { agentswitch: 'dist/cli.js' },
-    scripts: { postinstall: 'exit 99' },
-  }));
   await writeFile(join(input, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log("updated");\n', { mode: 0o755 });
   const npm = await realpath(join(dirname(process.execPath),
     process.platform === 'win32' ? 'node_modules/npm/bin/npm-cli.js' : 'npm'));
-  const pack = spawnSync(process.execPath, [npm, 'pack', '--ignore-scripts', '--json', input], { cwd: directory, encoding: 'utf8' });
-  assert.equal(pack.status, 0, pack.stderr);
-  const bytes = await readFile(join(directory, JSON.parse(pack.stdout)[0].filename));
+  const runNpm = (...args) => {
+    const run = spawnSync(process.execPath, [npm, ...args], { cwd: directory, encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    return run.stdout;
+  };
+  const pack = async version => {
+    await writeFile(join(input, 'package.json'), JSON.stringify({
+      name: 'agentswitch', version, bin: { agentswitch: 'dist/cli.js' },
+      scripts: { postinstall: 'exit 99' },
+    }));
+    return join(directory, JSON.parse(runNpm('pack', '--ignore-scripts', '--json', input))[0].filename);
+  };
+  // Start from an npm-owned package and command shim, especially on Windows.
+  await rm(root, { recursive: true });
+  await rm(process.platform === 'win32' ? join(directory, 'agentswitch.cmd') : executable);
+  runNpm('install', '--global', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', directory, await pack('0.1.0-dev.0'));
+  const bytes = await readFile(await pack('0.1.0-dev.1'));
   const candidate = release('0.1.0-dev.1', bytes);
   const request = async url => url === candidate.assets[0].browser_download_url
     ? new Response(bytes) : Response.json([candidate]);
@@ -88,7 +98,8 @@ test('explicit update validates the tarball and replaces the same global npm ins
   await assert.rejects(updateInstallation(root, request), /SHA-256/);
   assert.equal(JSON.parse(await readFile(metadata, 'utf8')).version, '0.1.0-dev.0');
   candidate.assets[0].digest = originalDigest;
-  assert.match(await updateInstallation(root, request), /Updated agentswitch/);
+  const result = await updateInstallation(root, request).catch(error => assert.fail(error.cause?.stderr || String(error)));
+  assert.match(result, /Updated agentswitch/);
   assert.equal(JSON.parse(await readFile(metadata, 'utf8')).version, '0.1.0-dev.1');
   assert.equal(spawnSync(process.execPath, [executable], { encoding: 'utf8' }).stdout.trim(), 'updated');
   assert.match(await updateInstallation(root, request), /No newer/);

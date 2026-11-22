@@ -197,7 +197,7 @@ export async function updateInstallation(packageRoot: string, request: Fetch = f
         '--cache', join(directory, 'cache'), '--', tarball], {
         cwd: directory, timeout: 60_000,
         env,
-      }).catch(() => { throw new Error('npm could not install the verified release. Check permissions and rerun agentswitch update.'); });
+      }).catch(cause => { throw new Error('npm could not install the verified release. Check permissions and rerun agentswitch update.', { cause }); });
       const staging = join(directory, 'staging');
       await install(staging);
       const npmRoot = join(staging, modulesRelative);

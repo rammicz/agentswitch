@@ -64,8 +64,6 @@ def run(config):
     result = pseudo(Coord(180, 50), input_read, output_write, 0, c.byref(console))
     if result != 0:
         raise OSError(f"CreatePseudoConsole failed ({result:#x})")
-    close(input_read)
-    close(output_write)
     size = c.c_size_t()
     init(None, 1, 0, c.byref(size))
     buffer = c.create_string_buffer(size.value)
@@ -89,11 +87,17 @@ def run(config):
     try:
         start = StartupEx()
         start.startup.cb = c.sizeof(start)
+        # Null handles with STARTF_USESTDHANDLES let the pseudoconsole replace
+        # the redirected standard handles of this CI runner.
+        start.startup.flags = 0x100
         start.attributes = c.cast(buffer, c.c_void_p)
         checked(update(buffer, 0, 0x00020016, console, c.sizeof(console), None, None))
         cmdline = c.create_unicode_buffer(subprocess.list2cmdline(config["command"]))
         checked(create(config["command"][0], cmdline, None, None, False, 0x00080000, None,
                        config["cwd"], c.byref(start), c.byref(process)))
+        close(input_read)
+        close(output_write)
+        input_read = output_write = None
         output = bytearray()
         cursor = 0
         for action in config["actions"]:
@@ -119,6 +123,10 @@ def run(config):
         checked(status(process.process, c.byref(exit_code)))
         return exit_code.value
     finally:
+        if input_read:
+            close(input_read)
+        if output_write:
+            close(output_write)
         if process.process:
             if wait(process.process, 0) != 0:
                 terminate(process.process, 1)

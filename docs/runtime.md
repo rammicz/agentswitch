@@ -82,12 +82,12 @@ handoff. No owner is killed and no lock is stolen.
 
 Call `launch(plan)` only after the picker has restored its terminal. All three
 standard descriptors must be terminals and stdin must no longer be raw. Linux and
-macOS require the standard `stty` utility for termios snapshot/restoration; no
-shell or extra npm runtime dependency is used. Input remains available for normal
-interactive use. Completion restores termios and shows the cursor/exits the
-alternate screen; temporary signal handlers are removed and ownership is released.
+macOS use `stty` to save and restore termios. Windows uses the system Windows PowerShell
+to save and restore the attached console's input and output modes. The child keeps
+the inherited terminal and receives literal arguments. Completion restores the console
+and shows the cursor. Temporary signal handlers are removed and ownership is released.
 
-Parent SIGINT/SIGTERM forwarding waits 75 ms so ordinary terminal-generated Ctrl+C,
+On Unix, parent SIGINT/SIGTERM forwarding waits 75 ms so ordinary terminal-generated Ctrl+C,
 which reaches both foreground processes, can terminate the child without a second
 signal. Direct parent-only signals are forwarded if the child remains running.
 Node does not expose signal sender metadata: a custom native signal handler that
