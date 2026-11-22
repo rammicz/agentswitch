@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { access, realpath, stat } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { openCodeNativeId } from './adapters/opencode.js';
+import { windowsConsoleMode, windowsNpmEntry } from './windows-runtime.js';
 import type { AgentId } from './domain.js';
 import type { ContinuationRequest, PreparedContinuation, SessionSource } from './tui/contracts.js';
 
@@ -112,19 +113,33 @@ async function executableIdentity(path: string): Promise<string> {
     return `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
   } catch { return fail('EXECUTABLE_UNAVAILABLE', 'Target executable is unavailable or not executable. Install the target independently and prepare again.'); }
 }
-async function resolveExecutable(command: string, env: NodeJS.ProcessEnv): Promise<string> {
+async function resolveExecutable(command: string, env: NodeJS.ProcessEnv, agent: AgentId): Promise<string> {
   if (command.includes('\0')) return fail('EXECUTABLE_UNAVAILABLE', 'Invalid target executable.');
-  const candidates = isAbsolute(command) ? [command] : command.includes('/') ? [] : (env.PATH ?? '').split(delimiter).filter(isAbsolute).map(path => join(path, command));
+  const windows = process.platform === 'win32';
+  const path = windows ? Object.entries(env).find(([name]) => name.toLowerCase() === 'path')?.[1] : env.PATH;
+  const commands = windows && !/\.(?:exe|cmd|[cm]?js)$/i.test(command) ? [command + '.exe', command + '.cmd'] : [command];
+  const candidates = isAbsolute(command) ? commands : /[\\/]/.test(command) ? [] :
+    (path ?? '').split(delimiter).filter(isAbsolute).flatMap(directory => commands.map(name => join(directory, name)));
   for (const candidate of candidates) {
-    try { const path = await realpath(candidate); await executableIdentity(path); return path; } catch { /* Try the next PATH entry. */ }
+    try {
+      const path = windows && /\.cmd$/i.test(candidate) ? await windowsNpmEntry(candidate, agent) : await realpath(candidate);
+      if (!path) continue;
+      await executableIdentity(path);
+      return path;
+    } catch { /* Try the next PATH entry. */ }
   }
   return fail('EXECUTABLE_UNAVAILABLE', 'Target executable was not found or is not executable. Install it independently and prepare again.');
+}
+function invocation(executable: string, args: readonly string[]): [string, string[]] {
+  return process.platform === 'win32' && !/\.exe$/i.test(executable)
+    ? [process.execPath, [executable, ...args]] : [executable, [...args]];
 }
 /** Only --version/--help are permitted probes; bound time and combined output. */
 function probe(executable: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, timeout: number, signal?: AbortSignal): Promise<string> {
   cancelled(signal);
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { cwd, env, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    const [program, argv] = invocation(executable, args);
+    const child = spawn(program, argv, { cwd, env, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = ''; let bytes = 0; let failure: RuntimeError | undefined;
     const stop = (error: RuntimeError) => { failure ??= error; child.kill('SIGKILL'); };
     const abort = () => stop(new RuntimeError('CANCELLED', 'Capability preparation cancelled.'));
@@ -163,13 +178,16 @@ async function capabilities(target: AgentId, executable: string, cwd: string, en
   } else if (!/Usage: claude \[options\](?: \[command\])? \[prompt\]/.test(help) || !/--resume\s+\[value\]/.test(help)) {
     return fail('UNSUPPORTED_CAPABILITY', 'Claude interactive prompt or exact resume capability is missing.');
   }
-  return {version:expected,observer:target==='codex'&&/--config\s+<key=value>/.test(help)};
+  return {version:expected,observer:process.platform!=='win32'&&target==='codex'&&/--config\s+<key=value>/.test(help)};
 }
 function available(guard: OwnedSessionGuard, source: SessionSource): void {
   const state = guard.check(source);
   if (state !== 'idle') fail(state === 'active' ? 'ACTIVE_SESSION' : 'UNKNOWN_OWNER', `Native session ownership is ${state}. Stop the owner or explicitly choose a fresh handoff; no takeover was attempted.`);
 }
 function terminalState(): string {
+  if (process.platform === 'win32') {
+    return windowsConsoleMode() ?? fail('TERMINAL_STATE', 'Cannot snapshot the Windows console. Launch agentswitch in a Windows terminal.');
+  }
   // stty is a system utility on supported Linux/macOS hosts; argv is constant, no shell.
   const result = spawnSync('stty', ['-g'], { stdio: [0, 'pipe', 'ignore'], encoding: 'utf8', timeout: 1000, maxBuffer: 4096 });
   if (result.status !== 0 || !result.stdout.trim()) return fail('TERMINAL_STATE', 'Cannot snapshot terminal state with stty. Check terminal availability before launching.');
@@ -208,7 +226,7 @@ export function createRuntime(options: RuntimeOptions) {
       const prompt = input.handoff?.prompt??input.currentRequest??'';
       if (prompt.includes('\0')) return fail('INVALID_PROMPT', 'Initial user prompt contains NUL and cannot be transported.');
       if (Buffer.byteLength(prompt, 'utf8') > limit) return fail('PROMPT_TOO_LARGE', `Complete initial user prompt exceeds the ${limit} byte transport limit. Reduce the prepared selection before confirming.`);
-      const executable = await resolveExecutable(options.executables?.[request.target] ?? request.target, env);
+      const executable = await resolveExecutable(options.executables?.[request.target] ?? request.target, env, request.target);
       const identity = await executableIdentity(executable);
       const capability = await capabilities(request.target, executable, workspace.path, env, timeout, signal);
       if(input.requireReceipt&&!capability.observer)return fail('RECEIPT_UNAVAILABLE','Native receipt capability is unavailable; review a fresh bounded rebuild.');
@@ -250,7 +268,8 @@ export function createRuntime(options: RuntimeOptions) {
         let child: ReturnType<typeof spawn>;
         const launchEnv={...env};delete launchEnv.AGENTSWITCH_OBSERVER;
         if(plan.observer==='codex-hooks'&&observer)launchEnv.AGENTSWITCH_OBSERVER=JSON.stringify(observer);
-        try { child = spawn(plan.executable, [...plan.args], { cwd: plan.workspace, env:launchEnv, shell: false, stdio: 'inherit' }); }
+        const [program, argv] = invocation(plan.executable, plan.args);
+        try { child = spawn(program, argv, { cwd: plan.workspace, env:launchEnv, shell: false, stdio: 'inherit' }); }
         catch { release(); return reject(new RuntimeError('LAUNCH_FAILED', 'Target launch failed before process creation. Check installation, workspace and OS argument limits; prepare again.')); }
         let launched = false; let error = false; let observationError: unknown;
         const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -270,7 +289,8 @@ export function createRuntime(options: RuntimeOptions) {
           for (const timer of timers) clearTimeout(timer);
           process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate);
           signal?.removeEventListener('abort', abort); release();
-          const restored = spawnSync('stty', [state], { stdio: [0, 'ignore', 'ignore'], timeout: 1000 }).status === 0;
+          const restored = process.platform === 'win32' ? windowsConsoleMode(state) === 'ok'
+            : spawnSync('stty', [state], { stdio: [0, 'ignore', 'ignore'], timeout: 1000 }).status === 0;
           process.stdout.write('\x1b[?25h\x1b[?1049l');
           if (!restored) return reject(new RuntimeError('TERMINAL_RESTORE', 'Target stopped but terminal restoration failed. Restore your terminal manually; delivery remains uncertain.'));
           if (error || !launched) return reject(new RuntimeError('LAUNCH_FAILED', 'Cannot launch target executable. Check installation, permissions, workspace and OS argument limits. No automatic retry was attempted.'));

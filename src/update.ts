@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 const repository = 'rammicz/agentswitch';
@@ -100,8 +100,15 @@ export async function findUpdate(installed: string, signal: AbortSignal, request
 async function installationPrefix(packageRoot: string): Promise<string | undefined> {
   const root = await realpath(packageRoot);
   const modules = dirname(root);
+  if (basename(root).toLowerCase() !== 'agentswitch' || basename(modules).toLowerCase() !== 'node_modules') return;
   const lib = dirname(modules);
-  if (basename(root) !== 'agentswitch' || basename(modules) !== 'node_modules' || basename(lib) !== 'lib') return;
+  if (process.platform === 'win32') {
+    const shim = join(lib, 'agentswitch.cmd');
+    if ((await lstat(shim).catch(() => undefined))?.isFile() &&
+        (await readFile(shim, 'utf8')).toLowerCase().includes('node_modules\\agentswitch\\dist\\cli.js')) return lib;
+    return;
+  }
+  if (basename(lib) !== 'lib') return;
   const prefix = dirname(lib);
   const executable = await realpath(join(prefix, 'bin', 'agentswitch')).catch(() => undefined);
   if (executable === join(root, 'dist', 'cli.js')) return prefix;
@@ -149,7 +156,9 @@ export async function updateNotice(packageRoot: string, installed: string, state
 export async function updateInstallation(packageRoot: string, request: Fetch = fetch): Promise<string> {
   const prefix = await installationPrefix(packageRoot);
   if (!prefix) throw new Error('Self-update requires a global npm install from a tarball. For a source checkout or npm link, update the checkout and rebuild.');
-  const modules = join(prefix, 'lib', 'node_modules');
+  const windows = process.platform === 'win32';
+  const modulesRelative = windows ? 'node_modules' : join('lib', 'node_modules');
+  const modules = join(prefix, modulesRelative);
   const metadata = join(modules, 'agentswitch', 'package.json');
   const lock = join(modules, '.agentswitch-update');
   try { await mkdir(lock, { mode: 0o700 }); }
@@ -167,7 +176,8 @@ export async function updateInstallation(packageRoot: string, request: Fetch = f
     if (bytes.length !== update.size || createHash('sha256').update(bytes).digest('hex') !== update.digest) {
       throw new Error('Downloaded package failed SHA-256 verification.');
     }
-    const npm = await realpath(join(dirname(process.execPath), 'npm')).catch(() => undefined);
+    const nodeDirectory = dirname(process.execPath);
+    const npm = await realpath(join(nodeDirectory, windows ? 'node_modules/npm/bin/npm-cli.js' : 'npm')).catch(() => undefined);
     if (!npm) throw new Error('npm must be installed alongside the active Node executable.');
     const directory = await mkdtemp(join(tmpdir(), 'agentswitch-update-'));
     try {
@@ -177,15 +187,20 @@ export async function updateInstallation(packageRoot: string, request: Fetch = f
       await writeFile(tarball, bytes);
       await writeFile(userConfig, '');
       await writeFile(globalConfig, '');
+      const systemRoot = process.env.SystemRoot;
+      const systemPath = windows && systemRoot ? join(systemRoot, 'System32') : '/usr/bin:/bin';
+      const env = { PATH: [nodeDirectory, systemPath].join(delimiter), HOME: directory,
+        ...(windows ? { SystemRoot: systemRoot, WINDIR: systemRoot, USERPROFILE: directory, TEMP: directory, TMP: directory } : {}),
+      };
       const install = (destination: string) => run(process.execPath, [npm, 'install', '--global', '--prefix', destination,
         '--offline', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--userconfig', userConfig, '--globalconfig', globalConfig,
         '--cache', join(directory, 'cache'), '--', tarball], {
         cwd: directory, timeout: 60_000,
-        env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: directory },
+        env,
       }).catch(() => { throw new Error('npm could not install the verified release. Check permissions and rerun agentswitch update.'); });
       const staging = join(directory, 'staging');
       await install(staging);
-      const npmRoot = join(staging, 'lib', 'node_modules');
+      const npmRoot = join(staging, modulesRelative);
       const candidateRoot = join(npmRoot, 'agentswitch');
       const candidate: unknown = JSON.parse(await readFile(join(candidateRoot, 'package.json'), 'utf8'));
       if (!object(candidate) || candidate.name !== 'agentswitch' || candidate.version !== update.version ||

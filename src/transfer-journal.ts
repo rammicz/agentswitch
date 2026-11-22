@@ -75,8 +75,10 @@ export class TransferJournal {
       if (version !== 0 && version !== 1 && version !== 2) throw new Error('Unsupported transfer journal version.');
       // Migration adds metadata only. Existing outcomes are never promoted to coverage.
       db.exec('BEGIN IMMEDIATE; CREATE TABLE IF NOT EXISTS attempts (id TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS reservations (key TEXT PRIMARY KEY, attempt TEXT NOT NULL); CREATE TABLE IF NOT EXISTS contexts (key TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS lineages (id TEXT PRIMARY KEY, data TEXT NOT NULL); PRAGMA user_version=2; COMMIT;');
-      const handle = await open(directory, constants.O_RDONLY | constants.O_NOFOLLOW);
-      try { await handle.sync(); } catch (error) { if (process.platform !== 'darwin' || !['EINVAL','ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; } finally { await handle.close(); }
+      if (process.platform !== 'win32') {
+        const handle = await open(directory, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try { await handle.sync(); } catch (error) { if (process.platform !== 'darwin' || !['EINVAL','ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; } finally { await handle.close(); }
+      }
       return new TransferJournal(directory, db, identity);
     } catch (error) { db.close(); throw error; }
   }

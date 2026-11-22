@@ -1,6 +1,6 @@
 # Installation and prerelease checks
 
-agentswitch requires Node.js **22.15 or later** and npm. Initial targets are Linux and macOS. CI tests `ubuntu-latest` and `macos-latest` with both exact minimum Node **22.15.0** and current **22**. The retained result records each runner's OS release, architecture, Node and npm versions; these moving runner labels do not certify every distribution, OS version or architecture. Windows and Node major versions above 22 need validation. Python 3 with its standard library is required for the development checks, but not for installed CLI users.
+agentswitch requires Node.js **22.15 or later** and npm. The release targets Linux, macOS and native Windows with an attached console. CI runs the full suite and distribution checks on Linux and macOS. Windows Server 2022 x64 runs package installation, updater and native pseudoconsole tests against the Linux-built release tarball. Both lanes test exact minimum Node **22.15.0** and current **22**. Python 3 is used by the development checks. The installed CLI uses Node and the platform's console utilities.
 
 The npm package is currently unpublished. These steps prepare and test a local prerelease; they do not publish, log in to npm or use publishing credentials. Provider installation and authentication remain separate. Offline package checks use synthetic data and do not certify real provider consumption.
 
@@ -16,7 +16,19 @@ cd your-project
 agentswitch
 ```
 
-The global npm bin directory must be on `PATH`; on these platforms it is `$(npm prefix --global)/bin`. Use an npm prefix writable by your user. The package has no runtime npm dependencies and the tarball already contains its compiled JavaScript. Installation is offline; no provider or model is called. Default use opens the real local session picker and requires an interactive terminal. `agentswitch --demo` uses synthetic sessions; piped default, `--global` and `--demo` invocations fail with an interactive-terminal message.
+On Linux and macOS, put `$(npm prefix --global)/bin` on `PATH`. Use an npm prefix writable by your user. The tarball includes compiled JavaScript and has zero runtime npm dependencies. Installation runs offline. Run `agentswitch` in an interactive terminal to open the local picker, or run `agentswitch --demo` to use synthetic sessions.
+
+On Windows, open PowerShell in your download folder and run:
+
+```powershell
+$sum = (Get-Content .\SHA256SUMS -Raw).Trim().Split(' ')[0]
+if ((Get-FileHash .\agentswitch-0.1.0-dev.1.tgz -Algorithm SHA256).Hash -ne $sum) { throw 'Checksum mismatch' }
+npm.cmd install --global --offline --ignore-scripts --no-audit --no-fund .\agentswitch-0.1.0-dev.1.tgz
+agentswitch.cmd --version
+agentswitch.cmd
+```
+
+On Windows, add the directory printed by `npm.cmd prefix --global` to your user `PATH` if the command is unavailable. Use `agentswitch.cmd` in PowerShell when execution policy restricts npm's PowerShell shim. Install each provider's compatible Windows executable separately. The launcher recognizes native EXEs and the supported npm shims for Codex, Claude Code, and OpenCode. The Codex receipt hook is available on Linux and macOS. Windows keeps delivery status uncertain after launch.
 
 Remove the installed command with:
 
@@ -52,7 +64,7 @@ For an authorized GitHub release, use a tag matching the package version with a 
    ```
 
 3. The last command prints a new artifact directory outside the checkout. For a chosen destination, use `npm run distribution:check -- --output /absolute/path/to/new-artifact-directory`; its parent must exist and the destination must not exist. Review `result.json`: require `passed: true`, `sourceDirty: false`, the intended `sourceCommit` and version, and `disposableStorageRemoved: true`. Check the checksum and manifest against the retained tarball. Source metadata and lockfile versions must match the archived metadata and installed CLI output.
-4. Require all four CI matrix jobs to succeed for that same source commit, including type checks, the full tests, pack dry-run and actual distribution checks. Review the recorded platform versions and limitations before distributing the candidate. Each successful matrix job uploads a distinct artifact named by commit, OS, Node matrix value and workflow attempt, retained for 14 days. Failed validation prevents upload of a rejected tarball. Artifacts from separate platforms need not be byte-identical; two consecutive prepack builds within each job must produce identical bytes.
+4. Require every CI job to succeed for that exact source commit. Linux and macOS run type checks, full tests, pack dry-run, and distribution checks. Both Windows jobs verify the digest and install the actual minimum-Node Linux artifact, then check the updater and terminal handoff. The Linux and macOS artifacts are retained for 14 days. Their names include the commit, operating system, Node version, and workflow attempt.
 5. Retain the exact verified tarball, `pack.json` (npm manifest), `archive.json` (actual tar entries and package metadata), `SHA256SUMS` and `result.json` (version, digests, source commit, environment versions and smoke outcomes). Transfer these together to controlled release storage if retention must exceed 14 days. Any later authorized distribution must use the tested tarball rather than repacking a changed checkout. Publishing and tag pushes require separate authorization.
 
 The checker builds through `prepack`, then independently inspects the actual gzip tar without extracting it. It compares every path and file size to npm's manifest and the tracked runtime/documentation allowlist; rejects links, traversal, duplicates and forbidden native-history/credential/machine-data paths; and checks npm integrity plus SHA-256. Compiled `.js`, `.d.ts` and `.js.map` files and the bundled third-party license are intentional. Path checks and review of the clean candidate establish the inclusion boundary; they cannot detect an arbitrary secret embedded in otherwise legitimate source or documentation.

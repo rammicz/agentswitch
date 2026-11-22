@@ -37,7 +37,7 @@ Download the package and checksum from [GitHub Releases](https://github.com/ramm
 
 A global npm installation from a release tarball checks GitHub Releases once per UTC day when you open the picker. The picker displays a notice when a newer release is available. Run `agentswitch update` to check immediately and install into the same npm prefix. Set `AGENTSWITCH_NO_UPDATE_CHECK=1` to disable startup checks. [Installation and updates](docs/releasing.md)
 
-Requires Node.js **22.15 or later** and npm. This release supports Linux and macOS. Native Windows needs validation. The demo runs without any agent installed.
+Requires Node.js **22.15 or later** and npm. This release targets Linux, macOS, and native Windows 10/11. On Windows use a terminal with an attached console, such as Windows Terminal with PowerShell or Command Prompt. The demo runs without any agent installed.
 
 To build from source:
 
@@ -57,7 +57,7 @@ agentswitch --demo --global
 
 The demo uses three synthetic sessions, including one in a different workspace. It reads no agent history, writes no history store, makes no network or model calls, and launches no agent.
 
-For installation from a verified local tarball and its removal, see [installation and prerelease checks](docs/releasing.md). CI tests the actual package on Linux and macOS with Node 22.15.0 and the current Node 22 release. The package remains unpublished on npm.
+The CI release gate tests the actual package on Linux, macOS, and Windows with Node 22.15.0 and the current Node 22 release. Find the tarball and platform-specific commands in the [installation guide](docs/releasing.md). The package remains unpublished on npm.
 
 | Key | In the session list | In progressive views |
 | --- | --- | --- |

@@ -21,14 +21,19 @@ const release = (version, bytes = Buffer.from('test package')) => ({
 async function fixture(t) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'agentswitch-updater-test-')));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const root = join(directory, 'lib', 'node_modules', 'agentswitch');
+  const windows = process.platform === 'win32';
+  const root = join(directory, windows ? 'node_modules' : 'lib/node_modules', 'agentswitch');
   const metadata = join(root, 'package.json');
-  const executable = join(directory, 'bin', 'agentswitch');
+  const cli = join(root, 'dist', 'cli.js');
+  const executable = windows ? cli : join(directory, 'bin', 'agentswitch');
   await mkdir(join(root, 'dist'), { recursive: true });
-  await mkdir(dirname(executable));
   await writeFile(metadata, JSON.stringify({ name: 'agentswitch', version: '0.1.0-dev.0' }));
-  await writeFile(join(root, 'dist', 'cli.js'), '#!/usr/bin/env node\n', { mode: 0o755 });
-  await symlink('../lib/node_modules/agentswitch/dist/cli.js', executable);
+  await writeFile(cli, '#!/usr/bin/env node\n', { mode: 0o755 });
+  if (windows) await writeFile(join(directory, 'agentswitch.cmd'), '@rem node_modules\\agentswitch\\dist\\cli.js\r\n');
+  else {
+    await mkdir(dirname(executable));
+    await symlink('../lib/node_modules/agentswitch/dist/cli.js', executable);
+  }
   return { directory, root, metadata, executable };
 }
 
@@ -70,7 +75,8 @@ test('explicit update validates the tarball and replaces the same global npm ins
     scripts: { postinstall: 'exit 99' },
   }));
   await writeFile(join(input, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log("updated");\n', { mode: 0o755 });
-  const npm = await realpath(join(dirname(process.execPath), 'npm'));
+  const npm = await realpath(join(dirname(process.execPath),
+    process.platform === 'win32' ? 'node_modules/npm/bin/npm-cli.js' : 'npm'));
   const pack = spawnSync(process.execPath, [npm, 'pack', '--ignore-scripts', '--json', input], { cwd: directory, encoding: 'utf8' });
   assert.equal(pack.status, 0, pack.stderr);
   const bytes = await readFile(join(directory, JSON.parse(pack.stdout)[0].filename));

@@ -1,7 +1,7 @@
 import { mkdir, lstat, realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { Scope, Session, HistoryItem } from './domain.js';
 import { deleteArchive, protectArchive, readArchiveSnapshot, releaseArchive } from './archive.js';
 import { createHandoffPlan, publishHandoffPlan, type HandoffPlan } from './handoff.js';
@@ -26,9 +26,12 @@ async function proposedCanonical(path: string): Promise<string> {
     return resolve(await proposedCanonical(parent),relative(parent,absolute));
   }
 }
-const contains=(parent:string,child:string):boolean=>{const part=relative(parent,child);return part===''||(!isAbsolute(part)&&part!=='..'&&!part.startsWith('../'));};
+const contains=(parent:string,child:string):boolean=>{const part=relative(parent,child);return part===''||(!isAbsolute(part)&&part!=='..'&&!part.startsWith('..'+sep));};
 export async function applicationPaths(env: NodeJS.ProcessEnv=process.env): Promise<ApplicationPaths> {
-  const root=resolve(env.AGENTSWITCH_STATE_DIR?.trim()||join(env.XDG_STATE_HOME?.trim()||join(homedir(),'.local','state'),'agentswitch'));
+  const defaultState = process.platform === 'win32'
+    ? env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
+    : join(homedir(), '.local', 'state');
+  const root=resolve(env.AGENTSWITCH_STATE_DIR?.trim()||join(env.XDG_STATE_HOME?.trim()||defaultState,'agentswitch'));
   const opencode=openCodePaths({env});
   const nativePaths=await Promise.all([
     grokPaths({env}).root,agyPaths({env}).root,opencode.root,join(env.XDG_CONFIG_HOME||join(homedir(),'.config'),'opencode'),

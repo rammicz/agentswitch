@@ -56,9 +56,11 @@ function privateEntry(info: Stats, directory: boolean): void {
   if (info.isSymbolicLink() || (directory ? !info.isDirectory() : !info.isFile()) || (process.platform !== 'win32' && ((info.mode & 0o077) !== 0 || info.uid !== process.getuid?.()))) failure('UNSAFE_ARCHIVE', 'Archive storage must be private and owned, without symbolic links.');
 }
 async function privateRead(path: string, maxBytes: number): Promise<string> {
+  const leaf = await lstat(path); privateEntry(leaf, false);
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const info = await handle.stat(); privateEntry(info, false);
+    if (leaf.dev !== info.dev || leaf.ino !== info.ino) failure('UNSAFE_ARCHIVE', 'Archive file was replaced.');
     if (info.size > maxBytes) failure('ARCHIVE_TOO_LARGE', 'Archive file exceeds the supported size.');
     // Read at most the validated limit even if a concurrent writer grows the file.
     const data = Buffer.alloc(Math.min(info.size + 1, maxBytes + 1));
@@ -95,6 +97,8 @@ async function unchanged(directory: string, identity: Stats): Promise<void> {
   if (info.ino !== identity.ino || info.dev !== identity.dev) failure('UNSAFE_ARCHIVE', 'Archive directory was replaced.');
 }
 async function syncDirectory(directory: string): Promise<void> {
+  // Files are flushed before publication. Node cannot fsync a directory on Windows.
+  if (process.platform === 'win32') return;
   const handle = await open(directory, constants.O_RDONLY | constants.O_NOFOLLOW);
   try { await handle.sync(); } catch (error) {
     if (process.platform !== 'darwin' || !['EINVAL', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
