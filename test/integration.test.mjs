@@ -40,7 +40,7 @@ const finish=[{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'
 test('cold picker shows folder and global results without building a transcript cache',async t=>{
  const f=await setup();
  t.after(()=>rm(f.root,{recursive:true,force:true}));
- const [startup]=pty(f,[{wait:'Search:'},...list,{send:'\x03'}]);
+ const [startup]=pty(f,[{wait:'Search:'},{wait:'codex  public source NEEDLE_SECRET'},...list,{send:'\x03'}]);
  assert.equal(startup.restored,true);
  await assert.rejects(access(join(f.state,'search')),{code:'ENOENT'});
  const [result]=pty(f,[...list,{send:'other-folder-only'},{wait:'No matching sessions.'},

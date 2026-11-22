@@ -14,6 +14,16 @@ import type { ContextRef } from './continuity.js';
 const agents: readonly AgentId[] = ['codex','claude','opencode','agy','grok'];
 const canonical = async (path: string): Promise<string> => realpath(resolve(path)).catch(()=>resolve(path));
 const harmless = new Set(['workspace-unavailable','metadata-unavailable','metadata-schema','metadata-unstable','untested-producer']);
+function openingTitle(items: readonly HistoryItem[]): string | undefined {
+  for (const item of items) {
+    if (item.role !== 'user' || item.status !== 'complete') continue;
+    const content = item.text.trim();
+    if (!content || /^(?:# AGENTS\.md instructions|<(?:environment_context|permissions instructions|collaboration_mode|subagent_notification)\b)/iu.test(content)) continue;
+    const line = content.split(/\r?\n/, 1)[0]!.trim();
+    const characters = Array.from(line);
+    return characters.length > 100 ? characters.slice(0, 99).join('') + '…' : line;
+  }
+}
 export interface NativeSnapshot { session: CodexSession | ClaudeSession | OpenCodeSession | AgySession | GrokSession; history: CodexHistory; fingerprint: string; runtime: RuntimeSource; sourceKey: string; context:ContextRef; retained:boolean; metadataOnly?:boolean; projectionNotice?:string }
 
 /** Captures native quality before committing generations; healthy siblings remain searchable. */
@@ -23,6 +33,7 @@ export class NativeCatalog {
   private readonly adapters: { codex: CodexSessionAdapter; claude: ClaudeSessionAdapter; opencode:OpenCodeSessionAdapter; agy:AgySessionAdapter; grok:GrokSessionAdapter };
   private readonly staged = new Map<AgentId, Map<string,Session>>();
   private readonly discoveries = new Map<AgentId, Promise<readonly Session[]>>();
+  private readonly openingTitles = new Map<string, string | undefined>();
   private constructor(private readonly roots: Record<AgentId,string>, private readonly rootKeys: Record<AgentId,string>, sqliteRoot: string,opencodeDb:string) {
     const onDiagnostic=(agent:AgentId)=>(diagnostic:CodexDiagnostic)=>{if(this.diagnostics[agent].length<100)this.diagnostics[agent].push(diagnostic);};
     this.adapters={grok:new GrokSessionAdapter({root:roots.grok,onDiagnostic:onDiagnostic('grok')}),agy:new AgySessionAdapter({root:roots.agy,onDiagnostic:onDiagnostic('agy')}),codex:new CodexSessionAdapter({root:roots.codex,sqliteRoot,onDiagnostic:onDiagnostic('codex')}),claude:new ClaudeSessionAdapter({root:roots.claude,onDiagnostic:onDiagnostic('claude')}),opencode:new OpenCodeSessionAdapter({dbPath:opencodeDb,onDiagnostic:onDiagnostic('opencode')})};
@@ -90,6 +101,25 @@ export class NativeCatalog {
             if(readable) await searchCache().then(cache=>cache?.remember(readable)).catch(()=>undefined);
             signal.throwIfAborted();
             hits.set(session.id,hit);
+            if(Date.now()-lastPublish>=200)update();
+          }
+        }
+      } else if(agent==='codex'||agent==='agy') {
+        const untitled=sessions.filter(session=>session.title.endsWith(` ${session.nativeId}`) &&
+          !('metadataOnly' in session&&session.metadataOnly));
+        // Results are already available. Read only recent untitled sessions for labels.
+        for(const session of untitled.slice(0,32)) {
+          signal.throwIfAborted();
+          if(!this.openingTitles.has(session.id)) {
+            const items=await (agent==='codex' ? this.adapters.codex.readCatalogTitleItems(session.nativeId,signal)
+              : this.adapters.agy.readCatalogTitleItems(session.nativeId)).catch(()=>[]);
+            signal.throwIfAborted();
+            this.openingTitles.set(session.id,openingTitle(items));
+          }
+          const title=this.openingTitles.get(session.id);
+          const hit=hits.get(session.id);
+          if(title&&hit){
+            hits.set(session.id,{...hit,title});
             if(Date.now()-lastPublish>=200)update();
           }
         }

@@ -36,13 +36,18 @@ const message = (error: unknown): string => error instanceof Error ? error.messa
 function searchResultLabel(hit: SessionHit, query: string): string {
   const match = hit.matches.find(item => item.field === 'message');
   const text = match?.text.replace(/\s+/gu, ' ').trim();
-  if (!text) return hit.title;
+  const untitled = hit.title.endsWith(` ${hit.nativeId}`);
+  if (!text) {
+    const lookup = query.trim().toLowerCase();
+    if (!untitled || (lookup && hit.nativeId.toLowerCase().includes(lookup))) return hit.title;
+    return `${hit.title.slice(0, -hit.nativeId.length - 1)} · ${hit.nativeId.slice(-8)}`;
+  }
   const needle = query.trim().replace(/\s+/gu, ' ').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const position = needle ? text.search(new RegExp(needle, 'iu')) : -1;
   const before = position < 0 ? [] : Array.from(text.slice(0, position));
   const excerpt = position < 0 ? text
     : (before.length > 20 ? '…' : '') + before.slice(-20).join('') + text.slice(position);
-  return hit.title.endsWith(` ${hit.nativeId}`) ? excerpt : `${hit.title} · ${excerpt}`;
+  return untitled ? excerpt : `${hit.title} · ${excerpt}`;
 }
 
 /** Offline-capable UI boundary; provider compatibility and context budgets belong to services. */

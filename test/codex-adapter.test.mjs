@@ -416,6 +416,21 @@ test('large session metadata is discovered in a few bounded reads', async t => {
   assert.ok(output.reads.length < 10);
 });
 
+test('untitled Codex workers use native nickname and role while labels use projected public records', async t => {
+  const {root,cwd} = await fixture(t);
+  const native = new CodexSessionAdapter({root});
+  const worker = {source:{subagent:{thread_spawn:{agent_nickname:'Cedar',agent_role:'explorer'}}}};
+  await writeRollout(root,rollout(cwd,ids[0],[],worker));
+  await writeRollout(root,rollout(cwd,ids[1],[
+    line('response_item',{type:'message',role:'user',content:[{type:'input_text',text:'Hidden model context'}]},1),
+    completed('UserMessage','question','Fix the retry logic',2),
+  ]));
+  const sessions = await native.discover();
+  assert.equal(sessions.find(s=>s.nativeId===ids[0]).title,'Cedar (explorer)');
+  const items = await native.readCatalogTitleItems(ids[1],new AbortController().signal);
+  assert.deepEqual(items.map(item=>item.text),['Fix the retry logic']);
+});
+
 test('native header read requests and transferred bytes stay within the remaining operation budget', async t => {
   const {root,cwd} = await fixture(t);
   const records = rollout(cwd,ids[0],[completed('UserMessage','u','x'.repeat(100000),1)]);

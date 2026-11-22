@@ -83,6 +83,7 @@ function match(row: IndexedSession, needle: string): SessionHit | undefined {
   const matches: MatchExcerpt[] = [];
   if (needle) {
     if (row.title.includes(needle)) matches.push({ field: 'title', text: excerpt(session.title, needle) });
+    else if (normalize(session.nativeId).includes(needle)) matches.push({ field: 'nativeId', text: session.nativeId });
     if (row.workspace.includes(needle)) matches.push({ field: 'workspace', text: excerpt(session.workspace, needle) });
     for (let i = 0; i < row.texts.length && matches.length < 3; i++) {
       if (!row.texts[i]!.includes(needle)) continue;

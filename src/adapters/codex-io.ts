@@ -51,14 +51,15 @@ export function contains(root: string, path: string): boolean {
   return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`));
 }
 /** Resolve symlinks before opening; final-component swaps fail through O_NOFOLLOW. */
-export async function boundedRead(path: string, root: string, limit: number, ctx: ReadContext): Promise<Buffer> {
+export async function boundedRead(path: string, root: string, limit: number, ctx: ReadContext, prefixOnly = false): Promise<Buffer> {
   const canonical = await realpath(path);
   if (!contains(root, canonical)) throw new Error('unsafe-path');
   const handle = await open(canonical, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const info = await handle.stat();
-    if (!info.isFile() || info.size > limit || info.size > ctx.remaining) throw new Error('input-limit');
-    const data = Buffer.alloc(info.size);
+    const allowed = Math.min(limit, ctx.remaining);
+    if (!info.isFile() || (!prefixOnly && info.size > allowed)) throw new Error('input-limit');
+    const data = Buffer.alloc(Math.min(info.size, allowed));
     let offset = 0;
     while (offset < data.length) {
       const requested = Math.min(data.length - offset, ctx.remaining);
@@ -70,6 +71,27 @@ export async function boundedRead(path: string, root: string, limit: number, ctx
     }
     return data.subarray(0, offset);
   } finally { await handle.close(); }
+}
+
+/** Complete records from a bounded prefix for a display label only. */
+export async function historyTitlePrefix(path: string, root: string, ctx: ReadContext): Promise<Buffer> {
+  const limit = Math.min(512 * 1024, ctx.limits.maxFileBytes, ctx.remainingDecoded);
+  const compressed = path.endsWith('.zst');
+  const input = await boundedRead(path, root, limit, ctx, !compressed);
+  if (!compressed) return input.subarray(0, input.lastIndexOf(10) + 1);
+  const stream = Readable.from([input]).pipe(createZstdDecompress());
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    for await (const value of stream) {
+      const chunk = (value as Buffer).subarray(0, limit - size);
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size === limit) break;
+    }
+    const bytes = Buffer.concat(chunks, size);
+    return bytes.subarray(0, bytes.lastIndexOf(10) + 1);
+  } finally { stream.destroy(); }
 }
 /** Discovery consumes only the first record, leaving transcript validation to lazy reads. */
 export async function historyHeader(path: string, root: string, ctx: ReadContext): Promise<Buffer | undefined> {

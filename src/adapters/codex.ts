@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, isAbsolute } from 'node:path';
 import type { HistoryItem, Session } from '../domain.js';
 import type { SessionAdapter } from './index.js';
-import { boundedRead, contains, defaultLimits, historyBytes, historyHeader, metadataSnapshot, ReadContext } from './codex-io.js';
+import { boundedRead, contains, defaultLimits, historyBytes, historyHeader, historyTitlePrefix, metadataSnapshot, ReadContext } from './codex-io.js';
 import type { CodexDiagnostic, CodexLimits, MetadataRow } from './codex-io.js';
 import { object, project, text } from './codex-projection.js';
 import type { ObjectRecord, SourceRecord } from './codex-projection.js';
@@ -40,6 +40,14 @@ function displayTitle(mode: string, row: MetadataRow | undefined, indexedName?: 
   catch { /* A missing or unrecognized source cannot establish a Guardian default. */ }
   return (guardian ? indexedName || distinct : distinct || indexedName) || preview || title;
 }
+function subagentTitle(meta: ObjectRecord): string {
+  const spawn = object(object(object(meta.source).subagent).thread_spawn);
+  const field = (value: unknown) => /^[\p{L}\p{N} _-]{1,48}$/u.test(text(value)) ? text(value).trim() : '';
+  const nickname = field(spawn.agent_nickname);
+  const role = field(spawn.agent_role);
+  if (nickname) return `${nickname} (${role || 'subagent'})`;
+  return role ? `${role} subagent` : '';
+}
 function parseRecords(bytes: Buffer, source: string, ctx: ReadContext): SourceRecord[] {
   const records: SourceRecord[] = [];
   let offset = 0, line = 0;
@@ -64,6 +72,9 @@ async function parseFile(file: RolloutFile, root: string, ctx: ReadContext, cuto
   if (!input) return;
   if (cutoff !== undefined && (cutoff > input.length || cutoff < 1 || input[cutoff - 1] !== 10)) { ctx.add('invalid-boundary'); return; }
   const bytes = cutoff === undefined ? input : input.subarray(0, cutoff);
+  return parseRollout(file, bytes, ctx);
+}
+function parseRollout(file: RolloutFile, bytes: Buffer, ctx: ReadContext): ParsedRollout | undefined {
   const records = parseRecords(bytes, file.rolloutId, ctx), first = records[0];
   if (!first || first.offset !== 0 || first.value.type !== 'session_meta') { ctx.add('unsupported-shape'); return; }
   const meta = object(first.value.payload);
@@ -211,7 +222,7 @@ export class CodexSessionAdapter implements SessionAdapter {
       const nativeName = displayTitle(mode, row, names.get(id));
       if (!row && mode === 'paginated') ctx.add('metadata-unavailable', 'metadata', undefined, false);
       this.selected.set(id, chosen.file);
-      sessions.push({ id: `codex:${id}`, agent: 'codex', nativeId: id, title: nativeName || `Codex ${id}`,
+      sessions.push({ id: `codex:${id}`, agent: 'codex', nativeId: id, title: nativeName || subagentTitle(meta) || `Codex ${id}`,
         workspace, createdAt: date(row?.created_at) ?? date(meta.timestamp)!, updatedAt: date(row?.updated_at) ?? date(meta.timestamp)!,
         messages: [], historyMode: mode, producerVersion: producer, metadataFidelity: row ? 'native' : 'reduced' });
     }
@@ -222,6 +233,23 @@ export class CodexSessionAdapter implements SessionAdapter {
 
   /** Read the preceding catalog generation without rescanning sibling sessions. For refresh composition only. */
   readCatalogHistoryDetailed(nativeId: string): Promise<CodexHistory> { return this.run(() => this.readDetailed(nativeId, false)); }
+  readCatalogTitleItems(nativeId: string, signal: AbortSignal): Promise<readonly HistoryItem[]> {
+    return this.run(async () => {
+      signal.throwIfAborted();
+      const file = this.selected.get(nativeId);
+      if (!file) return [];
+      const ctx = new ReadContext(this.limits);
+      const bytes = await historyTitlePrefix(file.path, this.root, ctx);
+      const leaf = parseRollout(file, bytes, ctx);
+      if (!leaf || !ctx.complete) return [];
+      const { meta, records } = leaf;
+      const base = object(meta.history_base).end_ordinal_exclusive;
+      const start = integer(meta.subagent_history_start_ordinal) ? meta.subagent_history_start_ordinal
+        : meta.attached_thread === true && integer(base) ? base + 1 : 0;
+      return project(records.slice(1).filter(record => (record.ordinal ?? 0) >= start),
+        meta.history_mode === 'paginated' ? 'paginated' : 'legacy', ctx);
+    });
+  }
   private async readDetailed(nativeId: string, rediscover = true): Promise<CodexHistory> {
     // Public selected-session reads refresh authoritative selection; catalog batches use their explicit generation.
     const discovery = this.context();

@@ -205,16 +205,23 @@ export class AgySessionAdapter implements SessionAdapter {
   async readHistory(id:string):Promise<readonly HistoryItem[]> {return (await this.readHistoryDetailed(id)).items;}
   async readHistoryDetailed(id:string):Promise<AgyHistory> {return this.selected(await this.catalog(),id);}
   async readCatalogHistoryDetailed(id:string):Promise<AgyHistory> {return this.selected(this.generation??await this.catalog(),id);}
-  private async selected(catalog:Catalog,id:string):Promise<AgyHistory> {
+  async readCatalogTitleItems(id:string):Promise<readonly HistoryItem[]> {
+    const catalog=this.generation;
+    if(!catalog)return [];
+    const history=await this.selected({...catalog,budget:{bytes:0}},id,true);
+    return history.complete ? history.items : [];
+  }
+  private async selected(catalog:Catalog,id:string,forTitle=false):Promise<AgyHistory> {
     const diagnostics:CodexDiagnostic[]=[],record=catalog.records.get(id);
     if(!record||record.session.metadataOnly)return {items:[],complete:false,retained:false,diagnostics:[{code:'unsupported-shape',source:'history'}]};
     try {
       if(await this.physical(catalog.root,catalog)!==catalog.signature)throw Error('metadata-unstable');
       await this.noSidecars(join(catalog.root,'conversations',id+'.db'),catalog);
       const path=join(catalog.root,'brain',id,'.system_generated','logs','transcript.jsonl');
-      const before=await this.file(path,catalog.root,this.limits.maxFileBytes,catalog.budget);
+      const limit=forTitle ? Math.min(512*1024,this.limits.maxFileBytes) : this.limits.maxFileBytes;
+      const before=await this.file(path,catalog.root,limit,catalog.budget);
       const parsed=parseAgyHistory(new TextDecoder('utf-8',{fatal:true}).decode(before.bytes),id,record.stepCount!,this.limits);
-      const after=await this.file(path,catalog.root,this.limits.maxFileBytes,catalog.budget);
+      const after=await this.file(path,catalog.root,limit,catalog.budget);
       if(before.signature!==after.signature||!before.bytes.equals(after.bytes)||await this.physical(catalog.root,catalog)!==catalog.signature)throw Error('metadata-unstable');
       await this.noSidecars(join(catalog.root,'conversations',id+'.db'),catalog);
       if(catalog.cacheSignature&&identity(await lstat(join(catalog.root,'cache','last_conversations.json')))!==catalog.cacheSignature)throw Error('metadata-unstable');
@@ -223,7 +230,7 @@ export class AgySessionAdapter implements SessionAdapter {
         incarnation:createHash('sha256').update(JSON.stringify([catalog.root,id,JSON.parse(before.signature).slice(0,2)])).digest('hex'),
         snapshotIdentity:createHash('sha256').update(JSON.stringify([catalog.signature,catalog.cacheSignature,before.signature])).digest('hex'),
       };
-    }catch(error){this.failure(diagnostics,error);return {items:[],complete:false,retained:false,diagnostics};}
+    }catch(error){if(!forTitle)this.failure(diagnostics,error);return {items:[],complete:false,retained:false,diagnostics};}
   }
 }
 interface CatalogRecord {session:AgySession;stepCount?:number}

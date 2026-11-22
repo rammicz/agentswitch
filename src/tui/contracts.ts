@@ -5,7 +5,7 @@ import type { AgentId, HistoryItem, Scope, Session, SessionQuery } from '../doma
 export type SessionSource = Pick<Session, 'id' | 'nativeId' | 'agent'>;
 export type MatchExcerpt =
   | { field: 'message'; itemId: string; role: HistoryItem['role']; text: string }
-  | { field: 'title' | 'workspace'; text: string };
+  | { field: 'title' | 'workspace' | 'nativeId'; text: string };
 /** List metadata does not require loading a transcript. Matches belong to this source. */
 export type SessionHit = Omit<Session, 'messages'> & { matches: readonly MatchExcerpt[] };
 export type WorkspaceChoice = { kind: 'source' | 'override'; path: string };
