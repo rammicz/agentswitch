@@ -12,6 +12,8 @@ export interface Session {
   updatedAt: string;
   /** Local activity fallback when a provider has no saved last-used timestamp. */
   lastUsedAt?: string;
+  /** The provider records this session as a subagent, with its parent when known. */
+  subagent?: { parentId?: string };
   /** Searchable, public conversation text; never hidden reasoning. */
   messages: readonly HistoryItem[];
 }
@@ -30,6 +32,8 @@ export interface SessionQuery {
   agent: AgentId | 'all';
   scope: Scope;
   workspace: string;
+  includeSubagents?: boolean;
+  parentId?: string;
 }
 
 /** Future durable transfer record. Pending is not proof of consumption. */

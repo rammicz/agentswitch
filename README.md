@@ -63,10 +63,12 @@ The CI release gate tests the actual package on Linux, macOS, and Windows with N
 | --- | --- | --- |
 | Type / Backspace | Search titles, workspaces, and message text | Edit a workspace override |
 | ↑ / ↓ | Move selection | Scroll transcript or summary |
-| ← / → | Cycle All / Codex / Claude / OpenCode / agy / Grok | Cycle target agent in target selection |
+| ← / → | Open the highlighted session’s subagents with →, return with ← | Cycle target agent in target selection |
+| Shift+← / Shift+→ | Cycle source agents | — |
 | Tab | Toggle folder / global scope | — |
 | Enter | Preview matches and transcript | Choose target, prepare summary, then confirm |
 | F2 | Show source warnings | — |
+| F3 | Show or hide subagents in results | — |
 | W | Search text | Explicit workspace override in target selection |
 | Esc | Exit | Return to previous view |
 | Ctrl+C | Exit | Exit |

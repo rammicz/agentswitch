@@ -92,11 +92,23 @@ export class NativeCatalog {
         });
         this.discoveries.set(agent,discovery);
       }
-      const sessions=(await discovery).filter(session=>workspace===undefined||session.workspace.normalize('NFC')===workspace);
+      const discovered=await discovery;
+      const childCounts=new Map<string,number>();
+      for(const session of discovered){
+        const parent=session.subagent?.parentId;
+        if(parent)childCounts.set(parent,(childCounts.get(parent)??0)+1);
+      }
+      const attachCount=(hit:SessionHit)=>{
+        const subagentCount=childCounts.get(hit.id.toLowerCase());
+        return subagentCount ? {...hit,subagentCount} : hit;
+      };
+      const sessions=discovered.filter(session=>query.parentId
+        ? session.subagent?.parentId===query.parentId.toLowerCase()
+        : (query.includeSubagents||!session.subagent)&&(workspace===undefined||session.workspace.normalize('NFC')===workspace));
       signal.throwIfAborted();
       for(const session of sessions){
         const hit=matchSession(session,text);
-        if(hit)hits.set(session.id,hit);
+        if(hit)hits.set(session.id,attachCount(hit));
       }
       if(hits.size)update();
       if(text){
@@ -112,7 +124,7 @@ export class NativeCatalog {
           if(hit){
             if(readable) await searchCache().then(cache=>cache?.remember(readable)).catch(()=>undefined);
             signal.throwIfAborted();
-            hits.set(session.id,hit);
+            hits.set(session.id,attachCount(hit));
             if(Date.now()-lastPublish>=200)update();
           }
         }

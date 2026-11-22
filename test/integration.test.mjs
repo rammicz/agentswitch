@@ -48,6 +48,25 @@ test('cold picker shows folder and global results without building a transcript 
  assert.equal(result.restored,true);
 });
 
+test('main sessions hide subagents until opened by parent or enabled with F3',async t=>{
+ const f=await setup();
+ t.after(()=>rm(f.root,{recursive:true,force:true}));
+ const spawn=(parent_thread_id,agent_nickname)=>({source:{subagent:{thread_spawn:{parent_thread_id,agent_nickname,agent_role:'worker'}}}});
+ await writeRollout(f.codex,rollout(f.cwd,codexIds[3],[],spawn(codexIds[0],'Cedar')));
+ await writeRollout(f.codex,rollout(f.other,codexIds[4],[],spawn(codexIds[0],'Willow')));
+ await writeRollout(f.codex,rollout(f.cwd,codexIds[5],[],spawn(codexIds[9],'Orphan')));
+ const [result]=pty(f,[...list,{send:'public source'},{wait:'Subagents: 2'},
+  {send:'\x1b[C'},{wait:'Subagents of'},{wait:'Cedar (worker)'},
+  {send:'\x1b[D'},{wait:'Search: public source'},{wait:'Subagents: 2'},{send:'\x15'},{wait:'Enter preview'},
+  {send:'\x1bOR'},{wait:'Orphan (worker)'},{wait:'F3 hide subagents'},{send:'\x03'}]);
+ const before=result.output.split('Subagents of')[0];
+ assert.doesNotMatch(before,/Cedar \(worker\)|Willow \(worker\)|Orphan \(worker\)/);
+ const branch=result.output.slice(result.output.indexOf('Subagents of'),result.output.lastIndexOf('Search: public source'));
+ assert.match(branch,/Willow \(worker\)/);
+ assert.doesNotMatch(branch,/Orphan \(worker\)/);
+ assert.equal(result.restored,true);
+});
+
 for(const [source,target]of [['codex','claude'],['claude','codex']]) test(`real CLI ${source}→${target}: exact consented redacted payload, cwd, disclosure and unchanged native bytes`,async()=>{
  const f=await setup(target);
  const actions=[...list,...select(source),...(target==='claude'?[{send:'\u001b[C'},{wait:'Target: claude'}]:[]),...request,...redact,...finish];

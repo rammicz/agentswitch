@@ -7,7 +7,7 @@ export type MatchExcerpt =
   | { field: 'message'; itemId: string; role: HistoryItem['role']; text: string }
   | { field: 'title' | 'workspace' | 'nativeId'; text: string };
 /** List metadata does not require loading a transcript. Matches belong to this source. */
-export type SessionHit = Omit<Session, 'messages'> & { matches: readonly MatchExcerpt[] };
+export type SessionHit = Omit<Session, 'messages'> & { matches: readonly MatchExcerpt[]; subagentCount?: number };
 export type WorkspaceChoice = { kind: 'source' | 'override'; path: string };
 export interface ContinuationRequest {
   source: SessionSource;

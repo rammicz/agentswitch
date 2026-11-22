@@ -21,6 +21,7 @@ export interface CodexHistory { items: readonly HistoryItem[]; complete: boolean
 interface RolloutFile { path: string; owner: string; rolloutId: string }
 interface ParsedRollout { file: RolloutFile; meta: ObjectRecord; records: SourceRecord[] }
 const uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+const uuidPattern = new RegExp(`^${uuid}$`);
 const filePattern = new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${uuid})(?:_(${uuid}))?\\.jsonl(?:\\.zst)?$`);
 function identify(path: string): RolloutFile | undefined {
   const match = filePattern.exec(basename(path));
@@ -40,8 +41,7 @@ function displayTitle(mode: string, row: MetadataRow | undefined, indexedName?: 
   catch { /* A missing or unrecognized source cannot establish a Guardian default. */ }
   return (guardian ? indexedName || distinct : distinct || indexedName) || preview || title;
 }
-function subagentTitle(meta: ObjectRecord): string {
-  const spawn = object(object(object(meta.source).subagent).thread_spawn);
+function subagentTitle(spawn: ObjectRecord): string {
   const field = (value: unknown) => /^[\p{L}\p{N} _-]{1,48}$/u.test(text(value)) ? text(value).trim() : '';
   const nickname = field(spawn.agent_nickname);
   const role = field(spawn.agent_role);
@@ -220,13 +220,19 @@ export class CodexSessionAdapter implements SessionAdapter {
       try { workspace = await realpath(rawWorkspace); }
       catch { ctx.add('workspace-unavailable', 'workspace', undefined, false); }
       const nativeName = displayTitle(mode, row, names.get(id));
+      const nativeSubagent = object(meta.source).subagent;
+      const spawn = object(object(nativeSubagent).thread_spawn);
+      const parent = text(spawn.parent_thread_id);
+      const subagent = nativeSubagent == null ? undefined :
+        uuidPattern.test(parent) && parent.toLowerCase() !== id.toLowerCase() ? {parentId:`codex:${parent.toLowerCase()}`} : {};
       const modified = row?.updated_at == null && !chosen.file.path.endsWith('.zst')
         ? await stat(chosen.file.path).then(info => date(info.mtimeMs)).catch(() => undefined) : undefined;
       if (!row && mode === 'paginated') ctx.add('metadata-unavailable', 'metadata', undefined, false);
       this.selected.set(id, chosen.file);
-      sessions.push({ id: `codex:${id}`, agent: 'codex', nativeId: id, title: nativeName || subagentTitle(meta) || `Codex ${id}`,
+      sessions.push({ id: `codex:${id}`, agent: 'codex', nativeId: id, title: nativeName || subagentTitle(spawn) || `Codex ${id}`,
         workspace, createdAt: date(row?.created_at) ?? date(meta.timestamp)!, updatedAt: date(row?.updated_at) ?? date(meta.timestamp)!,
         ...(modified ? {lastUsedAt:modified} : {}),
+        ...(subagent ? {subagent} : {}),
         messages: [], historyMode: mode, producerVersion: producer, metadataFidelity: row ? 'native' : 'reduced' });
     }
     return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));

@@ -92,8 +92,9 @@ function match(row: IndexedSession, needle: string): SessionHit | undefined {
     }
     if (!matches.length) return;
   }
-  const { id, agent, nativeId, title, updatedAt, lastUsedAt } = session;
-  return { id, agent, nativeId, title, workspace: session.workspace, updatedAt, ...(lastUsedAt ? {lastUsedAt} : {}), matches };
+  const { id, agent, nativeId, title, updatedAt, lastUsedAt, subagent } = session;
+  return { id, agent, nativeId, title, workspace: session.workspace, updatedAt,
+    ...(lastUsedAt ? {lastUsedAt} : {}), ...(subagent ? {subagent} : {}), matches };
 }
 
 export function matchSession(session: Session, query: string): SessionHit | undefined {
