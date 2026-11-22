@@ -3,9 +3,10 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { CodexSessionAdapter, ClaudeSessionAdapter, OpenCodeSessionAdapter, openCodePaths, AgySessionAdapter, agyPaths, GrokSessionAdapter, grokPaths } from './adapters/index.js';
 import type { CodexDiagnostic, CodexHistory, CodexSession, ClaudeSession, OpenCodeSession, AgySession, GrokSession } from './adapters/index.js';
-import type { AgentId, HistoryItem, Session } from './domain.js';
-import type { SessionSource } from './tui/contracts.js';
-import { SearchIndex } from './search-index.js';
+import { setTimeout } from 'node:timers/promises';
+import type { AgentId, HistoryItem, Session, SessionQuery } from './domain.js';
+import type { SessionHit, SessionSource } from './tui/contracts.js';
+import { matchSession, type SearchIndex } from './search-index.js';
 import type { RuntimeSource } from './runtime.js';
 import { digest } from './transfer-journal.js';
 import type { ContextRef } from './continuity.js';
@@ -21,6 +22,7 @@ export class NativeCatalog {
   private readonly warnings: Record<AgentId,string> = {codex:'',claude:'',opencode:'',agy:'',grok:''};
   private readonly adapters: { codex: CodexSessionAdapter; claude: ClaudeSessionAdapter; opencode:OpenCodeSessionAdapter; agy:AgySessionAdapter; grok:GrokSessionAdapter };
   private readonly staged = new Map<AgentId, Map<string,Session>>();
+  private readonly discoveries = new Map<AgentId, Promise<readonly Session[]>>();
   private constructor(private readonly roots: Record<AgentId,string>, private readonly rootKeys: Record<AgentId,string>, sqliteRoot: string,opencodeDb:string) {
     const onDiagnostic=(agent:AgentId)=>(diagnostic:CodexDiagnostic)=>{if(this.diagnostics[agent].length<100)this.diagnostics[agent].push(diagnostic);};
     this.adapters={grok:new GrokSessionAdapter({root:roots.grok,onDiagnostic:onDiagnostic('grok')}),agy:new AgySessionAdapter({root:roots.agy,onDiagnostic:onDiagnostic('agy')}),codex:new CodexSessionAdapter({root:roots.codex,sqliteRoot,onDiagnostic:onDiagnostic('codex')}),claude:new ClaudeSessionAdapter({root:roots.claude,onDiagnostic:onDiagnostic('claude')}),opencode:new OpenCodeSessionAdapter({dbPath:opencodeDb,onDiagnostic:onDiagnostic('opencode')})};
@@ -39,6 +41,58 @@ export class NativeCatalog {
   private report(agent:AgentId, extra=''):void {
     const codes=[...new Set(this.diagnostics[agent].map(diagnostic=>diagnostic.code))];
     this.warnings[agent]=codes.length||extra ? `${agent}: ${extra||'source warnings'}${codes.length?' ('+codes.slice(0,5).join(', ')+(codes.length>5?', …':'')+')':''}` : '';
+  }
+  /** List with metadata first and read one relevant transcript at a time for text searches. */
+  async search(query:SessionQuery, signal:AbortSignal, lifetime:AbortSignal, publish:(hits:readonly SessionHit[])=>void):Promise<readonly SessionHit[]> {
+    const text=query.text.trim();
+    if(text) await setTimeout(120,undefined,{signal});
+    const workspace=query.scope==='folder'?(await canonical(query.workspace)).normalize('NFC'):undefined;
+    const selected=agents.filter(agent=>query.agent==='all'||query.agent===agent);
+    const hits=new Map<string,SessionHit>();
+    const ordered=()=>[...hits.values()].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)||a.id.localeCompare(b.id));
+    let lastPublish=0;
+    const update=()=>{
+      if(signal.aborted)return;
+      lastPublish=Date.now();
+      publish(ordered());
+    };
+    await Promise.all(selected.map(async agent=>{
+      signal.throwIfAborted();
+      let discovery=this.discoveries.get(agent);
+      if(!discovery){
+        const adapter=this.adapters[agent];
+        discovery=(adapter instanceof CodexSessionAdapter||adapter instanceof ClaudeSessionAdapter
+          ?adapter.discover(lifetime):adapter.discover()).catch(()=>{
+          this.warnings[agent]=`${agent}: history discovery unavailable`;
+          return [];
+        });
+        this.discoveries.set(agent,discovery);
+      }
+      const sessions=(await discovery).filter(session=>workspace===undefined||session.workspace.normalize('NFC')===workspace);
+      signal.throwIfAborted();
+      for(const session of sessions){
+        const hit=matchSession(session,text);
+        if(hit)hits.set(session.id,hit);
+      }
+      if(hits.size)update();
+      if(text){
+        for(const session of sessions){
+          signal.throwIfAborted();
+          if('metadataOnly' in session&&session.metadataOnly)continue;
+          const history=await this.adapters[agent].readCatalogHistoryDetailed(session.nativeId).catch(()=>undefined);
+          signal.throwIfAborted();
+          if(!history?.complete)continue;
+          const hit=matchSession({...session,messages:history.items},text);
+          if(hit){
+            hits.set(session.id,hit);
+            if(Date.now()-lastPublish>=200)update();
+          }
+        }
+      }
+      if(!this.warnings[agent].endsWith('history discovery unavailable'))this.report(agent);
+      if(hits.size)update();
+    }));
+    return ordered();
   }
   async refresh(index:SearchIndex):Promise<void> {
     for(const agent of agents) {

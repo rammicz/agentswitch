@@ -163,8 +163,9 @@ export class CodexSessionAdapter implements SessionAdapter {
     this.pending = result.then(() => {}, () => {});
     return result;
   }
-  discover(): Promise<readonly CodexSession[]> { return this.run(() => this.discoverCatalog()); }
-  private async discoverCatalog(ctx = this.context()): Promise<readonly CodexSession[]> {
+  discover(signal?: AbortSignal): Promise<readonly CodexSession[]> { return this.run(() => this.discoverCatalog(this.context(), signal)); }
+  private async discoverCatalog(ctx = this.context(), signal?: AbortSignal): Promise<readonly CodexSession[]> {
+    signal?.throwIfAborted();
     const env = this.options.env ?? process.env;
     try { this.root = await realpath(resolve(this.options.root ?? (env.CODEX_HOME?.trim() || join(this.options.home ?? homedir(), '.codex')))); }
     catch { ctx.add('root-unavailable', 'root'); this.selected.clear(); return []; }
@@ -177,6 +178,7 @@ export class CodexSessionAdapter implements SessionAdapter {
     const names = await this.legacyNames(ctx);
     const candidates = new Map<string, ParsedRollout[]>();
     for (const file of this.files) {
+      signal?.throwIfAborted();
       if (ctx.bytes > ctx.limits.maxScanBytes) break;
       const parsed = await parseFile(file, this.root, ctx, undefined, true);
       if (parsed) candidates.set(file.owner, [...(candidates.get(file.owner) ?? []), parsed]);
@@ -184,6 +186,7 @@ export class CodexSessionAdapter implements SessionAdapter {
     const sessions: CodexSession[] = [];
     this.selected.clear();
     for (const [id, variants] of candidates) {
+      signal?.throwIfAborted();
       const row = metadata.get(id);
       let chosen: ParsedRollout | undefined;
       if (row && typeof row.rollout_path === 'string') {

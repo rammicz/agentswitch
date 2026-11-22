@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, stat, rename, symlink, access, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, stat, rename, symlink, access, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -36,6 +36,15 @@ const select=(provider)=>[{send:provider==='codex'?'public source':'Claude publi
 const redact=[{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions: 1'}];
 const request=[{send:'c'},{wait:'Current request (sent separately'},{send:'\u0015Do next NEEDLE_SECRET\r'},{wait:'Current request: Do next'}];
 const finish=[{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}];
+
+test('cold picker shows folder and global results without building a transcript cache',async t=>{
+ const f=await setup();
+ t.after(()=>rm(f.root,{recursive:true,force:true}));
+ const [result]=pty(f,[{wait:'Search:'},...list,{send:'other-folder-only'},{wait:'No matching sessions.'},
+  {send:'\t'},{wait:'Scope: global'},{wait:`Codex ${codexIds[2]}`},{send:'\x03'}]);
+ assert.equal(result.restored,true);
+ await assert.rejects(access(join(f.state,'search')),{code:'ENOENT'});
+});
 
 for(const [source,target]of [['codex','claude'],['claude','codex']]) test(`real CLI ${source}→${target}: exact consented redacted payload, cwd, disclosure and unchanged native bytes`,async()=>{
  const f=await setup(target);

@@ -1,11 +1,22 @@
 {
   "name": "agentswitch",
-  "version": "0.1.0-dev.1",
+  "version": "0.1.0-dev.2",
   "description": "Find coding-agent sessions and carry conversations between agents.",
   "type": "module",
-  "bin": { "agentswitch": "dist/cli.js" },
-  "files": ["dist", "README.md", "LICENSE", "docs", "CONTRIBUTING.md", "AGENTS.md"],
-  "engines": { "node": ">=22.15" },
+  "bin": {
+    "agentswitch": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "docs",
+    "CONTRIBUTING.md",
+    "AGENTS.md"
+  ],
+  "engines": {
+    "node": ">=22.15"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "npm run build && node dist/cli.js",
@@ -14,10 +25,21 @@
     "test": "npm run build && node --test test/*.test.mjs",
     "prepack": "npm run build"
   },
-  "repository": { "type": "git", "url": "https://github.com/rammicz/agentswitch.git" },
-  "bugs": { "url": "https://github.com/rammicz/agentswitch/issues" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rammicz/agentswitch.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rammicz/agentswitch/issues"
+  },
   "homepage": "https://github.com/rammicz/agentswitch#readme",
-  "keywords": ["codex", "claude-code", "sessions", "tui", "handoff"],
+  "keywords": [
+    "codex",
+    "claude-code",
+    "sessions",
+    "tui",
+    "handoff"
+  ],
   "author": "rammicz",
   "license": "MIT",
   "devDependencies": {

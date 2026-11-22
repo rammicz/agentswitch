@@ -59,7 +59,7 @@ export class ClaudeSessionAdapter implements SessionAdapter {
   private run<T>(operation: () => Promise<T>): Promise<T> {
     const task = this.pending.then(operation); this.pending = task.then(() => {}, () => {}); return task;
   }
-  discover(): Promise<readonly ClaudeSession[]> { return this.run(() => this.catalog(this.context())); }
+  discover(signal?: AbortSignal): Promise<readonly ClaudeSession[]> { return this.run(() => this.catalog(this.context(), signal)); }
   private async files(ctx: ReadContext): Promise<File[]> {
     let count = 0;
     const list = async (path: string): Promise<import('node:fs').Dirent[]> => {
@@ -118,7 +118,8 @@ export class ClaudeSessionAdapter implements SessionAdapter {
     file.mtime = mtime;
     return meta;
   }
-  private async catalog(ctx: ReadContext): Promise<ClaudeSession[]> {
+  private async catalog(ctx: ReadContext, signal?: AbortSignal): Promise<ClaudeSession[]> {
+    signal?.throwIfAborted();
     this.selected = new Map();
     const env = this.options.env ?? process.env;
     const chosen = this.options.root ?? (env.CLAUDE_CONFIG_DIR?.trim() || join(this.options.home ?? homedir(), '.claude'));
@@ -126,6 +127,7 @@ export class ClaudeSessionAdapter implements SessionAdapter {
     catch { ctx.add('root-unavailable', 'root'); return []; }
     const sessions = new Map<string, ClaudeSession>();
     for (const file of await this.files(ctx)) {
+      signal?.throwIfAborted();
       const meta = await this.metadata(file, ctx);
       if (!meta || !meta.valid || meta.sidechain) continue;
       if (!meta.cwd) { ctx.add('metadata-unavailable', 'metadata'); continue; }

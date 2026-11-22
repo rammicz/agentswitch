@@ -72,7 +72,7 @@ const nativeProjection=(snapshot:NativeSnapshot):ContextSnapshot=>({ref:snapshot
 /** Real native readers, index, reusable picker, pure consent preview, journal and runtime. */
 export async function runApplication(options:ApplicationOptions):Promise<void> {
   const env=options.env??process.env;const paths=await applicationPaths(env);const journal=await TransferJournal.open(paths.journal);
-  let index:SearchIndex|undefined;
+  const discovery=new AbortController();
   try {
     const catalog=await NativeCatalog.create(env);
     const prior=options.retry?journal.get(options.retry):undefined;
@@ -98,7 +98,6 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         const key=sourceKeys.get(`${source.agent}:${source.nativeId}`);return key?journal.ownerState(key,activeAttempt):'unknown';
       },acquire:()=>()=>{}}});
     const sourceKeys=new Map<string,string>();
-    if(!prior) {index=await SearchIndex.open({directory:paths.cache,sources:catalog.sources()});await catalog.refresh(index);}
     const recoverySession:Session|undefined=prior?{...prior.source,title:`Recovery of ${prior.id}: prior delivery ${prior.state}`,workspace:prior.workspace,updatedAt:prior.updatedAt,messages:recovered?.items??[]}:undefined;
     const initialRequest=prior?.prompt ? (prior.mode==='fresh-handoff' ? (JSON.parse(prior.prompt) as {currentRequest:string}).currentRequest : prior.prompt) : 'Continue the task from this conversation.';
     const checkNotice = options.checkNotice;
@@ -106,9 +105,9 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
       label:prior?'agentswitch / EXPLICIT FRESH RECOVERY — earlier delivery may have happened':'agentswitch / local native sessions',
       notices:()=>catalog.notices(),
       ...(checkNotice ? { checkNotice: (signal: AbortSignal) => checkNotice(paths.root, signal) } : {}),
-      query:async(query,signal)=>{
+      query:async(query,signal,publish)=>{
         if(recoverySession) {const {messages,...hit}=recoverySession;return [{...hit,matches:[]}];}
-        return index!.query(query,signal);
+        return catalog.search(query,signal,discovery.signal,publish);
       },
       preview:async(source,signal)=>{const snapshot=await resolveSource(source,signal);return snapshot.items;},
       prepare:async(request,signal)=>{
@@ -251,7 +250,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         }
       },
     });
-  } finally {await index?.close();journal.close();}
+  } finally {discovery.abort();journal.close();}
 }
 
 export async function runTransferCommand(args:readonly string[],env:NodeJS.ProcessEnv=process.env):Promise<string|undefined> {
@@ -276,6 +275,6 @@ export async function runTransferCommand(args:readonly string[],env:NodeJS.Proce
 /** Explicitly purge derived public search text independently of transfer archives. */
 export async function purgeSearchCache(env:NodeJS.ProcessEnv=process.env):Promise<void> {
   const paths=await applicationPaths(env);const catalog=await NativeCatalog.create(env);
-  const index=await SearchIndex.open({directory:paths.cache,sources:catalog.sources()});
+  const index=await SearchIndex.open({directory:paths.cache,sources:catalog.sources()},{load:false});
   try {await index.purge();} finally {await index.close();}
 }

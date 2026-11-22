@@ -78,6 +78,27 @@ function excerpt(text: string, needle: string): string {
   return `${left > 0 ? '…' : ''}${points.slice(left, right).join('')}${right < points.length ? '…' : ''}`;
 }
 
+function match(row: IndexedSession, needle: string): SessionHit | undefined {
+  const { session } = row;
+  const matches: MatchExcerpt[] = [];
+  if (needle) {
+    if (row.title.includes(needle)) matches.push({ field: 'title', text: excerpt(session.title, needle) });
+    if (row.workspace.includes(needle)) matches.push({ field: 'workspace', text: excerpt(session.workspace, needle) });
+    for (let i = 0; i < row.texts.length && matches.length < 3; i++) {
+      if (!row.texts[i]!.includes(needle)) continue;
+      const item = session.messages[i]!;
+      matches.push({ field: 'message', itemId: item.id, role: item.role, text: excerpt(item.text, needle) });
+    }
+    if (!matches.length) return;
+  }
+  const { id, agent, nativeId, title, updatedAt } = session;
+  return { id, agent, nativeId, title, workspace: session.workspace, updatedAt, matches };
+}
+
+export function matchSession(session: Session, query: string): SessionHit | undefined {
+  return match(indexed(session), normalize(query.trim()));
+}
+
 /** Offline public-text index. Refresh is explicit; queries never call an adapter. */
 export class SearchIndex {
   private rows: IndexedSession[] = [];
@@ -86,7 +107,7 @@ export class SearchIndex {
   private operations: Promise<void> = Promise.resolve();
   private constructor(private readonly directory: string, private readonly sources: readonly SearchSource[], private readonly database: DatabaseSync, private readonly owner: string, private readonly identity: Stats) {}
 
-  static async open(options: SearchIndexOptions): Promise<SearchIndex> {
+  static async open(options: SearchIndexOptions, { load = true } = {}): Promise<SearchIndex> {
     const agents = new Set<AgentId>();
     for (const source of options.sources) {
       if (!source.sourceId || agents.has(source.adapter.id)) throw new Error('Register one nonempty source identity per provider');
@@ -116,7 +137,7 @@ export class SearchIndex {
       if (version !== 0 && version !== 1) throw new Error('Unsupported search cache schema; use a new directory or purge with the compatible version');
       database.exec('CREATE TABLE IF NOT EXISTS sessions (source TEXT NOT NULL, native_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source, native_id)); PRAGMA user_version=1;');
       const index = new SearchIndex(directory, options.sources.map((source) => ({ ...source })), database, owner, await lstat(filename));
-      index.reload();
+      if (load) index.reload();
       return index;
     } catch (error) { database.close(); throw error; }
   }
@@ -217,20 +238,8 @@ export class SearchIndex {
     for (const row of this.rows) {
       const { session } = row;
       if ((query.agent !== 'all' && session.agent !== query.agent) || (workspace !== undefined && workspace !== session.workspace)) continue;
-      const matches: MatchExcerpt[] = [];
-      if (needle) {
-        if (row.title.includes(needle)) matches.push({ field: 'title', text: excerpt(session.title, needle) });
-        if (row.workspace.includes(needle)) matches.push({ field: 'workspace', text: excerpt(session.workspace, needle) });
-        for (let i = 0; i < row.texts.length && matches.length < 3; i++) {
-          if (row.texts[i]!.includes(needle)) {
-            const item = session.messages[i]!;
-            matches.push({ field: 'message', itemId: item.id, role: item.role, text: excerpt(item.text, needle) });
-          }
-        }
-        if (matches.length === 0) continue;
-      }
-      const { id, agent, nativeId, title, updatedAt } = session;
-      hits.push({ id, agent, nativeId, title, workspace: session.workspace, updatedAt, matches });
+      const hit = match(row, needle);
+      if (hit) hits.push(hit);
     }
     signal?.throwIfAborted();
     return hits;
