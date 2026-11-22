@@ -151,9 +151,13 @@ export class ClaudeSessionAdapter implements SessionAdapter {
   readHistoryDetailed(nativeId: string): Promise<ClaudeHistory> { return this.readDetailed(nativeId, true); }
   /** Read the preceding catalog generation without rescanning sibling sessions. For refresh composition only. */
   readCatalogHistoryDetailed(nativeId: string): Promise<ClaudeHistory> { return this.readDetailed(nativeId, false); }
-  private readDetailed(nativeId: string, rediscover: boolean): Promise<ClaudeHistory> {
+  readCatalogExcerpt(nativeId: string, signal: AbortSignal): Promise<ClaudeHistory> {
+    return this.readDetailed(nativeId, false, signal);
+  }
+  private readDetailed(nativeId: string, rediscover: boolean, excerptSignal?: AbortSignal): Promise<ClaudeHistory> {
     return this.run(async () => {
-      const discovery = this.context();
+      excerptSignal?.throwIfAborted();
+      const discovery = excerptSignal ? new ReadContext(this.limits) : this.context();
       if (rediscover) await this.catalog(discovery);
       const ctx = discovery.fork();
       const file = this.selected.get(nativeId.toLowerCase());
@@ -161,7 +165,7 @@ export class ClaudeSessionAdapter implements SessionAdapter {
       const entries: Entry[] = [];
       await records(file.path, this.root, ctx, (value, line) => {
         const entry = graphEntry(value, line, file.id, ctx); if (entry) entries.push(entry);
-      });
+      }, excerptSignal ? Math.min(512 * 1024, ctx.limits.maxFileBytes) : undefined);
       const items = project(conversation(entries, ctx), file.id, ctx);
       return { items, complete: ctx.complete, diagnostics: ctx.diagnostics, incarnation:nativeIncarnation(await stat(file.path)),retained:false };
     });

@@ -30,6 +30,15 @@ test('source warnings stay off the session list and open with F2',()=>{
  assert.doesNotMatch(r.frames[0],/untested-producer/);
  assert.match(r.frames[1],/Source status/);
 });
+test('last-used times and selection details remain visible after resizing',()=>{
+ const r=run([key('\x1b[B','Second opening request'),{resize:[24,76],wait:'Second opening request'},key('\x03','DONE')],'details');
+ assert.match(r.frames[0],/Alpha task[^\n]*18m ago/);
+ assert.match(r.frames[1],/Beta task[^\n]*2h ago/);
+ assert.match(r.frames[2],/Details/);
+ assert.match(r.frames[2],/Last used: .* UTC/);
+ assert.match(r.frames[2],/Folder: /);
+ assert.doesNotMatch(r.output,/First opening request/);
+});
 
 const openTarget=[key('\r','Enter choose target'),key('\r','Target:')];
 const noDispatch=r=>assert.doesNotMatch(r.output,/DISPATCH/);

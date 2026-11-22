@@ -12,11 +12,19 @@ const hits = [
   { id:'two', nativeId:'n2', agent:'claude', title:'Beta task', workspace, updatedAt:'2026-11-20', matches:[] },
   { id:'three', nativeId:'n3', agent:'claude', title:'Elsewhere task', workspace:other, updatedAt:'2026-11-19', matches:[] },
 ];
+if (scenario === 'details') {
+  hits[0].updatedAt = new Date(Date.now() - 18 * 60_000).toISOString();
+  hits[1].updatedAt = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+}
 let prepared;
 let calls=0;
 try {
   await runPicker({ workspace, scope: scenario === 'global' || scenario === 'missing' ? 'global' : 'folder',
     ...(scenario === 'source-status' ? {notices: () => ['Codex source warning (untested-producer)']} : {}),
+    ...(scenario === 'details' ? {details: async source => {
+      if (source.id === 'one') await later();
+      return [{id:source.id,role:'user',status:'complete',text: source.id === 'one' ? 'First opening request' : 'Second opening request'}];
+    }} : {}),
     query: async (q) => {
       if (scenario === 'query-error' && reads++ === 0) throw Error('offline query failed');
       if (q.text === 'slow') { await later(); console.log('LATE QUERY'); }

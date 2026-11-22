@@ -14,11 +14,12 @@ import type { ContextRef } from './continuity.js';
 const agents: readonly AgentId[] = ['codex','claude','opencode','agy','grok'];
 const canonical = async (path: string): Promise<string> => realpath(resolve(path)).catch(()=>resolve(path));
 const harmless = new Set(['workspace-unavailable','metadata-unavailable','metadata-schema','metadata-unstable','untested-producer']);
+const implicitContext = /^(?:# AGENTS\.md instructions|<(?:environment_context|permissions instructions|collaboration_mode|subagent_notification)\b)/iu;
 function openingTitle(items: readonly HistoryItem[]): string | undefined {
   for (const item of items) {
     if (item.role !== 'user' || item.status !== 'complete') continue;
     const content = item.text.trim();
-    if (!content || /^(?:# AGENTS\.md instructions|<(?:environment_context|permissions instructions|collaboration_mode|subagent_notification)\b)/iu.test(content)) continue;
+    if (!content || implicitContext.test(content)) continue;
     const line = content.split(/\r?\n/, 1)[0]!.trim();
     const characters = Array.from(line);
     return characters.length > 100 ? characters.slice(0, 99).join('') + '…' : line;
@@ -53,6 +54,16 @@ export class NativeCatalog {
     const codes=[...new Set(this.diagnostics[agent].map(diagnostic=>diagnostic.code))];
     this.warnings[agent]=codes.length||extra ? `${agent}: ${extra||'source warnings'}${codes.length?' ('+codes.slice(0,5).join(', ')+(codes.length>5?', …':'')+')':''}` : '';
   }
+  async details(source:SessionSource,signal:AbortSignal):Promise<readonly HistoryItem[]> {
+    signal.throwIfAborted();
+    const {agent,nativeId}=source;
+    let items:readonly HistoryItem[]=[];
+    if(agent==='codex')items=await this.adapters.codex.readCatalogTitleItems(nativeId,signal);
+    if(agent==='claude')items=(await this.adapters.claude.readCatalogExcerpt(nativeId,signal)).items;
+    if(agent==='agy')items=await this.adapters.agy.readCatalogTitleItems(nativeId);
+    signal.throwIfAborted();
+    return items.filter(item=>!implicitContext.test(item.text.trimStart()));
+  }
   /** List with metadata first and read one relevant transcript at a time for text searches. */
   async search(query:SessionQuery, signal:AbortSignal, lifetime:AbortSignal, publish:(hits:readonly SessionHit[])=>void,
     searchCache:()=>Promise<SearchIndex|undefined>):Promise<readonly SessionHit[]> {
@@ -61,7 +72,8 @@ export class NativeCatalog {
     const workspace=query.scope==='folder'?(await canonical(query.workspace)).normalize('NFC'):undefined;
     const selected=agents.filter(agent=>query.agent==='all'||query.agent===agent);
     const hits=new Map<string,SessionHit>();
-    const ordered=()=>[...hits.values()].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)||a.id.localeCompare(b.id));
+    const sortTime=(hit:SessionHit)=>!text&&hit.lastUsedAt ? hit.lastUsedAt : hit.updatedAt;
+    const ordered=()=>[...hits.values()].sort((a,b)=>sortTime(b).localeCompare(sortTime(a))||a.id.localeCompare(b.id));
     let lastPublish=0;
     const update=()=>{
       if(signal.aborted)return;

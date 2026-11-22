@@ -9,7 +9,7 @@ The npm package is currently unpublished. These steps prepare and test a local p
 Download the tarball and its matching `SHA256SUMS` from the same [GitHub release](https://github.com/rammicz/agentswitch/releases) or successful CI matrix artifact. Verify the checksum before installation using `sha256sum -c SHA256SUMS` on Linux or `shasum -a 256 -c SHA256SUMS` on macOS. Use the exact verified tarball in the install command.
 
 ```sh
-npm install --global --offline --ignore-scripts --no-audit --no-fund /absolute/path/agentswitch-0.1.0-dev.5.tgz
+npm install --global --offline --ignore-scripts --no-audit --no-fund /absolute/path/agentswitch-0.1.0-dev.6.tgz
 agentswitch --help
 agentswitch --version
 cd your-project
@@ -22,8 +22,8 @@ On Windows, open PowerShell in your download folder and run:
 
 ```powershell
 $sum = (Get-Content .\SHA256SUMS -Raw).Trim().Split(' ')[0]
-if ((Get-FileHash .\agentswitch-0.1.0-dev.5.tgz -Algorithm SHA256).Hash -ne $sum) { throw 'Checksum mismatch' }
-npm.cmd install --global --offline --ignore-scripts --no-audit --no-fund .\agentswitch-0.1.0-dev.5.tgz
+if ((Get-FileHash .\agentswitch-0.1.0-dev.6.tgz -Algorithm SHA256).Hash -ne $sum) { throw 'Checksum mismatch' }
+npm.cmd install --global --offline --ignore-scripts --no-audit --no-fund .\agentswitch-0.1.0-dev.6.tgz
 agentswitch.cmd --version
 agentswitch.cmd
 ```
@@ -50,7 +50,7 @@ agentswitch update
 
 The command checks immediately and installs the newest eligible release into the same writable global npm prefix. It verifies the package against the GitHub asset SHA-256 digest and validates it in a temporary installation before updating the installed copy. npm runs offline with package lifecycle scripts disabled. Prerelease installations can move to newer prereleases or stable releases. Stable installations stay on stable releases. For a source checkout or `npm link`, update the checkout and rebuild.
 
-For an authorized GitHub release, use a tag matching the package version with a leading `v`, such as `v0.1.0-dev.5`. Attach the exact verified `agentswitch-<version>.tgz` under that name and mark prerelease versions as prereleases. GitHub supplies the asset digest that the updater checks. GitHub Actions workflow artifacts continue to support manual installation.
+For an authorized GitHub release, use a tag matching the package version with a leading `v`, such as `v0.1.0-dev.6`. Attach the exact verified `agentswitch-<version>.tgz` under that name and mark prerelease versions as prereleases. GitHub supplies the asset digest that the updater checks. GitHub Actions workflow artifacts continue to support manual installation.
 
 ## Candidate checklist
 

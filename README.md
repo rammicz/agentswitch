@@ -15,7 +15,7 @@ cd your-project
 agentswitch
 ```
 
-A quiet picker opens with sessions from that folder. Type to search titles and conversation history, use left/right to filter the source agent, or switch to global scope to find conversations from other folders. Select a session, choose a target agent, and continue.
+A quiet picker opens with sessions from that folder and shows how recently each was used. Move the highlight to see the session’s folder, timestamp and available conversation excerpts in the details pane. Narrow terminals show details below the list. Type to search titles and conversation history, use left/right to filter the source agent, or switch to global scope. Select a session, choose a target agent, and continue.
 
 ```text
 agentswitch

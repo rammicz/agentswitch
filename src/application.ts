@@ -111,6 +111,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         if(recoverySession) {const {messages,...hit}=recoverySession;return [{...hit,matches:[]}];}
         return catalog.search(query,signal,discovery.signal,publish,searchCache);
       },
+      details: (source,signal) => recoverySession ? Promise.resolve(recoverySession.messages) : catalog.details(source,signal),
       preview:async(source,signal)=>{const snapshot=await resolveSource(source,signal);return snapshot.items;},
       prepare:async(request,signal)=>{
         const snapshot=await resolveSource(request.source,signal);

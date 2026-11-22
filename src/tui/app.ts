@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { emitKeypressEvents } from 'node:readline';
 import type { Key } from 'node:readline';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { AgentId, HistoryItem, Scope, Session, SessionQuery } from '../domain.js';
 import { searchSessions } from '../search.js';
 import { windowsConsoleMode } from '../windows-runtime.js';
@@ -32,6 +33,51 @@ const wrap = (lines: readonly string[], width: number): string[] => lines.flatMa
   return chunks;
 });
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
+const cellCount = (text: string): number => Array.from(text).reduce((cells, char) => cells + (char.codePointAt(0)! > 0x7f ? 2 : 1), 0);
+const fit = (text: string, width: number): string => {
+  const line = wrap([text], width)[0]!;
+  return line + ' '.repeat(Math.max(0, width - cellCount(line)));
+};
+
+function lastUsed(timestamp: string, now: number): string {
+  const time = Date.parse(timestamp);
+  if (!Number.isFinite(time)) return 'Unknown';
+  const minutes = Math.floor(Math.max(0, now - time) / 60_000);
+  if (minutes === 0) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1_440) return `${Math.floor(minutes / 60)}h ago`;
+  if (minutes < 525_600) return `${Math.floor(minutes / 1_440)}d ago`;
+  return `${Math.floor(minutes / 525_600)}y ago`;
+}
+
+function sessionList(hits: readonly SessionHit[], selected: number, text: string, width: number, height: number,
+  details: readonly string[]): string[] {
+  const sideBySide = width >= 96 && height >= 4;
+  const detailRows = sideBySide ? height : height >= 8 ? Math.ceil(height / 2) : 0;
+  const listRows = Math.max(1, (sideBySide ? height : height - detailRows) - 1);
+  const listWidth = sideBySide ? Math.floor(width * 0.57) : width;
+  const detailWidth = sideBySide ? width - listWidth - 3 : width;
+  const ageWidth = 10;
+  const now = Date.now();
+  const start = Math.max(0, selected - listRows + 1);
+  const row = (label: string, age: string) => listWidth > 32
+    ? fit(label, listWidth - ageWidth - 1) + ' ' + age.padStart(ageWidth) : label;
+  const list = [row('Sessions', 'Last used'), ...hits.slice(start, start + listRows).map((hit, i) =>
+    row(`${start + i === selected ? '›' : ' '} ${hit.agent.padEnd(6)} ${searchResultLabel(hit, text)}`, lastUsed(hit.lastUsedAt ?? hit.updatedAt, now)))];
+  if (!detailRows) return list;
+  const hit = hits[selected]!;
+  const timestamp = hit.lastUsedAt ?? hit.updatedAt;
+  const exact = Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'Unknown';
+  const match = hit.matches.find(item => item.field === 'message');
+  const notes = [...wrap([hit.title], detailWidth).slice(0, 2), ...wrap([`Last used: ${exact}`], detailWidth),
+    ...wrap([`Folder: ${hit.workspace}`], detailWidth).slice(0, 3),
+    ...wrap(match ? [`Match (${match.role}): ${match.text.replace(/\s+/gu, ' ')}`] : details, detailWidth).slice(0, 6),
+    ...wrap([`Session ID: ${hit.nativeId}`], detailWidth)];
+  const pane = ['Details', ...notes].slice(0, detailRows);
+  if (!sideBySide) return [...list, ...pane];
+  return Array.from({ length: Math.max(list.length, pane.length) }, (_, i) =>
+    `${fit(list[i] ?? '', listWidth)} | ${pane[i] ?? ''}`);
+}
 
 function searchResultLabel(hit: SessionHit, query: string): string {
   const match = hit.matches.find(item => item.field === 'message');
@@ -81,6 +127,10 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   let generation = 0;
   let pending: AbortController | undefined;
   let dispatch: PreparedContinuation<Plan> | undefined;
+  let detailRequest: AbortController | undefined;
+  let detailId: string | undefined;
+  let detailLines: readonly string[] = [];
+  let clock: ReturnType<typeof setInterval> | undefined;
   const wasRaw = input.isRaw;
   const wasFlowing = input.readableFlowing;
   const previousData = new Set(input.listeners('data'));
@@ -101,6 +151,8 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   const finish = (error?: unknown): void => {
     if (!active) return;
     active = false;
+    detailRequest?.abort();
+    clearInterval(clock);
     noticeController.abort();
     invalidate();
     let failure = error;
@@ -135,9 +187,8 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       body = lines.slice(sourceOffset, sourceOffset + bodyRows);
       footer = '↑ ↓ Scroll · Esc back';
     } else if (stage === 'list') {
-      const start = Math.max(0, selected - bodyRows + 1);
       const progress = query.text.trim() ? 'Searching history…' : 'Finding local sessions…';
-      body = hits.length ? hits.slice(start, start + bodyRows).map((hit, i) => `${start + i === selected ? '›' : ' '} ${hit.agent.padEnd(6)} ${searchResultLabel(hit, query.text)}`)
+      body = hits.length ? sessionList(hits, selected, query.text, width, bodyRows, detailLines)
         : [busy ? progress : 'No matching sessions. Clear the search or change scope.'];
       footer = '↑ ↓ Select · Enter preview · Esc quit';
       if (busy) footer = hits.length ? `↑ ↓ Select · Enter open session · Esc quit · ${progress}` : 'Esc quit';
@@ -180,9 +231,36 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       `Search: ${query.text || 'type to search history…'}`, `← → Agent: ${query.agent}     Tab Scope: ${query.scope}`,
       '', ...body, '', busy && stage !== 'list' ? 'Loading… · Esc back' : footer,
       ...(stage === 'list' && updateNotice ? [updateNotice] : []), [notice + retryHint, statusHint].filter(Boolean).join(' · ')];
-    output.write('\x1b[2J\x1b[H' + lines.slice(0, height).map(line => wrap([line], width)[0]!).join('\n'));
+    const styledList = stage === 'list' && !showingSources && process.env.NO_COLOR === undefined;
+    const frame = lines.slice(0, height).map((line, index) => {
+      const clipped = wrap([line], width)[0]!;
+      const emphasized = styledList && index >= 4 && /^(?:Sessions\b|Details\b|› )/.test(clipped);
+      return emphasized ? `\x1b[1m${clipped}\x1b[22m` : clipped;
+    });
+    output.write('\x1b[2J\x1b[H' + frame.join('\n'));
   };
-  const redraw = (): void => { try { draw(); } catch (error) { finish(error); } };
+  const redraw = (): void => {
+    try {
+      const hit = active && stage === 'list' && !showingSources ? hits[selected] : undefined;
+      if (hit?.id !== detailId) {
+        detailRequest?.abort(); detailId = hit?.id; detailLines = [];
+        const load = options.details;
+        if (hit && load && !hit.matches.some(match => match.field === 'message')) {
+          const controller = new AbortController();
+          detailRequest = controller;
+          void delay(150, undefined, { signal: controller.signal }).then(() => load(sourceOf(hit), controller.signal)).then(found => {
+            if (controller.signal.aborted) return;
+            detailLines = found.filter(item => item.status === 'complete' && item.role !== 'tool' && item.text.trim()).slice(0, 2).map(item => {
+              const text = Array.from(item.text.replace(/\s+/gu, ' ').trim());
+              return `${item.role === 'user' ? 'Opening request' : 'Reply'}: ${text.slice(0, 240).join('')}${text.length > 240 ? '…' : ''}`;
+            });
+            redraw();
+          }).catch(() => { /* Metadata remains available if an excerpt cannot be read. */ });
+        }
+      }
+      draw();
+    } catch (error) { finish(error); }
+  };
   const request = <T>(work: (signal: AbortSignal) => Promise<T>, accept: (value: T) => void, again: () => void): void => {
     invalidate();
     const current = generation;
@@ -323,6 +401,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     terminalEntered = true;
     output.write(alternateScreen ? '\x1b[?1049h\x1b[?25l' : '\x1b[?25l');
     search();
+    clock = setInterval(() => { if (stage === 'list' && !showingSources) redraw(); }, 60_000).unref();
     const check = options.checkNotice;
     if (check) void Promise.resolve().then(() => check(noticeController.signal)).then(result => {
       if (!active || !result) return;
@@ -341,6 +420,7 @@ export async function runDemo(sessions: readonly Session[], workspace: string, s
       matches: query.text.trim() ? messages.filter(item => item.text.toLocaleLowerCase().includes(query.text.trim().toLocaleLowerCase()))
         .map(item => ({ field: 'message' as const, itemId: item.id, role: item.role, text: item.text })) : [],
     })),
+    details: async source => sessions.find(session => session.id === source.id && session.agent === source.agent)?.messages ?? [],
     preview: async source => sessions.find(session => session.id === source.id && session.agent === source.agent)?.messages ?? [],
     prepare: async request => ({ plan: request, summary: { source: request.source, target: request.target,
       mode: 'fresh-handoff', workspace: request.workspace.path,

@@ -10,6 +10,8 @@ export interface Session {
   workspace: string;
   /** ISO timestamp, or empty when sparse native metadata has no recorded date. */
   updatedAt: string;
+  /** Local activity fallback when a provider has no saved last-used timestamp. */
+  lastUsedAt?: string;
   /** Searchable, public conversation text; never hidden reasoning. */
   messages: readonly HistoryItem[];
 }

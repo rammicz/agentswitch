@@ -10,7 +10,7 @@ export interface Entry extends NativeRecord { uuid: string; type: string; parent
 
 /** Stream bounded lines; oversized/corrupt records cannot suppress later valid records. */
 export async function records(path: string, root: string, ctx: ReadContext,
-  accept: (value: NativeRecord, line: number) => void): Promise<number | undefined> {
+  accept: (value: NativeRecord, line: number) => void, maxBytes = ctx.limits.maxFileBytes): Promise<number | undefined> {
   try {
     const canonical = await realpath(path);
     if (!contains(root, canonical)) throw new Error('unsafe-path');
@@ -32,8 +32,8 @@ export async function records(path: string, root: string, ctx: ReadContext,
         }
         parts = []; size = 0; oversized = false; line++;
       };
-      while (offset < info.size && offset < ctx.limits.maxFileBytes && ctx.remaining > 0) {
-        const requested = Math.min(64 * 1024, info.size - offset, ctx.limits.maxFileBytes - offset, ctx.remaining);
+      while (offset < info.size && offset < maxBytes && ctx.remaining > 0) {
+        const requested = Math.min(64 * 1024, info.size - offset, maxBytes - offset, ctx.remaining);
         const buffer = Buffer.alloc(requested);
         const { bytesRead } = await handle.read(buffer, 0, requested, offset);
         ctx.bytes += bytesRead; offset += bytesRead;

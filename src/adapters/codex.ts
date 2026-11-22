@@ -220,10 +220,13 @@ export class CodexSessionAdapter implements SessionAdapter {
       try { workspace = await realpath(rawWorkspace); }
       catch { ctx.add('workspace-unavailable', 'workspace', undefined, false); }
       const nativeName = displayTitle(mode, row, names.get(id));
+      const modified = row?.updated_at == null && !chosen.file.path.endsWith('.zst')
+        ? await stat(chosen.file.path).then(info => date(info.mtimeMs)).catch(() => undefined) : undefined;
       if (!row && mode === 'paginated') ctx.add('metadata-unavailable', 'metadata', undefined, false);
       this.selected.set(id, chosen.file);
       sessions.push({ id: `codex:${id}`, agent: 'codex', nativeId: id, title: nativeName || subagentTitle(meta) || `Codex ${id}`,
         workspace, createdAt: date(row?.created_at) ?? date(meta.timestamp)!, updatedAt: date(row?.updated_at) ?? date(meta.timestamp)!,
+        ...(modified ? {lastUsedAt:modified} : {}),
         messages: [], historyMode: mode, producerVersion: producer, metadataFidelity: row ? 'native' : 'reduced' });
     }
     return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
