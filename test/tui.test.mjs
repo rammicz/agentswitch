@@ -20,9 +20,9 @@ test('production picker confirms exact prepared plan after terminal cleanup',()=
  assert.equal(dispatched.exact,true);assert.equal(dispatched.raw,false);assert.equal(dispatched.calls,1);
  assert.equal(dispatched.plan.request.target,'claude');assert.deepEqual(dispatched.plan.request.workspace,{kind:'source',path:root});
 });
-test('search exposes attributed hidden message only in progressive preview',()=>{
- const r=run([key('needle','Beta task'),key('\r','Enter choose target'),key('\x1b','Enter preview'),key('\x1b','DONE')]);
- assert.match(r.output,/the hidden needle/);assert.doesNotMatch(r.output,/DISPATCH/);
+test('search shows a message excerpt in the list and attribution in the preview',()=>{
+ const r=run([key('needle','Beta task · the hidden needle'),key('\r','Enter choose target'),key('\x1b','Enter preview'),key('\x1b','DONE')]);
+ assert.match(r.output,/b7 \[assistant\]: the hidden needle/);assert.doesNotMatch(r.output,/DISPATCH/);
 });
 
 const openTarget=[key('\r','Enter choose target'),key('\r','Target:')];

@@ -44,7 +44,7 @@ test('cold picker shows folder and global results without building a transcript 
  assert.equal(startup.restored,true);
  await assert.rejects(access(join(f.state,'search')),{code:'ENOENT'});
  const [result]=pty(f,[...list,{send:'other-folder-only'},{wait:'No matching sessions.'},
-  {send:'\t'},{wait:'Scope: global'},{wait:`Codex ${codexIds[2]}`},{send:'\x03'}]);
+  {send:'\t'},{wait:'Scope: global'},{wait:'codex  other-folder-only'},{send:'\x03'}]);
  assert.equal(result.restored,true);
 });
 

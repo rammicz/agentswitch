@@ -33,6 +33,18 @@ const wrap = (lines: readonly string[], width: number): string[] => lines.flatMa
 });
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
+function searchResultLabel(hit: SessionHit, query: string): string {
+  const match = hit.matches.find(item => item.field === 'message');
+  const text = match?.text.replace(/\s+/gu, ' ').trim();
+  if (!text) return hit.title;
+  const needle = query.trim().replace(/\s+/gu, ' ').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const position = needle ? text.search(new RegExp(needle, 'iu')) : -1;
+  const before = position < 0 ? [] : Array.from(text.slice(0, position));
+  const excerpt = position < 0 ? text
+    : (before.length > 20 ? '…' : '') + before.slice(-20).join('') + text.slice(position);
+  return hit.title.endsWith(` ${hit.nativeId}`) ? excerpt : `${hit.title} · ${excerpt}`;
+}
+
 /** Offline-capable UI boundary; provider compatibility and context budgets belong to services. */
 export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<void> {
   const { input, output, signals } = options.terminal ?? { input: process.stdin, output: process.stdout, signals: process };
@@ -111,7 +123,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     let footer: string;
     if (stage === 'list') {
       const start = Math.max(0, selected - bodyRows + 1);
-      body = hits.length ? hits.slice(start, start + bodyRows).map((hit, i) => `${start + i === selected ? '›' : ' '} ${hit.agent.padEnd(6)} ${hit.title}`)
+      body = hits.length ? hits.slice(start, start + bodyRows).map((hit, i) => `${start + i === selected ? '›' : ' '} ${hit.agent.padEnd(6)} ${searchResultLabel(hit, query.text)}`)
         : [busy ? 'Searching…' : 'No matching sessions. Clear the search or change scope.'];
       footer = busy ? '↑ ↓ Select · Enter open session · Esc quit · Searching…' : '↑ ↓ Select · Enter preview · Esc quit';
     } else if (stage === 'preview') {
