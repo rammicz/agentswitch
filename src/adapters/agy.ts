@@ -150,10 +150,13 @@ export class AgySessionAdapter implements SessionAdapter {
       let cached:readonly AgySession[]=[],cacheAmbiguous:ReadonlySet<string>=new Set();
       try {
         const cache=await this.file(join(root,'cache','last_conversations.json'),root,this.limits.maxBytes,catalog.budget);
-        catalog.cacheSignature=cache.signature;
         const data=await this.parseCache(cache.bytes,diagnostics);
+        catalog.cacheSignature=cache.signature;
         cached=data.sessions;cacheAmbiguous=data.ambiguous;
-      }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+      }catch(error){
+        if((error as NodeJS.ErrnoException).code==='ENOENT')this.diagnostic(diagnostics,'metadata-unavailable');
+        else this.failure(diagnostics,error);
+      }
       const known=new Set<string>(),ambiguous=new Set<string>();
       for(const row of rows) {
         const id=row.conversation_id;

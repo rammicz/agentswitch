@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, realpath, writeFile, readdir, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, realpath, writeFile, readdir, symlink, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgySessionAdapter } from '../dist/adapters/index.js';
@@ -94,5 +94,21 @@ test('agy cache conflicts refuse full catalog identity and generation hydration 
 });
 test('agy refuses FIFO transcripts and cache leaves without opening a blocking reader',async t=>{
  const f=await setup(t);
- for(const path of [f.history,f.cache]){await rm(path);const result=spawnSync('python3',['-c','import os,sys;os.mkfifo(sys.argv[1])',path]);assert.equal(result.status,0);assert.equal((await f.adapter.readHistoryDetailed(f.nativeId)).complete,false);await rm(path);await fixture(f.root,f.cwd);}
+ for(const path of [f.history,f.cache]){await rm(path);const result=spawnSync('python3',['-c','import os,sys;os.mkfifo(sys.argv[1])',path]);assert.equal(result.status,0);assert.equal((await f.adapter.readHistoryDetailed(f.nativeId)).complete,path===f.cache);await rm(path);await fixture(f.root,f.cwd);}
+});
+test('agy explicit catalog workspaces survive unavailable cache while dependent siblings stay unavailable',async t=>{
+ const f=await setup(t),other=join(f.base,'other');await mkdir(other);
+ const sibling=await fixture(f.root,other,{nativeId:'22345678-1234-4234-8234-123456789abc',row:{workspace_uris:''}});
+ for(const state of ['malformed','missing','unreadable','unsafe']) {
+  await rm(f.cache,{force:true});
+  if(state==='malformed')await writeFile(f.cache,'{"PRIVATE_CACHE_SECRET": broken');
+  if(state==='unreadable'){await writeFile(f.cache,'PRIVATE_CACHE_SECRET');await chmod(f.cache,0);}
+  if(state==='unsafe'){const outside=join(f.base,'private-cache');await writeFile(outside,'PRIVATE_CACHE_SECRET');await symlink(outside,f.cache);}
+  const diagnostics=[];const adapter=new AgySessionAdapter({root:f.root,onDiagnostic:d=>diagnostics.push(d)});
+  assert.deepEqual((await adapter.discover()).map(s=>s.nativeId),[f.nativeId],state);
+  const healthy=await adapter.readHistoryDetailed(f.nativeId);assert.equal(healthy.complete,true,state);
+  assert.deepEqual(healthy.items.map(x=>x.role),['user','assistant']);
+  assert.equal((await adapter.readHistoryDetailed(sibling.nativeId)).complete,false,state);
+  assert.ok(diagnostics.length);assert.doesNotMatch(JSON.stringify(diagnostics),/PRIVATE_|broken/);
+ }
 });
