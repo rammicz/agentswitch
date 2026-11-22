@@ -65,6 +65,9 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   const previousData = new Set(input.listeners('data'));
   const previousNewListener = new Set(input.listeners('newListener'));
   let terminalEntered = false;
+  // Some Windows console hosts lose their output channel when leaving an
+  // alternate screen. Keep the picker on the primary screen on Windows.
+  const alternateScreen = process.platform !== 'win32';
   let setupStarted = false;
   let resolveDone!: () => void;
   let rejectDone!: (error: unknown) => void;
@@ -85,10 +88,11 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     if (setupStarted) {
       for (const listener of input.listeners('data')) if (!previousData.has(listener)) attempt(() => { input.removeListener('data', listener as (...args: unknown[]) => void); });
       for (const listener of input.listeners('newListener')) if (!previousNewListener.has(listener)) attempt(() => { input.removeListener('newListener', listener as (...args: unknown[]) => void); });
+      if (!alternateScreen) attempt(() => { input.pause(); });
       attempt(() => { input.setRawMode(wasRaw); });
       attempt(() => { if (wasFlowing === true) input.resume(); else input.pause(); });
     }
-    if (terminalEntered) attempt(() => { output.write('\x1b[?25h\x1b[?1049l'); });
+    if (terminalEntered) attempt(() => { output.write(alternateScreen ? '\x1b[?25h\x1b[?1049l' : '\x1b[?25h\r\n'); });
     if (failure !== undefined) rejectDone(failure); else resolveDone();
   };
   const draw = (): void => {
@@ -261,7 +265,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     input.setRawMode(true);
     input.resume();
     terminalEntered = true;
-    output.write('\x1b[?1049h\x1b[?25l');
+    output.write(alternateScreen ? '\x1b[?1049h\x1b[?25l' : '\x1b[?25l');
     search();
     const check = options.checkNotice;
     if (check) void Promise.resolve().then(() => check(noticeController.signal)).then(result => {

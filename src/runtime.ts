@@ -291,7 +291,7 @@ export function createRuntime(options: RuntimeOptions) {
           signal?.removeEventListener('abort', abort); release();
           const restored = process.platform === 'win32' ? windowsConsoleMode(state) === 'ok'
             : spawnSync('stty', [state], { stdio: [0, 'ignore', 'ignore'], timeout: 1000 }).status === 0;
-          process.stdout.write('\x1b[?25h\x1b[?1049l');
+          process.stdout.write(process.platform === 'win32' ? '\x1b[?25h' : '\x1b[?25h\x1b[?1049l');
           if (!restored) return reject(new RuntimeError('TERMINAL_RESTORE', 'Target stopped but terminal restoration failed. Restore your terminal manually; delivery remains uncertain.'));
           if (error || !launched) return reject(new RuntimeError('LAUNCH_FAILED', 'Cannot launch target executable. Check installation, permissions, workspace and OS argument limits. No automatic retry was attempted.'));
           if (observationError) return reject(new RuntimeError('OBSERVATION_FAILED', 'Target launched but durable launch observation failed. Delivery remains uncertain.'));
