@@ -4,6 +4,7 @@ import { emitKeypressEvents } from 'node:readline';
 import type { Key } from 'node:readline';
 import type { AgentId, HistoryItem, Scope, Session, SessionQuery } from '../domain.js';
 import { searchSessions } from '../search.js';
+import { windowsConsoleMode } from '../windows-runtime.js';
 import type { PickerOptions, PreparedContinuation, SessionHit, SessionSource, WorkspaceChoice } from './contracts.js';
 export type * from './contracts.js';
 
@@ -65,9 +66,11 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   const previousData = new Set(input.listeners('data'));
   const previousNewListener = new Set(input.listeners('newListener'));
   let terminalEntered = false;
-  // Some Windows console hosts lose their output channel when leaving an
-  // alternate screen. Keep the picker on the primary screen on Windows.
+  // ConPTY keeps its output channel open for the handoff on the primary screen.
   const alternateScreen = process.platform !== 'win32';
+  const nativeWindowsConsole = !alternateScreen && !options.terminal;
+  const consoleState = nativeWindowsConsole ? windowsConsoleMode() : undefined;
+  if (nativeWindowsConsole && !consoleState) throw new Error('Cannot snapshot the Windows console. Launch agentswitch in a Windows terminal.');
   let setupStarted = false;
   let resolveDone!: () => void;
   let rejectDone!: (error: unknown) => void;
@@ -93,6 +96,9 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       attempt(() => { if (wasFlowing === true) input.resume(); else input.pause(); });
     }
     if (terminalEntered) attempt(() => { output.write(alternateScreen ? '\x1b[?25h\x1b[?1049l' : '\x1b[?25h\r\n'); });
+    if (setupStarted && consoleState) attempt(() => {
+      if (windowsConsoleMode(consoleState) !== 'ok') throw new Error('Cannot restore the Windows console flags. Reopen your terminal.');
+    });
     if (failure !== undefined) rejectDone(failure); else resolveDone();
   };
   const draw = (): void => {

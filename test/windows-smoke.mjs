@@ -84,7 +84,8 @@ process.stdin.setRawMode = value => {
 const before = windowsConsoleMode();
 if (!before) throw Error('Cannot read initial console mode');
 process.once('beforeExit', () => {
-  if (windowsConsoleMode() !== before) throw Error('Windows console modes did not restore');
+  const after = windowsConsoleMode();
+  if (after !== before) throw Error('Windows console modes did not restore: ' + before + ' -> ' + after);
   console.log('CONSOLE_RESTORED');
   // Leave enough time for the server's ConPTY output pump before the console closes.
   setTimeout(() => {}, 250);
