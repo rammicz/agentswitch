@@ -33,7 +33,13 @@ The picker is inspired by native resume commands, with one shared view across ag
 
 ## Try it locally
 
-Requires Node.js **22.15 or later** and npm. Linux and macOS are the initial platform targets; Windows support needs validation. The demo does not require either agent.
+Download the package and checksum from [GitHub Releases](https://github.com/rammicz/agentswitch/releases), then follow the [tarball installation steps](docs/releasing.md#install-a-verified-tarball).
+
+A global npm installation from a release tarball checks GitHub Releases once per UTC day when you open the picker. The picker displays a notice when a newer release is available. Run `agentswitch update` to check immediately and install into the same npm prefix. Set `AGENTSWITCH_NO_UPDATE_CHECK=1` to disable startup checks. [Installation and updates](docs/releasing.md)
+
+Requires Node.js **22.15 or later** and npm. This release supports Linux and macOS. Native Windows needs validation. The demo runs without any agent installed.
+
+To build from source:
 
 ```sh
 git clone https://github.com/rammicz/agentswitch.git

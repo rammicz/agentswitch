@@ -53,6 +53,8 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   let prepared: PreparedContinuation<Plan> | undefined;
   let busy = false;
   let notice = '';
+  let updateNotice: string | undefined;
+  const noticeController = new AbortController();
   let retry: (() => void) | undefined;
   let active = true;
   let generation = 0;
@@ -73,6 +75,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   const finish = (error?: unknown): void => {
     if (!active) return;
     active = false;
+    noticeController.abort();
     invalidate();
     let failure = error;
     const attempt = (action: () => void): void => { try { action(); } catch (caught) { failure ??= caught; } };
@@ -135,7 +138,8 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     }
     const lines = [options.label ?? 'agentswitch', `Search: ${query.text || 'type to search history…'}`,
       `← → Agent: ${query.agent}     Tab Scope: ${query.scope}`, '', ...body, '',
-      busy ? 'Loading… · Esc back' : footer, [notice + (retry ? (stage === 'list' ? ' · Ctrl+R retry' : ' · R retry') : ''), ...(options.notices?.() ?? [])].filter(Boolean).join(' · ')];
+      busy ? 'Loading… · Esc back' : footer, ...(stage === 'list' && updateNotice ? [updateNotice] : []),
+      [notice + (retry ? (stage === 'list' ? ' · Ctrl+R retry' : ' · R retry') : ''), ...(options.notices?.() ?? [])].filter(Boolean).join(' · ')];
     output.write('\x1b[2J\x1b[H' + lines.slice(0, height).map(line => wrap([line], width)[0]!).join('\n'));
   };
   const redraw = (): void => { try { draw(); } catch (error) { finish(error); } };
@@ -259,6 +263,12 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     terminalEntered = true;
     output.write('\x1b[?1049h\x1b[?25l');
     search();
+    const check = options.checkNotice;
+    if (check) void Promise.resolve().then(() => check(noticeController.signal)).then(result => {
+      if (!active || !result) return;
+      updateNotice = result;
+      redraw();
+    }).catch(() => { /* Update checks are best effort and leave the picker usable offline. */ });
   } catch (error) { finish(error); }
   await done;
   if (dispatch) await options.continue(dispatch.plan);

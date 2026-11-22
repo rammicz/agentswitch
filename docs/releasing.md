@@ -6,10 +6,10 @@ The npm package is currently unpublished. These steps prepare and test a local p
 
 ## Install a verified tarball
 
-Obtain the tarball and its matching `SHA256SUMS` from the same successful CI matrix artifact, or produce them using the checklist below. Verify the checksum before installation (`sha256sum -c SHA256SUMS` on Linux or `shasum -a 256 -c SHA256SUMS` on macOS). Replace the example path with that exact verified tarball:
+Download the tarball and its matching `SHA256SUMS` from the same [GitHub release](https://github.com/rammicz/agentswitch/releases) or successful CI matrix artifact. Verify the checksum before installation using `sha256sum -c SHA256SUMS` on Linux or `shasum -a 256 -c SHA256SUMS` on macOS. Use the exact verified tarball in the install command.
 
 ```sh
-npm install --global --offline --ignore-scripts --no-audit --no-fund /absolute/path/agentswitch-0.1.0-dev.0.tgz
+npm install --global --offline --ignore-scripts --no-audit --no-fund /absolute/path/agentswitch-0.1.0-dev.1.tgz
 agentswitch --help
 agentswitch --version
 cd your-project
@@ -25,6 +25,18 @@ npm uninstall --global --offline --ignore-scripts --no-audit --no-fund agentswit
 ```
 
 Uninstall removes the npm package and command. Native histories and agentswitch's separately stored search cache, archives and delivery journal are user data and remain on disk; see [integration and explicit retention controls](integration.md). For the source-development `npm link` described in the README, the same global uninstall removes that link.
+
+## Update an installed copy
+
+The interactive picker checks public GitHub release metadata once per UTC day and displays a notice in the session list. The check runs alongside the picker and times out after two seconds. Set `AGENTSWITCH_NO_UPDATE_CHECK=1` to disable startup checks. The demo and source checkouts run without startup checks.
+
+```sh
+agentswitch update
+```
+
+The command checks immediately and installs the newest eligible release into the same writable global npm prefix. It verifies the package against the GitHub asset SHA-256 digest and validates it in a temporary installation before updating the installed copy. npm runs offline with package lifecycle scripts disabled. Prerelease installations can move to newer prereleases or stable releases. Stable installations stay on stable releases. For a source checkout or `npm link`, update the checkout and rebuild.
+
+For an authorized GitHub release, use a tag matching the package version with a leading `v`, such as `v0.1.0-dev.1`. Attach the exact verified `agentswitch-<version>.tgz` under that name and mark prerelease versions as prereleases. GitHub supplies the asset digest that the updater checks. GitHub Actions workflow artifacts continue to support manual installation.
 
 ## Candidate checklist
 

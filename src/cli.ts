@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { updateInstallation, updateNotice } from './update.js';
 import { runArchiveCommand } from './archive-cli.js';
 import { purgeSearchCache, runApplication, runTransferCommand } from './application.js';
 import { demoSessions } from './tui/demo.js';
@@ -10,6 +12,7 @@ const help = `agentswitch — coding-agent session switcher
 
 Usage: agentswitch [--demo] [--global] [--help] [--version]
        agentswitch transfers list|show|retry|abort|delete [transfer-id]
+       agentswitch update
        agentswitch cache purge
        agentswitch archive list|read|delete --directory <dir> --archive <id>
          [--item <ordinal>] [--cursor <offset>] [--limit <count>] [--max-bytes <bytes>]
@@ -25,7 +28,15 @@ Private local state: AGENTSWITCH_STATE_DIR (default XDG_STATE_HOME/agentswitch).
 Default operation requires a terminal. Use --demo for synthetic sessions.
 Transfers remain uncertain without a trusted provider consumption receipt.`;
 
+const packageRoot = fileURLToPath(new URL('..', import.meta.url));
+const installedVersion = (): string => JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+
 async function main(): Promise<void> {
+  if (process.argv[2] === 'update') {
+    if (process.argv.length !== 3) throw new Error('Usage: agentswitch update');
+    console.log(await updateInstallation(packageRoot));
+    return;
+  }
   if(process.argv[2]==='cache') {if(process.argv.length!==4||process.argv[3]!=='purge')throw new Error('Usage: agentswitch cache purge');await purgeSearchCache();console.log('Derived search cache purged. Native history and transfer archives are unchanged.');return;}
   if (process.argv[2] === 'transfers') {
     const result=await runTransferCommand(process.argv.slice(3));
@@ -39,10 +50,13 @@ async function main(): Promise<void> {
     help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
   } });
   if (values.help) { console.log(help); return; }
-  if (values.version) { console.log(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version); return; }
+  if (values.version) { console.log(installedVersion()); return; }
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('The picker requires an interactive terminal. Use --help for commands.');
   if(values.demo) await runDemo(demoSessions(process.cwd()), process.cwd(), values.global ? 'global' : 'folder');
-  else await runApplication({workspace:process.cwd(),scope:values.global?'global':'folder'});
+  else await runApplication({
+    workspace: process.cwd(), scope: values.global ? 'global' : 'folder',
+    checkNotice: (state, signal) => updateNotice(packageRoot, installedVersion(), state, signal),
+  });
 }
 
 main().catch((error: unknown) => {

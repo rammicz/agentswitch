@@ -46,6 +46,7 @@ export interface PickerOptions<Plan> {
   compose?: boolean;
   initialRequest?: string;
   notices?: () => readonly string[];
+  checkNotice?: (signal: AbortSignal) => Promise<string | undefined>;
   terminal?: PickerTerminal;
   query(query: SessionQuery, signal: AbortSignal): Promise<readonly SessionHit[]>;
   preview(source: SessionSource, signal: AbortSignal): Promise<readonly HistoryItem[]>;

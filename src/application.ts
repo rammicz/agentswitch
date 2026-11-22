@@ -56,7 +56,10 @@ export async function applicationPaths(env: NodeJS.ProcessEnv=process.env): Prom
 
 interface SourceSnapshot { runtime: RuntimeSource; items: readonly HistoryItem[]; complete: boolean; fingerprint: string; sourceKey: string; context?:ContextRef; retained?:boolean; itemTurns?:readonly NativeItemTurn[]; metadataOnly?:boolean; projectionNotice?:string }
 interface Dispatch { launch: LaunchPlan; handoff: HandoffPlan | null; intent: TransferIntent; fingerprint: string; source: SessionSource; targetFingerprint?:string; targetSource?:SessionSource }
-export interface ApplicationOptions { workspace: string; scope?: Scope; env?: NodeJS.ProcessEnv; retry?: string }
+export interface ApplicationOptions {
+  workspace: string; scope?: Scope; env?: NodeJS.ProcessEnv; retry?: string;
+  checkNotice?: (state: string, signal: AbortSignal) => Promise<string | undefined>;
+}
 // A JSON string gives an unambiguous, lossless representation even when the wire
 // contains controls or ambiguous-width Unicode. JSON.parse reconstructs the exact bytes.
 const encodedPrompt=(prompt:string):string=>JSON.stringify(prompt).replace(/[\x7f-\x9f\u2028\u2029]|\p{Bidi_Control}/gu,unit=>`\\u${unit.charCodeAt(0).toString(16).padStart(4,'0')}`);
@@ -95,9 +98,11 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
     if(!prior) {index=await SearchIndex.open({directory:paths.cache,sources:catalog.sources()});await catalog.refresh(index);}
     const recoverySession:Session|undefined=prior?{...prior.source,title:`Recovery of ${prior.id}: prior delivery ${prior.state}`,workspace:prior.workspace,updatedAt:prior.updatedAt,messages:recovered?.items??[]}:undefined;
     const initialRequest=prior?.prompt ? (prior.mode==='fresh-handoff' ? (JSON.parse(prior.prompt) as {currentRequest:string}).currentRequest : prior.prompt) : 'Continue the task from this conversation.';
+    const checkNotice = options.checkNotice;
     await runPicker<Dispatch>({workspace:options.workspace,scope:options.scope??'folder',compose:true,initialRequest,
       label:prior?'agentswitch / EXPLICIT FRESH RECOVERY — earlier delivery may have happened':'agentswitch / local native sessions',
       notices:()=>catalog.notices(),
+      ...(checkNotice ? { checkNotice: (signal: AbortSignal) => checkNotice(paths.root, signal) } : {}),
       query:async(query,signal)=>{
         if(recoverySession) {const {messages,...hit}=recoverySession;return [{...hit,matches:[]}];}
         return index!.query(query,signal);
