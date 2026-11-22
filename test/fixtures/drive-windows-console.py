@@ -77,8 +77,8 @@ def run(config):
         try:
             while data := os.read(output_fd, 4096):
                 chunks.put(data)
-        except OSError:
-            pass
+        except OSError as error:
+            chunks.put(error)
         finally:
             chunks.put(None)
 
@@ -114,7 +114,13 @@ def run(config):
                 except queue.Empty:
                     continue
                 if data is None:
-                    raise RuntimeError((action, output.decode(errors="replace")))
+                    exit_code = w.DWORD()
+                    checked(status(process.process, c.byref(exit_code)))
+                    raise RuntimeError((action, f"host status {exit_code.value:#x}", output[-1200:].decode(errors="replace")))
+                if isinstance(data, OSError):
+                    exit_code = w.DWORD()
+                    checked(status(process.process, c.byref(exit_code)))
+                    raise RuntimeError((action, str(data), f"host status {exit_code.value:#x}", output[-1200:].decode(errors="replace")))
                 output.extend(data)
             cursor = found + len(expected)
         if wait(process.process, 15_000) != 0:

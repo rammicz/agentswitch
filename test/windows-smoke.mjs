@@ -66,6 +66,7 @@ import { windowsConsoleMode } from ${JSON.stringify(pathToFileURL(join(installed
 import { appendFileSync } from 'node:fs';
 const record = message => appendFileSync(${JSON.stringify(diagnostics)}, String(message) + String.fromCharCode(10));
 process.on('uncaughtExceptionMonitor', error => record(error.stack));
+process.on('exit', code => record('exit ' + code));
 const stderr = process.stderr.write.bind(process.stderr);
 process.stderr.write = (message, ...args) => {
   record(message);
@@ -73,6 +74,13 @@ process.stderr.write = (message, ...args) => {
 };
 console.log('WINDOWS_BASELINE');
 if (!process.stdin.isTTY) throw Error('No Windows console input');
+const setRawMode = process.stdin.setRawMode.bind(process.stdin);
+process.stdin.setRawMode = value => {
+  record('setRawMode ' + value);
+  const result = setRawMode(value);
+  record('setRawMode completed');
+  return result;
+};
 const before = windowsConsoleMode();
 if (!before) throw Error('Cannot read initial console mode');
 process.once('beforeExit', () => {
@@ -90,7 +98,9 @@ await import(${JSON.stringify(pathToFileURL(cli).href)});
       { send: '\r' }, { wait: 'READY' }, { send: 'quit\r' }, { wait: 'uncertain' }, { wait: 'CONSOLE_RESTORED' }],
       [process.execPath, runner]);
   } catch (error) {
-    throw new Error(`${await readFile(diagnostics, 'utf8').catch(() => '')}\n${error.message}`);
+    const journal = spawnSync(process.execPath, [cli, 'transfers', 'list'], { cwd: workspace, env, encoding: 'utf8' });
+    const logs = await readFile(log, 'utf8').catch(() => '');
+    throw new Error(`${await readFile(diagnostics, 'utf8').catch(() => '')}\n${journal.stdout}\n${logs}\n${error.message}`);
   }
   const actual = JSON.parse((await readFile(log, 'utf8')).trim());
   assert.deepEqual(actual.tty, [true, true, true]);
