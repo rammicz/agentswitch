@@ -21,7 +21,7 @@ async function setup(target='opencode') {
  const env={OPENCODE_DB:path,GROK_HOME:join(root,'grok'),AGENTSWITCH_AGY_ROOT:join(root,'agy'),XDG_DATA_HOME:join(root,'xdg-data'),CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:state,PATH:bin+':'+process.env.PATH,RUNTIME_TARGET:target,RUNTIME_LOG:join(root,'launches'),RUNTIME_SCENARIO:'interactive',NODE_NO_WARNINGS:'1',...(process.env.AGENTSWITCH_TEST_ENTRY?{CLI_ENTRY_MODULE:process.env.AGENTSWITCH_TEST_ENTRY}:{})};
  const files=[path,codexPath,claudePath];return {root,cwd,other,codex,claude,path,bin,state,env,files,before:await Promise.all(files.map(hash))};
 }
-function pty(f,actions,args=[]) {const result=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,rows:60,columns:210}),timeout:40000,maxBuffer:8*1024*1024});assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout)[0];}
+function pty(f,actions,args=[],size={rows:60,columns:210}) {const result=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,...size}),timeout:40000,maxBuffer:8*1024*1024});assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout)[0];}
 const needle={opencode:'OpenCode public',codex:'Codex fixture',claude:'Claude fixture'};
 const select=source=>[{wait:'Enter preview'},{send:needle[source]},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
 const target=agent=>Array.from({length:['codex','claude','opencode'].indexOf(agent)},(_,i)=>[{send:'\x1b[C'},{wait:'Target: '+['claude','opencode'][i]}]).flat();
@@ -50,7 +50,11 @@ test('OpenCode recorded workspace override is an explicit fresh context in the s
  const f=await setup();pty(f,[...select('opencode'),...target('opencode'),{send:'w'},{wait:'Explicit workspace override'},{send:f.other+'\r'},{wait:'(override)'},...finish]);const [launch]=await launches(f);assert.equal(launch.cwd,await realpath(f.other));assert.equal(launch.args[0],await realpath(f.other));assert.ok(launch.args[1].startsWith('--prompt='));
 });
 for(const version of ['2.3.2','1.19.7'])test(`OpenCode incompatible ${version} leaves recovery visible and never launches`,async()=>{
- const f=await setup();f.env.OPENCODE_FAKE_VERSION=version;pty(f,[...select('codex'),...target('opencode'),{send:'\r'},{wait:'Target version is unsupported'},{send:'\x03'}]);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
+ const f=await setup();f.env.OPENCODE_FAKE_VERSION=version;
+ const r=pty(f,[...select('codex'),...target('opencode'),{send:'\r'},{wait:'Required: 1.19.6 · R retry'},{send:'\x03'}],[],{rows:14,columns:58});
+ assert.ok(r.output.includes('Target version is unsupported for OpenCode.'));
+ assert.ok(r.output.includes(`Detected: ${version}`));
+ await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
 });
 test('missing OpenCode executable leaves cancellation/recovery without creating a transfer',async()=>{
  const f=await setup();await unlink(join(f.bin,'opencode'));f.env.PATH=f.bin+':'+dirname(process.execPath)+':/usr/bin:/bin';pty(f,[...select('codex'),...target('opencode'),{send:'\r'},{wait:'not found or is not executable'},{send:'\x03'}]);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);

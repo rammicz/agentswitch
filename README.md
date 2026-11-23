@@ -15,14 +15,14 @@ cd your-project
 agentswitch
 ```
 
-A quiet picker opens with sessions from that folder and shows how recently each was used. Move the highlight to see the session’s folder, timestamp and available conversation excerpts in the details pane. Narrow terminals show details below the list. Type to search titles and conversation history, use left/right to filter the source agent, or switch to global scope. Select a session, choose a target agent, and continue.
+A quiet picker opens with sessions from that folder and shows how recently each was used. Move the highlight to see the session’s folder, timestamp and available conversation excerpts in the details pane. Narrow terminals show details below the list. Press ↑ from the first result to focus Search, and ↓ to return to the results. Type to search titles and conversation history, use left/right to filter the source agent, or switch to global scope. Select a session, choose a target agent, and continue.
 
 ```text
 agentswitch
 
-Search: fix the retry logic
-← → Agent: all                 Tab Scope: folder
+Shift+←/→ Agent: all            Tab Scope: folder
 
+  Search: fix the retry logic
 › codex   Fix retry logic in the upload worker
   claude  Investigate intermittent upload failures
 
@@ -62,7 +62,7 @@ The CI release gate tests the actual package on Linux, macOS, and Windows with N
 | Key | In the session list | In progressive views |
 | --- | --- | --- |
 | Type / Backspace | Search titles, workspaces, and message text | Edit a workspace override |
-| ↑ / ↓ | Move selection | Scroll transcript or summary |
+| ↑ / ↓ | Move between search and results | Scroll transcript, target options or summary |
 | ← / → | Open the highlighted session’s subagents with →, return with ← | Cycle target agent in target selection |
 | Shift+← / Shift+→ | Cycle source agents | — |
 | Tab | Toggle folder / global scope | — |

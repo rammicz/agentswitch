@@ -81,14 +81,14 @@ function lastUsed(timestamp: string, now: number): string {
 
 function sessionList(hits: readonly SessionHit[], selected: number, text: string, width: number, height: number,
   details: readonly string[], color: boolean): string[] {
-  const sideBySide = width >= 96 && height >= 4;
-  const detailRows = sideBySide ? height : height >= 8 ? Math.max(5, Math.floor(height * 0.47)) : 0;
-  const listRows = Math.max(1, (sideBySide ? height : height - detailRows) - 1);
+  const sideBySide = selected >= 0 && width >= 96 && height >= 4;
+  const detailRows = selected < 0 ? 0 : sideBySide ? height : height >= 8 ? Math.max(5, Math.floor(height * 0.47)) : 0;
+  const listRows = Math.max(1, sideBySide ? height : height - detailRows);
   const listWidth = sideBySide ? Math.floor(width * 0.43) : width;
   const detailWidth = sideBySide ? width - listWidth - 3 : width;
   const now = Date.now();
   const start = Math.max(0, selected - listRows + 1);
-  const list = [{plain:'Sessions', painted:styled('Sessions', 'heading', color)}, ...hits.slice(start, start + listRows).map((hit, i) => {
+  const list = hits.slice(start, start + listRows).map((hit, i) => {
     const chosen = start + i === selected;
     const age = lastUsed(hit.lastUsedAt ?? hit.updatedAt, now);
     const time = listWidth >= 25 ? `  ${age}` : '';
@@ -96,7 +96,7 @@ function sessionList(hits: readonly SessionHit[], selected: number, text: string
     const children = hit.subagentCount ? '  →' : '';
     const label = clipPanel(`${marker} ${hit.agent.padEnd(6)} ${searchResultLabel(hit, text)}`, Math.max(1, listWidth - time.length - cellCount(children))) + children;
     return {plain:label + time, painted:(chosen ? styled(label, 'selected', color) : label) + (time ? `  ${styled(age, 'time', color)}` : '')};
-  })];
+  });
   if (!detailRows) return list.map(row => row.painted);
   const hit = hits[selected]!;
   const timestamp = hit.lastUsedAt ?? hit.updatedAt;
@@ -215,10 +215,27 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     if (!active) return;
     const width = Math.max(1, (output.columns || 80) - 1);
     const height = Math.max(1, output.rows || 24);
-    const bodyRows = Math.max(1, height - 8);
     const color = process.env.NO_COLOR === undefined && process.env.TERM !== 'dumb';
-    const laidOutList = stage === 'list' && !showingSources && hits.length > 0;
+    const inList = stage === 'list' && !showingSources;
     const sourceNotices = options.notices?.() ?? [];
+    const parent = parents.at(-1);
+    const searchFocused = selected < 0 || !hits.length;
+    const searchLabel = clipPanel(`${searchFocused ? '›' : ' '} Search: ${query.text || 'type to search history…'}`, width);
+    const heading = showingSources ? 'Source status' : stage === 'target' ? 'Choose target'
+      : inList && parent ? `Subagents of ${parent.title}` : options.label ?? 'agentswitch';
+    const header = inList ? [heading, parent ? '← Back to parent' : `Shift+←/→ Agent: ${query.agent}     Tab Scope: ${query.scope}`,
+      '', searchFocused ? styled(searchLabel, 'selected', color) : searchLabel] : [heading, ''];
+    const retryHint = retry && !showingSources ? (inList ? ' · Ctrl+R retry' : ' · R retry') : '';
+    const hints = inList ? [
+      parent ? '' : `F3 ${query.includeSubagents ? 'hide' : 'show'} subagents`,
+      sourceNotices.length ? 'F2 source status' : '',
+    ].filter(Boolean).join(' · ') : '';
+    const status = [
+      ...(inList && updateNotice ? [updateNotice] : []),
+      ...(notice && !showingSources ? (notice + retryHint).split('\n') : []),
+      ...(hints ? [hints] : []),
+    ].flatMap(line => panelWrap(line, width)).slice(0, Math.max(0, height - header.length - 3));
+    const bodyRows = Math.max(1, height - header.length - status.length - 2);
     let body: string[];
     let footer: string;
     if (showingSources) {
@@ -231,7 +248,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       body = hits.length ? sessionList(hits, selected, query.text, width, bodyRows, detailLines, color)
         : [busy ? progress : 'No matching sessions. Clear the search or change scope.'];
       const back = parents.length ? '← Back' : 'Esc quit';
-      footer = `↑ ↓ Select · Enter preview · ${back}`;
+      footer = selected < 0 && hits.length ? `↓ Results · ${back}` : `↑ ↓ Select · Enter preview · ${back}`;
       if (busy) footer = hits.length ? `↑ ↓ Select · Enter open session · ${back} · ${progress}` : back;
     } else if (stage === 'preview') {
       const source = picked!;
@@ -262,21 +279,28 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       body = body.slice(offset, offset + bodyRows);
       footer = '↑ ↓ Scroll · Enter confirm continuation · Esc back';
     } else {
-      body = [`Source: ${picked!.agent}/${picked!.id}`, `Target: ${targets[target]}  ← → change`,
-        `Workspace: ${choice!.path} (${choice!.kind})`, 'W override workspace', ...(options.compose ? [`Current request: ${currentRequest}`, `Redactions: ${redactions.length} literal selection(s)`, `Fresh context: ${fresh ? 'explicitly selected' : 'automatic same-agent resume'}`, 'C edit request · X add redaction · F toggle fresh context'] : [])];
-      footer = 'Enter prepare summary · Esc back';
+      const source = picked!;
+      const title = source.title.endsWith(` ${source.nativeId}`) ? `Session …${source.nativeId.slice(-8)}` : source.title;
+      const lines = [
+        `Target: ${targets[target]}  ← → change`,
+        `Source: ${source.agent} · ${title}`,
+        ...panelWrap(`Workspace: ${choice!.path}${choice!.kind === 'override' ? ' (override)' : ''}`, width),
+        'W change workspace',
+        ...(options.compose ? [
+          '', 'C edit request · X redact · F toggle fresh',
+          ...panelWrap(`Current request: ${currentRequest}`, width),
+          `Redactions: ${redactions.length}`,
+          `Fresh context: ${fresh ? 'explicitly selected' : 'automatic'}`,
+        ] : []),
+      ];
+      offset = Math.max(0, Math.min(offset, lines.length - bodyRows));
+      body = lines.slice(offset, offset + bodyRows);
+      footer = lines.length > bodyRows ? 'Enter review · Esc back · ↑ ↓ Scroll' : 'Enter review · Esc back';
     }
-    const statusHint = stage === 'list' && sourceNotices.length ? 'F2 source status' : '';
-    const subagentHint = stage === 'list' && !parents.length ? `F3 ${query.includeSubagents ? 'hide' : 'show'} subagents` : '';
-    const retryHint = retry ? (stage === 'list' ? ' · Ctrl+R retry' : ' · R retry') : '';
-    const parent = parents.at(-1);
-    const lines = showingSources ? ['Source status', '', ...body, '', footer] : [parent && stage === 'list' ? `Subagents of ${parent.title}` : options.label ?? 'agentswitch',
-      `Search: ${query.text || 'type to search history…'}`, parent && stage === 'list' ? '← Back to parent' : `Shift+←/→ Agent: ${query.agent}     Tab Scope: ${query.scope}`,
-      '', ...body, '', busy && stage !== 'list' ? 'Loading… · Esc back' : footer,
-      ...(stage === 'list' && updateNotice ? [updateNotice] : []), [notice + retryHint, subagentHint, statusHint].filter(Boolean).join(' · ')];
+    const lines = [...header, ...body, '', busy && !inList && !showingSources ? 'Loading… · Esc back' : footer, ...status];
     const frame = lines.slice(0, height).map((line, index) => {
-      if (laidOutList && index >= 4 && index < 4 + body.length) return line;
-      const clipped = wrap([line], width)[0]!;
+      if (inList && (index === header.length - 1 || (hits.length && index >= header.length && index < header.length + body.length))) return line;
+      const clipped = clipPanel(line, width);
       return index === 0 ? styled(clipped, 'heading', color) : clipped;
     });
     output.write('\x1b[2J\x1b[H' + frame.join('\n'));
@@ -328,12 +352,12 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     });
   };
   const search = (focusId?: string): void => {
-    hits = []; selected = 0; selectionMoved = false;
+    hits = []; selected = focusId ? 0 : selected < 0 ? -1 : 0; selectionMoved = false;
     const snapshot = { ...query };
     const show = (found: readonly SessionHit[]): void => {
       const id = selectionMoved ? hits[selected]?.id : focusId;
       hits = found;
-      if (id) selected = Math.max(0, found.findIndex(hit => hit.id === id));
+      if (id && selected >= 0) selected = Math.max(0, found.findIndex(hit => hit.id === id));
     };
     request(signal => options.query(snapshot, signal, found => {
       if (signal.aborted) return;
@@ -382,7 +406,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
         invalidate(); notice = '';
         if (stage === 'list' && parents.length) { closeSubagents(); return; }
         if (stage === 'list') { finish(); return; }
-        if (stage === 'workspace' || stage === 'summary' || stage === 'request' || stage === 'redaction') stage = 'target';
+        if (stage === 'workspace' || stage === 'summary' || stage === 'request' || stage === 'redaction') { stage = 'target'; offset = 0; }
         else if (stage === 'target') { stage = 'preview'; preview(); return; }
         else { stage = 'list'; search(); return; }
       } else if (stage === 'request' || stage === 'redaction') {
@@ -420,10 +444,11 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
         }
         if (key.name === 'tab' && !parents.length) { query.scope = query.scope === 'folder' ? 'global' : 'folder'; search(); return; }
         if (key.ctrl && key.name === 'u') { query.text = ''; search(); return; }
-        if (key.name === 'up' || key.name === 'down') {
-          selected = Math.max(0, Math.min(hits.length - 1, selected + (key.name === 'up' ? -1 : 1)));
+        if (key.name === 'up' || (key.name === 'down' && hits.length)) {
+          selected = Math.max(-1, Math.min(hits.length - 1, selected + (key.name === 'up' ? -1 : 1)));
           selectionMoved = hits.length > 0;
         }
+        else if (key.name === 'return' && selected < 0 && hits.length) { selected = 0; selectionMoved = true; }
         else if (key.name === 'return' && hits[selected]) { picked = hits[selected]; stage = 'preview'; preview(); return; }
         else if (key.name === 'backspace') { query.text = Array.from(query.text).slice(0, -1).join(''); search(); return; }
         else if (retry && key.ctrl && key.name === 'r') { retry(); return; }
@@ -432,10 +457,12 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
         if (key.name === 'up') offset--;
         else if (key.name === 'down') offset++;
         else if (key.name === 'return' && !busy && !retry) {
-          stage = 'target'; target = 0; choice = { kind: 'source', path: picked!.workspace };
+          stage = 'target'; target = 0; offset = 0; choice = { kind: 'source', path: picked!.workspace };
         }
       } else if (stage === 'target') {
-        if (key.name === 'left' || key.name === 'right') { invalidate(); target = (target + (key.name === 'left' ? -1 : 1) + targets.length) % targets.length; notice = ''; }
+        if (key.name === 'up') offset--;
+        else if (key.name === 'down') offset++;
+        else if (key.name === 'left' || key.name === 'right') { invalidate(); target = (target + (key.name === 'left' ? -1 : 1) + targets.length) % targets.length; offset = 0; notice = ''; }
         else if (options.compose && key.name === 'c') { invalidate(); notice=''; stage='request'; }
         else if (options.compose && key.name === 'x') { invalidate(); notice=''; redactionInput=''; stage='redaction'; }
         else if (options.compose && key.name === 'f') { invalidate(); fresh=!fresh; notice=''; }

@@ -67,7 +67,10 @@ def main():
     remember_provider(state,config['env']);state['child'].kill();state['child'].wait(timeout=5)
    if 'collectPreview' in action:
     until(state,'Enter confirm continuation')
-    def body():return state['output'].rsplit('\x1b[2J\x1b[H',1)[-1].split('\r\n')[4:4+config.get('rows',44)-8]
+    def body():
+     rows=state['output'].rsplit('\x1b[2J\x1b[H',1)[-1].split('\r\n')
+     footer=next(i for i,row in enumerate(rows) if 'Enter confirm continuation' in row)
+     return rows[2:footer-1] # Skip the heading and the blank lines around the body.
     state['preview']=body()
     for step in range(1000):
      if any('END EXACT PROMPT JSON STRING' in row for row in body()):break

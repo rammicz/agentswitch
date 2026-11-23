@@ -162,8 +162,19 @@ function probe(executable: string, args: string[], cwd: string, env: NodeJS.Proc
 }
 async function capabilities(target: AgentId, executable: string, cwd: string, env: NodeJS.ProcessEnv, timeout: number, signal?: AbortSignal): Promise<{version:string;observer:boolean}> {
   const version = await probe(executable, ['--version'], cwd, env, timeout, signal);
-  const expected = target === 'codex' ? 'codex-cli 0.171.0' : target==='grok'?'grok 1.0.45 (c33bff361a6f)':target==='agy'?'1.5.14':target==='opencode'?'1.19.6':'2.1.330 (Claude Code)';
-  if (version !== expected) return fail('UNSUPPORTED_VERSION', 'Target version is unsupported. Supported versions: Codex 0.171.0, Claude Code 2.1.330, OpenCode opencode-ai 1.19.6, Antigravity CLI 1.5.14 and Grok Build 1.0.45 (c33bff361a6f). Prepare with a tested version.');
+  const profiles = {
+    codex: { name: 'Codex', version: 'codex-cli 0.171.0' },
+    claude: { name: 'Claude Code', version: '2.1.330 (Claude Code)' },
+    opencode: { name: 'OpenCode', version: '1.19.6' },
+    agy: { name: 'Antigravity CLI', version: '1.5.14' },
+    grok: { name: 'Grok Build', version: 'grok 1.0.45 (c33bff361a6f)' },
+  };
+  const { name, version: expected } = profiles[target];
+  if (version !== expected) {
+    const reported = version.slice(0, 80).replace(/[^\x20-\x7e]/g, ' ').trim();
+    const detected = reported ? reported + (version.length > 80 ? '…' : '') : '(no printable version)';
+    return fail('UNSUPPORTED_VERSION', `Target version is unsupported for ${name}.\nDetected: ${detected}\nRequired: ${expected}`);
+  }
   const help = await probe(executable, ['--help'], cwd, env, timeout, signal);
   if (target === 'codex') {
     const resume = await probe(executable, ['resume', '--help'], cwd, env, timeout, signal);
