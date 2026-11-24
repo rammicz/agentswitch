@@ -172,3 +172,15 @@ test('T4: an expired A→B archive changes neither the B→A native return nor a
  const retry=pty(f,[{wait:'EXPLICIT FRESH RECOVERY'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\x03'}],['transfers','retry',first.id]);
  assert.match(retry.output,/Current request: Review the historical context/);assert.doesNotMatch(retry.output,/Current request: \{/);
 });
+
+test('T4: a return that still needs an expired archive says it expired and offers F, never "Restore it"',async()=>{
+ const f=await setup();
+ // A 20 KB answer cannot fit the 16 KiB prompt, so only the archive holds it.
+ await writeRollout(f.codex,rollout(f.cwd,ids[0],[completed('UserMessage','a1','A original request',1),completed('AgentMessage','a2','A long answer '+'x'.repeat(20000),2)]));
+ await switchToB(f);const [first]=await record(f);assert.ok(first.omittedItemIds.length);
+ const archive=join(first.archive.directory,first.archive.id+'.json');const old=new Date(Date.now()-31*86400000);await utimes(archive,old,old);
+ // Without A's native history the omitted answer exists nowhere else.
+ await rm(f.aFile);
+ const result=pty(f,[...select('B response'),{send:'\r'},{wait:'Required lineage archive expired (older than 30 days). Select F for a fresh handoff.'},{send:'\x03'}]);
+ assert.doesNotMatch(result.output,/Restore it/);await assert.rejects(readFile(archive),{code:'ENOENT'});
+});

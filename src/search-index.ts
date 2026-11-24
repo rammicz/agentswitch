@@ -165,9 +165,10 @@ export class SearchIndex {
           const current = version();
           if (current === 0) database.exec(table('sessions') + ageIndex);
           else if (current === 1) {
+            // Derived data: a cache from before automatic limits is discarded, not rewritten, and refills as searches match.
             // The VACUUM below rewrites the file without the dropped table, so zeroing its pages first only costs time.
             database.exec('PRAGMA secure_delete=OFF;');
-            try { index.migrate(); } finally { database.exec('PRAGMA secure_delete=ON;'); }
+            try { database.exec('DROP TABLE sessions;' + table('sessions') + ageIndex); } finally { database.exec('PRAGMA secure_delete=ON;'); }
           }
           else if (current !== 2) throw new Error('Unsupported search cache schema; use a new directory or purge with the compatible version');
           database.exec('PRAGMA user_version=2;');
@@ -175,7 +176,7 @@ export class SearchIndex {
       }
       // A lowered cap applies at once rather than at the next write.
       else if (index.total() > maxBytes) index.transaction(() => {}, false);
-      // Enables incremental vacuuming on a new file, and rebuilds once a cache created before automatic limits.
+      // Enables incremental vacuuming on a new file, and shrinks a discarded cache from before automatic limits.
       if (database.prepare('PRAGMA auto_vacuum').get()?.auto_vacuum !== 2) {
         try { database.exec('PRAGMA auto_vacuum=INCREMENTAL; VACUUM;'); } catch { /* Retried at the next open. */ }
       }
@@ -234,22 +235,6 @@ export class SearchIndex {
       clear.run(row.source as string, row.native_id as string);
       total -= Number(row.bytes);
     }
-  }
-  /** Version 1 rows had no size or age columns and kept tool output whole. Rewritten in pages to bound memory. */
-  private migrate(): void {
-    this.database.exec(table('sessions_next'));
-    const insert = this.database.prepare('INSERT INTO sessions_next(source, native_id, updated, bytes, data) VALUES (?, ?, ?, ?, ?)');
-    const page = this.database.prepare('SELECT rowid, source, native_id, data FROM sessions WHERE rowid>? ORDER BY rowid LIMIT 64');
-    for (let after = 0, rows = page.all(after); rows.length; rows = page.all(after)) {
-      for (const row of rows) {
-        let session: Session;
-        try { session = JSON.parse(row.data as string) as Session; } catch { throw new Error('Search cache is corrupt; use a fresh private directory and rebuild'); }
-        const { updated, bytes, data } = stored(session);
-        insert.run(row.source as string, row.native_id as string, updated, bytes, data);
-        after = Number(row.rowid);
-      }
-    }
-    this.database.exec('DROP TABLE sessions; ALTER TABLE sessions_next RENAME TO sessions;' + ageIndex);
   }
   private insert(source: string, session: Session): void {
     const { updated, bytes, data } = stored(session);

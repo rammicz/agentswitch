@@ -304,7 +304,7 @@ test('T2: over the cap, the least recently updated sessions lose their text firs
   await assert.rejects(SearchIndex.open({ directory: f.directory, sources: f.sources, maxBytes: 0 }), /cache limit/);
 });
 
-test('T2: opening a version 1 cache bounds stored tool output, applies the cap and returns the freed space', async (t) => {
+test('T2: a version 1 cache is discarded on open, not rewritten: it starts empty, frees its space and refills', async (t) => {
   const f = await fixture(t);
   await f.index.close();
   await rm(join(f.directory, 'index.sqlite'));
@@ -319,15 +319,15 @@ test('T2: opening a version 1 cache bounds stored tool output, applies the cap a
   db.close();
   await chmod(join(f.directory, 'index.sqlite'), 0o600);
   const before = (await stat(join(f.directory, 'index.sqlite'))).size;
-  const index = await SearchIndex.open({ directory: f.directory, sources: f.sources, maxBytes: 320000 });
+  const index = await SearchIndex.open({ directory: f.directory, sources: f.sources });
   t.after(() => index.close());
-  assert.ok((await stat(join(f.directory, 'index.sqlite'))).size < before / 10, 'freed pages are returned to the file system');
-  const rows = cached(f.directory);
-  assert.ok(rows.every((row) => row.messages.every((item) => item.role !== 'tool' || Buffer.byteLength(item.text) <= 2048)));
-  assert.deepEqual(rows.filter((row) => row.messages.length).map((row) => row.nativeId), ['s7', 's8', 's9']);
-  assert.deepEqual(ids(await index.query(query('user_9'))), ['codex:s9']);
-  assert.deepEqual(ids(await index.query(query('old 1'))), ['codex:s1']);
-  assert.equal((await index.query(query())).length, 9);
+  assert.ok((await stat(join(f.directory, 'index.sqlite'))).size < before / 100, 'the discarded text is returned to the file system');
+  assert.deepEqual(cached(f.directory), []);
+  assert.deepEqual(await index.query(query()), []);
+  const check = new DatabaseSync(join(f.directory, 'index.sqlite'), { readOnly: true });
+  assert.equal(check.prepare('PRAGMA user_version').get().user_version, 2); check.close();
+  f.add('codex', 'fresh'); await index.refresh();
+  assert.deepEqual(ids(await index.query(query('sapphire'))), ['codex:fresh']);
 });
 
 test('T3: pruning drops cached sessions that left a provider while other providers stay', async (t) => {

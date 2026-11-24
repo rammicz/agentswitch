@@ -207,7 +207,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
           } catch { /* Unavailable native output requires restored history or explicit source recovery. */ }
         }
         unavailableAncestry ||= Boolean(known?.ids.some(id=>!retainedItems.has(id)&&!sourceIds.has(id)));
-        if(expiredAncestry&&unavailableAncestry&&!request.fresh)throw new Error('Required lineage archive expired and native history no longer covers it. Select F and review an active-source recovery.');
+        if(expiredAncestry&&unavailableAncestry&&!request.fresh)throw new Error('Required lineage archive expired (older than 30 days). Select F for a fresh handoff.');
         const sourceRecovery=Boolean(request.fresh&&unavailableAncestry);
         // A partial source context is never a later reuse target.
         const observed=observeContext({ref,items:snapshot.items,retained:(snapshot.retained??false)&&snapshot.complete,...(snapshot.itemTurns?{itemTurns:snapshot.itemTurns}:{})},prior?[]:contexts,[...aliases,...attempts.filter(attempt=>attempt.deleted||attempt.deleting)],[...retainedItems.values()],known,Boolean(prior||request.fresh||(redactions.length&&source.agent!==request.target)),sourceRecovery);
