@@ -38,7 +38,7 @@ This is a schema-detected source profile, independent from the native binary ver
 
 ## Interactive launch and recovery
 
-The exact version/build and required help are probed during preparation. Other versions/builds, missing executables or required flags fail before publication. Fresh transport is exactly:
+Help is probed during preparation; any version/build whose help lists `--cwd`, plus `--resume` for native open, is accepted (tested with `grok 1.0.45 (c33bff361a6f)`). Missing executables or required flags fail before publication. Fresh transport is exactly:
 
 ```text
 grok --cwd=<selectedCanonicalWorkspace> -- <completeSerializedHandoffJson>

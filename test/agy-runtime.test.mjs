@@ -24,8 +24,8 @@ test('agy fresh literal argument is bounded, uses interactive transport, never s
  for(const prompt of ['x'.repeat(16385),'bad\0value'])await assert.rejects(f.runtime.prepare(f.request,{mode:'fresh',handoff:{...handoff,prompt}}),/byte|NUL/);
  const abort=new AbortController();abort.abort();await assert.rejects(f.runtime.launch(p.plan,{signal:abort.signal}),/cancel/i);
 });
-for(const extra of [{AGY_FAKE_VERSION:'1.5.15'},{AGY_FAKE_HELP:'Usage of agy:\n --conversation only'}])test('agy incompatible exact version/help cannot prepare '+JSON.stringify(extra),async t=>{
- const f=await fixture(t,extra);await assert.rejects(f.runtime.prepare(f.request,{currentRequest:''}),e=>e.code===(extra.AGY_FAKE_VERSION?'UNSUPPORTED_VERSION':'UNSUPPORTED_CAPABILITY'));
+test('agy native open with help lacking --conversation cannot prepare',async t=>{
+ const f=await fixture(t,{AGY_FAKE_HELP:'Usage of agy:\n --prompt-interactive only'});await assert.rejects(f.runtime.prepare(f.request,{currentRequest:''}),e=>e.code==='UNSUPPORTED_CAPABILITY');
 });
 test('agy native open refuses unknown compatibility and unknown owner without guessing',async t=>{
  const f=await fixture(t);for(const nativeResume of ['unknown','incompatible']) {

@@ -31,7 +31,7 @@ v1 outcomes migrate unchanged; legacy acceptance invents no lineage coverage.
 
 ## Conditional Codex receipt
 
-Codex **0.171.0**, advertising `--config <key=value>`, receives launch-local
+Codex advertising `--config <key=value>` (tested with **0.171.0**) receives launch-local
 `hooks.UserPromptSubmit` and `hooks.Stop` declarations. Native layer discovery
 adds them alongside existing callback layers. No saved settings, notify handlers,
 feature flags, permissions, trust hashes or credentials are written/replaced.
@@ -107,10 +107,9 @@ disclosed active-source recovery: available native activity and known included
 echo items, excluding unavailable application ancestry and earlier native reuse.
 The exact narrowed payload requires final confirmation. Ordinary preparation
 fails clearly on unreadable required ancestry. Removed/compacted native branches
-never return through archives.
-Unknown provider versions still fail the existing pinned runtime check. There is
-no verified structured exhaustion signal: select F and review a new payload.
-Generic stderr/exit codes never trigger a second dispatch.
+never return through archives. There is no verified structured exhaustion
+signal: select F and review a new payload. Generic stderr/exit codes never
+trigger a second dispatch.
 
 History redactions require a new continuity target because they cannot erase
 existing native context. Ordinary native resume redacts its new request only

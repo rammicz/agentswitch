@@ -6,12 +6,27 @@ The default CLI composes readers, index, picker, handoff archives and durable
 delivery state. [Continuity](continuity.md) resolves earlier native targets and
 conditionally observes matching Codex submit/completion hooks.
 
-The runtime performs only `--version`, `--help`, and Codex `resume --help` probes.
-It supports exactly **Codex 0.171.0**, **Claude Code 2.1.330**, **OpenCode opencode-ai 1.19.6** **Antigravity CLI 1.5.14** and **Grok Build `grok 1.0.45 (c33bff361a6f)`**, with required
-interactive prompt/resume/workspace help shapes. Probes have a combined 64 KiB
-output cap per invocation and a two second default timeout (configurable up to ten
-seconds). Unknown versions, missing capabilities, nonzero results, timeout and
-excess output fail preparation. Help compatibility is advertised support, not
+The runtime performs only `--version`, `--help`, and, for Codex native resume, `resume --help` probes.
+It accepts any reported version of Codex, Claude Code, OpenCode, Antigravity CLI and Grok Build
+whose help lists, as option lines, the flags that the prepared launch passes. The flags are
+taken from the argument list built for that launch, so a fresh handoff and a native resume
+check different flags:
+
+| Target | Native resume | Fresh handoff |
+| --- | --- | --- |
+| Codex | `-C` in `resume --help` | `-C` in `--help` |
+| Claude Code | `--resume` | none |
+| OpenCode | `--session` | `--prompt` |
+| Antigravity CLI | `--conversation` | `--prompt-interactive` |
+| Grok Build | `--cwd`, `--resume` | `--cwd` |
+
+Usage lines and descriptions are not compared, and a flag mentioned only in prose or as
+part of a longer flag does not count. The sanitized `--version` output is recorded in the
+launch plan only; it never gates preparation. Tested versions are Codex 0.171.0, Claude
+Code 2.1.330, OpenCode 1.19.6, Antigravity CLI 1.5.14 and Grok Build
+`grok 1.0.45 (c33bff361a6f)`. Probes have a combined 64 KiB output cap per invocation and
+a two second default timeout (configurable up to ten seconds). A missing flag, nonzero
+results, timeout and excess output fail preparation. Help compatibility is advertised support, not
 proof of authentication, provider receipt, or model behavior. Tests launch only
 local fake executables; no authenticated provider prompt smoke test has been run. The Antigravity profile retains sterile no-network real version/help/ACP handshake and missing-auth evidence; see [its limits](agy-reader.md).
 

@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 const args=process.argv.slice(2),provider=process.env.FAKE_PROVIDER;
 let turnId;
 if(args.includes('--version'))console.log(provider==='codex'?'codex-cli 0.171.0':'2.1.330 (Claude Code)');
-else if(args.includes('--help'))console.log(provider==='claude'?'Usage: claude [options] [command] [prompt]\n--resume [value]':args[0]==='resume'?'Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]\n--cd <DIR>':'Usage: codex [OPTIONS] [PROMPT]\n--cd <DIR>'+ (process.env.FAKE_HOOK_MODE==='unsupported'?'':'\n-c, --config <key=value>'));
+else if(args.includes('--help'))console.log(provider==='claude'?'Usage: claude [options] [command] [prompt]\n--resume [value]':args[0]==='resume'?'Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]\n-C, --cd <DIR>':'Usage: codex [OPTIONS] [PROMPT]\n-C, --cd <DIR>'+ (process.env.FAKE_HOOK_MODE==='unsupported'?'':'\n-c, --config <key=value>'));
 else {
  const prompt=args.at(-1),cwd=process.cwd(),id=provider==='codex'?(args[0]==='resume'?args.at(-2):'019a0000-0000-7000-8000-000000000004'):'10000000-0000-4000-8000-000000000001';
  const folder=provider==='codex'?join(process.env.CODEX_HOME,'sessions','2026','11','20'):join(process.env.CLAUDE_CONFIG_DIR,'projects','synthetic');mkdirSync(folder,{recursive:true});

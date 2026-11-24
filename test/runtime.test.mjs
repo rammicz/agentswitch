@@ -48,7 +48,7 @@ test('complete UTF-8 positional prompt is bounded with no truncation',async t=>{
  await assert.rejects(prepare('NUL\0secret'),/NUL/);
  await assert.rejects(f.runtime.prepare(f.request,{currentRequest:'x'.repeat(16385)}),/byte/);
 });
-for(const env of [{FAKE_VERSION:'codex-cli 0.172.0'},{FAKE_VERSION:'garbage'},{FAKE_HELP:'bad'},{FAKE_HELP:'huge'},{FAKE_HELP:'timeout'},{FAKE_HELP:'nonzero'}])test(`capabilities reject ${JSON.stringify(env)} before launch`,async t=>{
+for(const env of [{FAKE_HELP:'bad'},{FAKE_HELP:'huge'},{FAKE_HELP:'timeout'},{FAKE_HELP:'nonzero'}])test(`capabilities reject ${JSON.stringify(env)} before launch`,async t=>{
  const f=await fixture(t,env);await assert.rejects(f.runtime.prepare(f.request),RuntimeError);assert.ok((await f.events()).every(e=>e.args.includes('--version')||e.args.includes('--help')));
 });
 test('source identity, trusted workspace and native compatibility cannot be overridden by choice labels',async t=>{

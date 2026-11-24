@@ -49,11 +49,10 @@ test('OpenCode nonempty native draft recovers via explicit F and is transported 
 test('OpenCode recorded workspace override is an explicit fresh context in the selected canonical cwd',async()=>{
  const f=await setup();pty(f,[...select('opencode'),...target('opencode'),{send:'w'},{wait:'Explicit workspace override'},{send:f.other+'\r'},{wait:'(override)'},...finish]);const [launch]=await launches(f);assert.equal(launch.cwd,await realpath(f.other));assert.equal(launch.args[0],await realpath(f.other));assert.ok(launch.args[1].startsWith('--prompt='));
 });
-for(const version of ['2.3.2','1.19.7'])test(`OpenCode incompatible ${version} leaves recovery visible and never launches`,async()=>{
- const f=await setup();f.env.OPENCODE_FAKE_VERSION=version;
- const r=pty(f,[...select('codex'),...target('opencode'),{send:'\r'},{wait:'Required: 1.19.6 · R retry'},{send:'\x03'}],[],{rows:14,columns:58});
- assert.ok(r.output.includes('Target version is unsupported for OpenCode.'));
- assert.ok(r.output.includes(`Detected: ${version}`));
+test('OpenCode help without --prompt leaves recovery visible and never launches',async()=>{
+ const f=await setup();f.env.OPENCODE_FAKE_HELP='opencode [project]\n--session  session id\n--prompt-file  prompt file';
+ const r=pty(f,[...select('codex'),...target('opencode'),{send:'\r'},{wait:'R retry'},{send:'\x03'}],[],{rows:14,columns:58});
+ assert.match(r.output.replace(/\s+/g,' '),/OpenCode capability is missing/);
  await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
 });
 test('missing OpenCode executable leaves cancellation/recovery without creating a transfer',async()=>{
@@ -92,8 +91,8 @@ for(const scenario of ['auth','exit7','self-signal'])test(`OpenCode default CLI 
 for(const name of ['SIGINT','SIGTERM'])test(`OpenCode raw terminal receives ${name} and leaves no active writer`,async()=>{
  const f=await setup();f.env.RUNTIME_SCENARIO='raw';const result=pty(f,[...select('codex'),...target('opencode'),{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{signal:name},{wait:'uncertain — process exited'}]);assert.equal(result.restored,true);assert.equal(result.code,1);const [record]=await records(f);assert.equal(record.exit.signal,name);assert.equal(record.writer,'stopped');
 });
-test('matching OpenCode version with incompatible help fails before publication or launch',async()=>{
- const f=await setup();f.env.OPENCODE_FAKE_HELP='opencode [project]\n--prompt only';pty(f,[...select('codex'),...target('opencode'),{send:'\r'},{wait:'capability is missing'},{send:'\x03'}]);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
+test('OpenCode native resume with help lacking --session fails before publication or launch',async()=>{
+ const f=await setup();f.env.OPENCODE_FAKE_HELP='opencode [project]\n--prompt only';pty(f,[...select('opencode'),...target('opencode'),{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request: '},{send:'\r'},{wait:'does not advertise --session'},{send:'\x03'}]);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
 });
 test('default CLI accepts an external OpenCode DB with a shared ancestor and separate application state',async()=>{
  const f=await setup();f.env.OPENCODE_DB=await fixture(join(f.root,'opencode.db'),f.cwd);const result=pty(f,[...select('codex'),...target('opencode'),...finish]);assert.equal(result.code,0);assert.equal((await launches(f)).length,1);

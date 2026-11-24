@@ -1,6 +1,6 @@
 # OpenCode 1.19.6 compatibility profile
 
-The default CLI supports an **offline fixture-tested** OpenCode source and target profile. Discovery makes no provider call. Runtime probes the selected executable's exact version/help before confirmation. Tests use synthetic databases and fake executables in real PTYs. No real OpenCode executable, authenticated service, model turn or packaged native TUI has been run for certification. Linux and macOS are agentswitch's intended hosts; actual OpenCode consumption remains unverified on both.
+The default CLI supports an **offline fixture-tested** OpenCode source and target profile. Discovery makes no provider call. Runtime probes the selected executable's help before confirmation; any version whose help lists the flag the launch passes (`--session` for native resume, `--prompt` for a fresh handoff) is accepted. Tests use synthetic databases and fake executables in real PTYs. No real OpenCode executable, authenticated service, model turn or packaged native TUI has been run for certification. Linux and macOS are agentswitch's intended hosts; actual OpenCode consumption remains unverified on both.
 
 ## Product and evidence
 

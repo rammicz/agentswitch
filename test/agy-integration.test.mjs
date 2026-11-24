@@ -95,8 +95,8 @@ for(const scenario of ['auth','exit7','self-signal'])test(`agy ${scenario} prese
 for(const signal of ['SIGINT','SIGTERM'])test(`agy raw child receives ${signal} and terminal is restored`,async t=>{
  const f=await setup(t);f.env.RUNTIME_SCENARIO='raw';const r=pty(f,[...select('codex'),...target,{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{signal},{wait:'uncertain — process exited'}]);assert.equal(r.restored,true);assert.equal((await records(f))[0].exit.signal,signal);
 });
-test('agy incompatible version and missing executable recover without provider launch',async t=>{
- const f=await setup(t);f.env.AGY_FAKE_VERSION='1.5.15';pty(f,[...select('codex'),...target,{send:'\r'},{wait:'Target version is unsupported'},{send:'\x03'}]);await assert.rejects(access(f.env.RUNTIME_LOG));await unlink(join(f.bin,'agy'));f.env.PATH=f.bin+':'+dirname(process.execPath)+':/usr/bin:/bin';pty(f,[...select('codex'),...target,{send:'\r'},{wait:'not found or is not executable'},{send:'\x03'}]);assert.equal((await records(f)).length,0);
+test('agy missing executable recovers without provider launch',async t=>{
+ const f=await setup(t);await unlink(join(f.bin,'agy'));f.env.PATH=f.bin+':'+dirname(process.execPath)+':/usr/bin:/bin';pty(f,[...select('codex'),...target,{send:'\r'},{wait:'not found or is not executable'},{send:'\x03'}]);assert.equal((await records(f)).length,0);
 });
 test('agy changed metadata after confirmation cannot dispatch or publish a journal',async t=>{
  const f=await setup(t);const r=pty(f,[...select('agy'),...target,...clear,{send:'\r'},{wait:'Exact current request'},{append:{path:f.cache,text:'invalid changed suffix'}},{send:'\r'},{wait:'Selected source is unavailable'}]);assert.equal(r.code,1);assert.equal(r.restored,true);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);

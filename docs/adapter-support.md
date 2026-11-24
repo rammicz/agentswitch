@@ -51,10 +51,10 @@ The linked documentation records evidence and limitations for these delivered pr
 
 | Profile | Current scope and limits |
 | --- | --- |
-| [Codex](codex-reader.md) | 0.171.0 source-derived history fixtures and pinned runtime surface. Real provider consumption remains unverified. |
-| [Claude Code](claude-reader.md) | 2.1.330, derived from official Python Agent SDK 0.2.187. Public history projection and pinned runtime have documented omissions and native consumption limits. |
+| [Codex](codex-reader.md) | 0.171.0 source-derived history fixtures; runtime accepts any version advertising the required flags. Real provider consumption remains unverified. |
+| [Claude Code](claude-reader.md) | 2.1.330, derived from official Python Agent SDK 0.2.187. Public history projection and help-probed runtime have documented omissions and native consumption limits. |
 | [OpenCode](opencode-reader.md) | `opencode-ai` 1.19.6 public history and offline source/target fixtures. Supports empty-request native resume in its recorded workspace and fresh reviewed transport. Actual native consumption remains unverified. |
 | [Antigravity CLI](agy-reader.md) | Observed 1.5.14 quiescent local public-text shape, incoming/outgoing fresh transfers and sparse metadata/confirmed empty-request native open. Real-account and external provider consumption remain unverified. |
-| [Grok Build](grok-reader.md) | Public v1 source schema and `grok 1.0.45 (c33bff361a6f)` runtime build are independently pinned. Empty-request native open and fresh transport are offline tested. Storage equivalence and authenticated consumption remain unverified. |
+| [Grok Build](grok-reader.md) | Public v1 source schema is pinned; runtime tested with `grok 1.0.45 (c33bff361a6f)` and accepts any build advertising the required flags. Empty-request native open and fresh transport are offline tested. Storage equivalence and authenticated consumption remain unverified. |
 
 The CLI targets Linux, macOS and native Windows. Each adapter keeps its own provider version, storage and native runtime limits. See [platform verification](releasing.md), [runtime constraints](runtime.md) and [integration limits](integration.md).

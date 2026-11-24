@@ -160,36 +160,36 @@ function probe(executable: string, args: string[], cwd: string, env: NodeJS.Proc
     if (signal?.aborted) abort();
   });
 }
-async function capabilities(target: AgentId, executable: string, cwd: string, env: NodeJS.ProcessEnv, timeout: number, signal?: AbortSignal): Promise<{version:string;observer:boolean}> {
+const agentNames: Record<AgentId, string> = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode', agy: 'Antigravity CLI', grok: 'Grok Build' };
+interface LaunchValues { workspace: string; nativeId: string; prompt: string; hooks: readonly string[] }
+/** The only place each target's argv is built; capability checks derive the required flags from it. */
+function launchArgs(target: AgentId, native: boolean, { workspace, nativeId, prompt, hooks }: LaunchValues): string[] {
+  switch (target) {
+    case 'codex': return native ? ['resume', ...hooks, '-C', workspace, '--', nativeId, ...(prompt ? [prompt] : [])] : [...hooks, '-C', workspace, '--', prompt];
+    case 'grok': return [`--cwd=${workspace}`, ...(native ? [`--resume=${nativeId}`] : ['--', prompt])];
+    case 'agy': return native ? ['--conversation', nativeId] : ['--prompt-interactive', prompt];
+    case 'opencode': return [workspace, ...(native ? [`--session=${nativeId}`] : [`--prompt=${prompt}`])];
+    case 'claude': return native ? [`--resume=${nativeId}`, ...(prompt ? ['--', prompt] : [])] : ['--', prompt];
+  }
+}
+/** Options this launch passes, from argv built with placeholder values that cannot be mistaken for options. Hooks are optional and checked separately. */
+function launchFlags(target: AgentId, native: boolean): string[] {
+  const argv = launchArgs(target, native, { workspace: 'w', nativeId: 'i', prompt: 'p', hooks: [] });
+  const end = argv.indexOf('--');
+  return (end < 0 ? argv : argv.slice(0, end)).filter(arg => arg.startsWith('-')).map(arg => arg.split('=', 1)[0]!);
+}
+/** An option line starts with the flag, optionally after a short alias, so prose mentions and longer flags do not count. */
+const advertises = (help: string, flag: string): boolean => new RegExp(`^[ \\t]*(?:-\\w,[ \\t]*)?${flag}(?![\\w-])`, 'm').test(help);
+async function capabilities(target: AgentId, native: boolean, executable: string, cwd: string, env: NodeJS.ProcessEnv, timeout: number, signal?: AbortSignal): Promise<{version:string;observer:boolean}> {
   const version = await probe(executable, ['--version'], cwd, env, timeout, signal);
-  const profiles = {
-    codex: { name: 'Codex', version: 'codex-cli 0.171.0' },
-    claude: { name: 'Claude Code', version: '2.1.330 (Claude Code)' },
-    opencode: { name: 'OpenCode', version: '1.19.6' },
-    agy: { name: 'Antigravity CLI', version: '1.5.14' },
-    grok: { name: 'Grok Build', version: 'grok 1.0.45 (c33bff361a6f)' },
-  };
-  const { name, version: expected } = profiles[target];
-  if (version !== expected) {
-    const reported = version.slice(0, 80).replace(/[^\x20-\x7e]/g, ' ').trim();
-    const detected = reported ? reported + (version.length > 80 ? '…' : '') : '(no printable version)';
-    return fail('UNSUPPORTED_VERSION', `Target version is unsupported for ${name}.\nDetected: ${detected}\nRequired: ${expected}`);
-  }
+  const reported = version.slice(0, 80).replace(/[^\x20-\x7e]/g, ' ').trim();
+  const detected = reported ? reported + (version.length > 80 ? '…' : '') : 'unknown';
   const help = await probe(executable, ['--help'], cwd, env, timeout, signal);
-  if (target === 'codex') {
-    const resume = await probe(executable, ['resume', '--help'], cwd, env, timeout, signal);
-    if (!help.includes('Usage: codex [OPTIONS] [PROMPT]') || !/--cd\s+<DIR>/.test(help) || !resume.includes('Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]') || !/--cd\s+<DIR>/.test(resume))
-      return fail('UNSUPPORTED_CAPABILITY', 'Codex interactive prompt, resume or workspace capability is missing.');
-  } else if(target==='grok') {
-    if(!help.includes('Usage: grok [OPTIONS] [PROMPT] [COMMAND]')||!help.includes('Initial prompt for the interactive session')||!/--cwd\s+<CWD>/.test(help)||!/--resume\s+\[<SESSION_ID_OR_TITLE>\]/.test(help))return fail('UNSUPPORTED_CAPABILITY','Grok Build exact interactive prompt, cwd or resume capability is missing.');
-  } else if(target==='agy') {
-    if(!/^Usage of agy:/m.test(help)||!/^\s+--conversation\s+Resume a previous conversation by ID\s*$/m.test(help)||!/^\s+--prompt-interactive\s+Run an initial prompt interactively and continue the session\s*$/m.test(help))return fail('UNSUPPORTED_CAPABILITY','Antigravity CLI 1.5.14 native conversation or interactive prompt capability is missing.');
-  } else if(target==='opencode') {
-    if(!/opencode \[project\]/.test(help)||!help.includes('--session')||!help.includes('--prompt'))return fail('UNSUPPORTED_CAPABILITY','OpenCode 1.19.6 interactive project, session or prompt capability is missing.');
-  } else if (!/Usage: claude \[options\](?: \[command\])? \[prompt\]/.test(help) || !/--resume\s+\[value\]/.test(help)) {
-    return fail('UNSUPPORTED_CAPABILITY', 'Claude interactive prompt or exact resume capability is missing.');
-  }
-  return {version:expected,observer:process.platform!=='win32'&&target==='codex'&&/--config\s+<key=value>/.test(help)};
+  // Codex resume flags belong to its resume subcommand, so they are advertised in that subcommand's help.
+  const launchHelp = target === 'codex' && native ? await probe(executable, ['resume', '--help'], cwd, env, timeout, signal) : help;
+  const absent = launchFlags(target, native).filter(flag => !advertises(launchHelp, flag));
+  if (absent.length) return fail('UNSUPPORTED_CAPABILITY', `${agentNames[target]} capability is missing: help does not advertise ${absent.join(', ')}.`);
+  return {version:detected,observer:process.platform!=='win32'&&target==='codex'&&/--config\s+<key=value>/.test(help)};
 }
 function available(guard: OwnedSessionGuard, source: SessionSource): void {
   const state = guard.check(source);
@@ -239,15 +239,13 @@ export function createRuntime(options: RuntimeOptions) {
       if (Buffer.byteLength(prompt, 'utf8') > limit) return fail('PROMPT_TOO_LARGE', `Complete initial user prompt exceeds the ${limit} byte transport limit. Reduce the prepared selection before confirming.`);
       const executable = await resolveExecutable(options.executables?.[request.target] ?? request.target, env, request.target);
       const identity = await executableIdentity(executable);
-      const capability = await capabilities(request.target, executable, workspace.path, env, timeout, signal);
+      const capability = await capabilities(request.target, native, executable, workspace.path, env, timeout, signal);
       if(input.requireReceipt&&!capability.observer)return fail('RECEIPT_UNAVAILABLE','Native receipt capability is unavailable; review a fresh bounded rebuild.');
       if (await executableIdentity(executable) !== identity) return fail('EXECUTABLE_CHANGED', 'Target executable changed during preparation. Prepare and confirm again.');
       cancelled(signal);
       const observer=Boolean(capability.observer&&input.observerCommand);
       const hooks=observer?['UserPromptSubmit','Stop'].flatMap(event=>['-c',`hooks.${event}=[{hooks=[{type="command",command=${JSON.stringify(input.observerCommand)},timeout=5}]}]`]):[];
-      const args = request.target === 'codex'
-        ? native ? ['resume',...hooks, '-C', workspace.path, '--', targetSource.nativeId, ...(prompt ? [prompt] : [])] : [...hooks,'-C', workspace.path, '--', prompt]
-        : request.target==='grok'?[`--cwd=${workspace.path}`,...(native?[`--resume=${targetSource.nativeId}`]:['--',prompt])]:request.target==='agy'?(native?['--conversation',targetSource.nativeId]:['--prompt-interactive',prompt]):request.target==='opencode'?[workspace.path,...(native?[`--session=${targetSource.nativeId}`]:[`--prompt=${prompt}`])]:native ? [`--resume=${targetSource.nativeId}`, ...(prompt ? ['--', prompt] : [])] : ['--', prompt];
+      const args = launchArgs(request.target, native, { workspace: workspace.path, nativeId: targetSource.nativeId, prompt, hooks });
       const plan: LaunchPlan = Object.freeze({ mode: native ? 'native-resume' : 'fresh-handoff', target: request.target, executable, args: Object.freeze(args), workspace: workspace.path, version:capability.version,nativeTarget:native?{id:targetSource.id,agent:targetSource.agent,nativeId:targetSource.nativeId}:null,observer:observer?'codex-hooks':'none' });
       const identitySource = Object.freeze({ id: source.id, agent: source.agent, nativeId: source.nativeId });
       snapshots.set(plan, { source: plan.nativeTarget??identitySource, workspacePath: request.workspace.path, workspaceIdentity: workspace.identity, executableIdentity: identity, used: false });

@@ -24,8 +24,12 @@ test('grok fresh literal argument is bounded, uses interactive transport, never 
  for(const prompt of ['x'.repeat(16385),'bad\0value'])await assert.rejects(f.runtime.prepare(f.request,{mode:'fresh',handoff:{...handoff,prompt}}),/byte|NUL/);
  const abort=new AbortController();abort.abort();await assert.rejects(f.runtime.launch(p.plan,{signal:abort.signal}),/cancel/i);
 });
-for(const extra of [{GROK_FAKE_VERSION:'grok 1.0.45 (WRONG)'},{GROK_FAKE_HELP:'Usage of grok:\n --conversation only'}])test('grok incompatible exact version/help cannot prepare '+JSON.stringify(extra),async t=>{
- const f=await fixture(t,extra);await assert.rejects(f.runtime.prepare(f.request,{currentRequest:''}),e=>e.code===(extra.GROK_FAKE_VERSION?'UNSUPPORTED_VERSION':'UNSUPPORTED_CAPABILITY'));
+test('grok newer build with variadic prompt usage prepares',async t=>{
+ const help=JSON.parse(await readFile('test/fixtures/grok/help.json','utf8')).stdout.replace('[PROMPT] [COMMAND]','[PROMPT]... [COMMAND]');
+ const f=await fixture(t,{GROK_FAKE_VERSION:'grok 1.0.92 (b06756fd6256) [stable]',GROK_FAKE_HELP:help});const p=await f.runtime.prepare(f.request,{currentRequest:''});assert.equal(p.plan.version,'grok 1.0.92 (b06756fd6256) [stable]');
+});
+test('grok incompatible help cannot prepare',async t=>{
+ const f=await fixture(t,{GROK_FAKE_HELP:'Usage of grok:\n --conversation only'});await assert.rejects(f.runtime.prepare(f.request,{currentRequest:''}),e=>e.code==='UNSUPPORTED_CAPABILITY');
 });
 test('grok native open refuses unknown compatibility and unknown owner without guessing',async t=>{
  const f=await fixture(t);for(const nativeResume of ['unknown','incompatible']) {

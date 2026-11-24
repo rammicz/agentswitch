@@ -28,7 +28,7 @@ Defaults bound the database to 64 MiB, each transcript to 32 MiB, each JSONL lin
 
 ## Incoming fresh transfers
 
-The runtime checks exact version `1.5.14` and matching native conversation/interactive prompt help. A reviewed fresh handoff uses `['--prompt-interactive', completeJsonEnvelope]`, inherited terminal and the approved canonical cwd. Its single payload remains bounded to 16,384 UTF-8 bytes with whole-message omissions and a usable private archive. Cancelled confirmation creates no transfer archive or journal attempt. Literal arguments use `shell: false`. No permission, model, remote, project, login or automatic approval flags are added. Native settings and credentials remain native.
+The runtime accepts any version whose help lists the flag the launch passes: `--prompt-interactive` for a fresh handoff, `--conversation` for native open (tested with `1.5.14`). A reviewed fresh handoff uses `['--prompt-interactive', completeJsonEnvelope]`, inherited terminal and the approved canonical cwd. Its single payload remains bounded to 16,384 UTF-8 bytes with whole-message omissions and a usable private archive. Cancelled confirmation creates no transfer archive or journal attempt. Literal arguments use `shell: false`. No permission, model, remote, project, login or automatic approval flags are added. Native settings and credentials remain native.
 
 Like other argv transports, the payload may be visible in local process inspection. The target uses its own native account and instructions. Exit status never proves consumption or target identity. Uncertain incoming delivery survives restart and requires an explicit fresh retry. No agy receipt adapter can advance accepted coverage.
 
