@@ -1,5 +1,6 @@
 import { stat } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { resolve, sep } from 'node:path';
 import { emitKeypressEvents } from 'node:readline';
 import type { Key } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -133,6 +134,25 @@ function inputRow(text: string, width: number): string {
   }
   return `…${row}`;
 }
+/**
+ * A folder on one row of `width` cells: the home directory becomes `~`, and a path that still does not fit keeps its
+ * first segment and as many final segments as fit, with `…` between them. Screens with room show the full path.
+ */
+export function compactPath(path: string, width: number, home = homedir()): string {
+  const short = home && home !== sep && (path === home || path.startsWith(home + sep)) ? `~${path.slice(home.length)}` : path;
+  if (cellCount(clean(short)) <= width) return clean(short);
+  const parts = short.split(sep);
+  // An absolute path keeps its first directory (`/Users`), a home-relative one its `~`.
+  const head = parts[0] === '' ? `${sep}${parts[1] ?? ''}` : parts[0]!;
+  const rest = parts.slice(parts[0] === '' ? 2 : 1);
+  let tail = '';
+  for (let index = rest.length - 1; index > 0; index--) {
+    const next = tail ? `${rest[index]}${sep}${tail}` : rest[index]!;
+    if (cellCount(clean(`${head}${sep}…${sep}${next}`)) > width) break;
+    tail = next;
+  }
+  return tail ? clean(`${head}${sep}…${sep}${tail}`) : inputRow(short, width);
+}
 const indent = (rows: readonly string[]): string[] => rows.map(row => `  ${row}`);
 /** Claude Code wraps slash commands in markup; show them as typed (`/name args`). Other text is unchanged. */
 function readableRequest(text: string): string {
@@ -165,7 +185,7 @@ function highlightRow(row: string, tone: Tone | undefined, pattern: RegExp | und
 function sessionHeader(source: SessionHit, items: readonly HistoryItem[], width: number, color: boolean, loading: boolean): string[] {
   const time = source.lastUsedAt ?? source.updatedAt;
   const counts = (['user', 'assistant', 'tool'] as const).map(role => `${items.filter(item => item.role === role).length} ${role}`);
-  const rows = [styled(clipPanel(source.title, width), 'title', color), ...[`Agent: ${source.agent}`, `Folder: ${source.workspace}`,
+  const rows = [styled(clipPanel(source.title, width), 'title', color), ...[`Agent: ${source.agent}`, `Folder: ${compactPath(source.workspace, Math.max(1, width - 'Folder: '.length))}`,
     `Last used: ${lastUsed(time, Date.now())} (${exactTime(time)})`, `Session ID: ${source.nativeId}`,
     [plural(items.length, 'item'), ...counts].join(' · ')].map(label => styled(clipPanel(label, width), 'muted', color))];
   if (!items.length && !loading) rows.push('', ...wordWrap('No readable conversation in this session (metadata only).', width).map(row => styled(row, 'muted', color)));
@@ -247,7 +267,7 @@ function sessionList(hits: readonly SessionHit[], selected: number, text: string
   const excerpts = (match ? [`Match (${match.role}): ${match.text.replace(/\s+/gu, ' ')}`] : details).flatMap(line => panelWrap(line, detailWidth)).slice(0, 7);
   const full = [styled('Details', 'heading', color), ...panelWrap(hit.title, detailWidth).slice(0, 2).map(row => styled(row, 'title', color)), '',
     ...pair('Last used', exactTime(hit.lastUsedAt ?? hit.updatedAt), detailWidth, color),
-    ...pair('Folder', hit.workspace, detailWidth, color, 3),
+    ...pair('Folder', compactPath(hit.workspace, Math.max(1, detailWidth - 'Folder  '.length)), detailWidth, color),
     ...pair('Session ID', hit.nativeId, detailWidth, color, 2),
     ...(hit.subagentCount ? pair('Subagents', `${hit.subagentCount}  → open`, detailWidth, color) : []),
     ...(excerpts.length ? ['', ...excerpts] : [])];

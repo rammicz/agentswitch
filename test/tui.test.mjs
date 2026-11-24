@@ -110,7 +110,7 @@ for(const [scenario,steps,late] of [
 // Fault injection complements real PTYs for terminal APIs that normally do not throw.
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import { runPicker } from '../dist/tui/app.js';
+import { compactPath, runPicker } from '../dist/tui/app.js';
 import { DEFAULT_CURRENT_REQUEST } from '../dist/handoff-format.js';
 function terminal() {
  const input=new PassThrough();input.isTTY=true;input.isRaw=false;
@@ -182,7 +182,7 @@ const bodyOf=(rows,height)=>rows.slice(2,height-2);
 
 test('T1/T4/T5: the preview renders a session header and role blocks without item IDs or complete tags',async()=>{
  const p=await picker();const text=await open(p);const rows=plainRows(text);await p.stop();
- for(const row of ['Fix the flaky upload test','Agent: codex',`Folder: ${root}`,'Session ID: sess-native-1','5 items · 1 user · 2 assistant · 2 tool'])assert.ok(rows.some(line=>line.includes(row)),row);
+ for(const row of ['Fix the flaky upload test','Agent: codex',`Folder: ${compactPath(root,90)}`,'Session ID: sess-native-1','5 items · 1 user · 2 assistant · 2 tool'])assert.ok(rows.some(line=>line.includes(row)),row);
  assert.equal(rows.filter(line=>line.includes('sess-native-1')).length,1);
  assert.ok(rows.some(line=>/^Last used: 18m ago/.test(line)));
  const you=rows.findIndex(line=>line.startsWith('● You'));const codex=rows.findIndex(line=>line.startsWith('● codex'));
@@ -353,4 +353,23 @@ for(const [rows,columns,color] of [[24,80,true],[32,130,true],[24,80,false]]) te
  assert.match(list.replace(sgr,''),/↑↓ select  Enter preview  Esc quit/);
  assert.match(target.replace(sgr,''),/ To\r?\n   \[codex\]  claude  opencode  agy  grok\r?\n   Resumes the original codex session natively\./);
  assert.match(summary.replace(sgr,''),/ {3}Mode  fresh handoff/);assert.match(summary.replace(sgr,''),/ {3}Included 1 of 3 items/);
+});
+
+// A long folder (a macOS temp directory, say) stays on one row so the details and excerpts below it remain visible.
+const longFolder='/var/folders/q2/p1t6rgxj5fj32g1dc7dmd49r0000gn/T/agentswitch-test-run-2185-0JPdUG/agentswitch-picker-Sp0lZX';
+test('compactPath abbreviates the home folder and elides the middle of a long path',()=>{
+ assert.equal(compactPath('/Users/ana/projects/agentswitch',40,'/Users/ana'),'~/projects/agentswitch');
+ assert.equal(compactPath('/Users/ana',40,'/Users/ana'),'~');
+ assert.equal(compactPath('/Users/anabel/x',40,'/Users/ana'),'/Users/anabel/x');
+ assert.equal(compactPath(longFolder,66,'/Users/ana'),'/var/…/agentswitch-test-run-2185-0JPdUG/agentswitch-picker-Sp0lZX');
+ assert.equal(compactPath(longFolder,40,'/Users/ana'),'/var/…/agentswitch-picker-Sp0lZX');
+ assert.equal(compactPath('/Users/ana/'+'x'.repeat(60),30,'/Users/ana'),'…'+'x'.repeat(29));
+ for(const width of [10,20,30,40,60,80])assert.ok(cells(compactPath(longFolder,width,'/Users/ana'))<=width,String(width));
+});
+test('#17 a long folder takes one row in the details pane and the preview header at 80x24',async()=>{
+ const p=await picker({...screens,hits:[{...codexHit,workspace:longFolder},claudeHit],rows:24,columns:80});
+ const list=plainRows(await p.until(text=>text.includes('Opening request'),'excerpt'));
+ assert.ok(list.includes('Folder  /var/…/T/agentswitch-test-run-2185-0JPdUG/agentswitch-picker-Sp0lZX'),JSON.stringify(list));
+ const preview=plainRows(await open(p));await p.stop();
+ assert.ok(preview.includes('Folder: /var/…/T/agentswitch-test-run-2185-0JPdUG/agentswitch-picker-Sp0lZX'),JSON.stringify(preview));
 });
