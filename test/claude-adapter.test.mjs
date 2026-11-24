@@ -216,12 +216,11 @@ test('unknown top-level record types are skipped without making history incomple
   assert.ok(diagnostics.every(d=>d.code==='untested-producer'),JSON.stringify(diagnostics));
   for(const n of [0,2]){
     const baseline=await a.readHistoryDetailed(ids[n]);diagnostics.length=0;const injected=await a.readHistoryDetailed(ids[n+1]);
-    assert.deepEqual(withoutId(injected.items,ids[n+1]),withoutId(baseline.items,ids[n]));assert.equal(injected.complete,baseline.complete);
+    assert.deepEqual(withoutId(injected.items,ids[n+1]),withoutId(baseline.items,ids[n]));assert.equal(injected.complete,baseline.complete);if(n===0)assert.equal(baseline.complete,true);
     assert.deepEqual(injected.diagnostics.filter(d=>d.code!=='untested-producer').map(d=>d.code),baseline.diagnostics.map(d=>d.code));
     assert.equal(injected.diagnostics.filter(d=>d.code==='untested-producer').length,1);assert.equal(injected.diagnostics.find(d=>d.code==='untested-producer').source,'history');
     assert.doesNotMatch(JSON.stringify({injected,diagnostics,sessions}),/PRIVATE_/);
   }
-  assert.equal((await a.readHistoryDetailed(ids[1])).complete,true);
 });
 
 test('unknown record values never reach catalog search or the handoff snapshot',async t=>{
@@ -239,17 +238,16 @@ test('unknown record values never reach catalog search or the handoff snapshot',
 test('strictness stays for malformed graph entries, unknown blocks, wrong owners, untyped records and spilled output',async t=>{
   const {root,cwd}=await fixture(t),u=id=>e(id,cwd,'u',null,'user','Request');
   const cases=[
-    [{type:'user',uuid:'bad',parentUuid:'u',sessionId:ids[0],message:'PRIVATE_NOT_OBJECT'}],
-    [e(ids[1],cwd,'a','u','assistant',[{type:'future-block',value:'PRIVATE_BLOCK'},{type:'text',text:'Kept'}])],
-    [{type:'mode',sessionId:ids[0],mode:'PRIVATE_FOREIGN'}],
-    [{payload:'PRIVATE_UNTYPED'}],
-    [e(ids[4],cwd,'r','u','user',[{type:'tool_result',tool_use_id:'call',content:'<persisted-output>PRIVATE_SPILL</persisted-output>'}])],
+    [{type:'user',uuid:'bad',parentUuid:'u',sessionId:ids[0],message:'PRIVATE_NOT_OBJECT'},'unsupported-shape'],
+    [e(ids[1],cwd,'a','u','assistant',[{type:'future-block',value:'PRIVATE_BLOCK'},{type:'text',text:'Kept'}]),'unsupported-shape'],
+    [{type:'mode',sessionId:ids[0],mode:'PRIVATE_FOREIGN'},'invalid-owner'],
+    [{payload:'PRIVATE_UNTYPED'},'unsupported-shape'],
+    [e(ids[4],cwd,'r','u','user',[{type:'tool_result',tool_use_id:'call',content:'<persisted-output>PRIVATE_SPILL</persisted-output>'}]),'unsupported-shape'],
   ];
-  const expected=['unsupported-shape','unsupported-shape','invalid-owner','unsupported-shape','unsupported-shape'];
-  for(const [n,extra] of cases.entries()){
-    await write(root,ids[n],interleave([u(ids[n]),...extra],bookkeeping(ids[n])));
+  for(const [n,[extra,code]] of cases.entries()){
+    await write(root,ids[n],interleave([u(ids[n]),extra],bookkeeping(ids[n])));
     const r=await reader({root}).readHistoryDetailed(ids[n]);
-    assert.equal(r.complete,false,`case ${n}`);assert.ok(r.diagnostics.some(d=>d.code===expected[n]),`case ${n}`);
+    assert.equal(r.complete,false,`case ${n}`);assert.ok(r.diagnostics.some(d=>d.code===code),`case ${n}`);
     assert.doesNotMatch(JSON.stringify(r.diagnostics),/PRIVATE_/);
   }
 });

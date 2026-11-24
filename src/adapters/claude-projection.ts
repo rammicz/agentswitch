@@ -4,8 +4,6 @@ import { object, text } from './claude-io.js';
 import type { Entry, NativeRecord } from './claude-io.js';
 export const graphTypes = new Set(['user', 'assistant', 'progress', 'system', 'attachment']);
 export const metadataTypes = new Set(['summary', 'custom-title', 'ai-title', 'last-prompt', 'queue-operation', 'file-history-snapshot']);
-/** Reads that already noted a skipped bookkeeping record type; one non-blocking note per read. */
-const skipped = new WeakSet<ReadContext>();
 export function visible(e: NativeRecord): boolean { return !e.isSidechain && !e.isMeta && !e.teamName; }
 export function graphEntry(value: NativeRecord, line: number | undefined, nativeId: string, ctx: ReadContext): Entry | undefined {
   if (value.sessionId !== undefined && (typeof value.sessionId !== 'string' || value.sessionId.toLowerCase() !== nativeId)) {
@@ -14,7 +12,8 @@ export function graphEntry(value: NativeRecord, line: number | undefined, native
   const type = text(value.type);
   if (!graphTypes.has(type)) {
     if (!type) ctx.add('unsupported-shape', 'history', line);
-    else if (!metadataTypes.has(type) && !skipped.has(ctx)) { skipped.add(ctx); ctx.add('untested-producer', 'history', line, false); }
+    // Bookkeeping types from newer producers are skipped with one non-blocking note per read.
+    else if (!metadataTypes.has(type) && !ctx.diagnostics.some(d => d.code === 'untested-producer')) ctx.add('untested-producer', 'history', line, false);
     return;
   }
   if (!text(value.uuid) || (value.parentUuid !== null && value.parentUuid !== undefined && (typeof value.parentUuid !== 'string' || !value.parentUuid))) {
