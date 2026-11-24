@@ -203,3 +203,15 @@ test('agy excluded step notice stays bounded with thousands of excluded steps',a
   assert.equal(summary,'5000 (indexes 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, …)');
   assert.equal(excludedStepsSummary(Array.from({length:5000},(_,i)=>i+1)),'5000 (indexes 1–5000)');
 });
+test('agy native subagent rows are skipped silently and their cached IDs are not re-listed',async t=>{
+  const f=await setup(t),other=join(f.base,'subagent-workspace');await mkdir(other);
+  const sub='22345678-1234-4234-8234-123456789abc',odd='32345678-1234-4234-8234-123456789abc';
+  await fixture(f.root,other,{nativeId:sub,row:{parent_conversation_id:f.nativeId,nesting_depth:1,agent_name:'PRIVATE_AGENT',status:'RUNNING',killed:1,step_count:999}});
+  const diagnostics=[],a=new AgySessionAdapter({root:f.root,onDiagnostic:d=>diagnostics.push(d)});
+  const sessions=await a.discover();assert.deepEqual(sessions.map(s=>[s.nativeId,s.metadataOnly]),[[f.nativeId,false]]);assert.deepEqual(diagnostics,[]);
+  for(const row of [{parent_conversation_id:f.nativeId,nesting_depth:0},{parent_conversation_id:'',nesting_depth:2},{parent_conversation_id:'PRIVATE_NOT_UUID',nesting_depth:1}]) {
+    await fixture(f.root,other,{nativeId:odd,row});diagnostics.length=0;
+    assert.deepEqual((await a.discover()).map(s=>s.nativeId),[f.nativeId]);assert.deepEqual(diagnostics.map(d=>d.code),['unsupported-mode']);
+  }
+  assert.doesNotMatch(JSON.stringify([sessions,diagnostics]),/PRIVATE_/);
+});

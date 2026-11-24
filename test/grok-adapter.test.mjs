@@ -47,3 +47,21 @@ test('Grok unfinished final line gives exactly one partial-record and is never p
  }
 });
 test('Grok recency compares actual timestamps and title fallback without interpreting bucket names',async t=>{const f=await setup(t),second='22345678-1234-4234-8234-123456789abc';await fixture(f.root,f.cwd,{nativeId:second,summary:{generated_title:null,session_summary:'Fallback public title',last_active_at:'2026-09-29T11:00:00.500Z'}});const sessions=await f.adapter.discover();assert.equal(sessions[0].nativeId,second);assert.equal(sessions[0].title,'Fallback public title');assert.equal(sessions[0].updatedAt,'2026-09-29T11:00:00.500Z');});
+test('Grok native subagent sessions are skipped silently; unknown kinds and broken summaries still degrade',async t=>{
+ const f=await setup(t),uuid=n=>`${n}2345678-1234-4234-8234-123456789abc`;
+ for(const [n,summary] of [[2,{session_kind:'subagent'}],[3,{session_kind:'subagent_fork',parent_session_id:id}],[4,{session_kind:'subagent_resume',chat_format_version:2}],[5,{session_kind:'subagent_future_mode',cwd_generation:1}]])
+  await fixture(f.root,f.cwd,{nativeId:uuid(n),summary:{...summary,generated_title:'PRIVATE_SUBAGENT'}});
+ const {NativeCatalog}=await import('../dist/native-catalog.js'),{SearchIndex}=await import('../dist/search-index.js');
+ const env={GROK_HOME:f.root,AGENTSWITCH_AGY_ROOT:join(f.base,'agy'),CODEX_HOME:join(f.base,'codex'),CLAUDE_CONFIG_DIR:join(f.base,'claude'),OPENCODE_DB:join(f.base,'missing.db'),XDG_DATA_HOME:join(f.base,'xdg')};
+ const catalog=await NativeCatalog.create(env),index=await SearchIndex.open({directory:join(f.base,'search'),sources:catalog.sources()});t.after(()=>index.close());
+ const diagnostics=[],a=new adapters.GrokSessionAdapter({root:f.root,onDiagnostic:d=>diagnostics.push(d)});
+ assert.deepEqual((await a.discover()).map(s=>s.nativeId),[id]);assert.deepEqual(diagnostics,[]);
+ await catalog.refresh(index);assert.deepEqual(catalog.notices().filter(n=>n.startsWith('grok:')),[]);
+ for(const [n,summary,code] of [[6,{session_kind:'worktree'},'unsupported-shape'],[7,{session_kind:'PRIVATE_FUTURE_KIND'},'unsupported-shape'],[8,{session_kind:'subagent',info:{id:uuid(8),cwd:'relative'}},'malformed-record']]) {
+  const extra=await fixture(f.root,f.cwd,{nativeId:uuid(n),summary});diagnostics.length=0;
+  assert.deepEqual((await a.discover()).map(s=>s.nativeId),[id]);assert.deepEqual(diagnostics.map(d=>d.code),[code]);
+  await catalog.refresh(index);assert.match(catalog.notices().filter(n=>n.startsWith('grok:')).join(' '),new RegExp(code));
+  await rm(extra.directory,{recursive:true});
+ }
+ assert.doesNotMatch(JSON.stringify(catalog.notices()),/PRIVATE_/);
+});

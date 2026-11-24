@@ -165,6 +165,10 @@ export class AgySessionAdapter implements SessionAdapter {
       for(const row of rows)try {
         const id=row.conversation_id;
         if(typeof id!=='string'||!agyNativeId.test(id)||id!==id.toLowerCase()||ambiguous.has(id)||cacheAmbiguous.has(id))throw Error('ambiguous-rollout');
+        // Native subagent conversations belong to their parent and are skipped silently, whatever their state. Their
+        // IDs stay in `known`, so a cache entry naming one is not listed as a metadata-only session either.
+        if(typeof row.parent_conversation_id==='string'&&agyNativeId.test(row.parent_conversation_id)&&
+           Number.isSafeInteger(row.nesting_depth)&&Number(row.nesting_depth)>=1&&(row.agent_name==null||typeof row.agent_name==='string'))continue;
         if(row.status!=='CASCADE_RUN_STATUS_IDLE'||row.not_fully_idle!==0||row.killed!==0||
            row.source!==''||row.parent_conversation_id!==''||row.agent_name!==''||
            row.nesting_depth!==0||row.battle_id!==''||row.winning_conversation_id!==''||
