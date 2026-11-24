@@ -135,7 +135,7 @@ src/domain.ts        Sessions, history items, queries, handoff state
 src/adapters/        Read-only Codex/Claude/OpenCode/Grok readers, agy metadata and contracts
 src/search.ts        In-memory demo search baseline
 src/search-index.ts  Private persistent offline query component
-src/runtime.ts       Pinned planner and inherited-terminal launch component
+src/runtime.ts       Planner and inherited-terminal launch component
 src/handoff.ts       Deterministic byte-bounded public-history preparation
 src/archive.ts       Private immutable archives and bounded retrieval
 src/tui/             Synthetic data and keyboard interaction prototype

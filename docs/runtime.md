@@ -44,7 +44,7 @@ provider-scoped identity, recorded workspace and native compatibility. The picke
 request alone cannot attest to those facts. `nativeResume: 'compatible'` must come
 from an adapter that knows the source kind; incompatible or unknown native formats
 require explicit fresh recovery. Codex/Claude same-agent resume accepts only an exact UUID; OpenCode accepts an exact `ses_` ID in its recorded workspace with an explicitly empty current request (see [OpenCode profile](opencode-reader.md));
-Grok uses an exact UUID and explicitly empty draft at its recorded workspace; its [public v1 schema and native build evidence](grok-reader.md) are independently pinned. There is no latest-session, name, picker, fork or cross-provider ID fallback.
+Grok uses an exact UUID and explicitly empty draft at its recorded workspace; its [public v1 schema](grok-reader.md) is pinned, while the native build is only tested. There is no latest-session, name, picker, fork or cross-provider ID fallback.
 
 `prepare(request, input, signal)` returns `PreparedContinuation<LaunchPlan>` for
 the existing picker. Same-provider `auto` resumes natively. A different provider,
