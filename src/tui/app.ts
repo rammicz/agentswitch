@@ -313,8 +313,8 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   let pending: AbortController | undefined;
   let dispatch: PreparedContinuation<Plan> | undefined;
   let detailRequest: AbortController | undefined;
-  // The target screen's outcome for one request key; `text` is unset while the service decides.
-  let outcome: { key: string; native?: boolean; failed?: boolean; text?: string } | undefined;
+  // The target screen's outcome for one request key; `shown` is unset while the service decides.
+  let outcome: { key: string; shown?: { text: string; tone: Tone | readonly Tone[] } } | undefined;
   let outcomeRequest: AbortController | undefined;
   let detailId: string | undefined;
   let detailLines: readonly string[] = [];
@@ -457,7 +457,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       const title = source.title.endsWith(` ${source.nativeId}`) ? `Session …${source.nativeId.slice(-8)}` : source.title;
       const chosen = targets[target]!;
       // The same rule as runtime preparation: the source's own agent resumes natively unless fresh is chosen.
-      const said = outcome?.text === undefined ? styled('Checking what this target will do…', 'muted', color) : undefined;
+      const shown = outcome?.shown;
       const selector = targets.map(agent => agent === chosen ? `[${agent}]` : agent).join('  ');
       const lines = [
         section('From'),
@@ -465,8 +465,8 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
         '', section('To'),
         `  ${cellCount(selector) > inner ? clipPanel(selector, inner)
           : targets.map(agent => agent === chosen ? styled(`[${agent}]`, ['title', agent], color) : styled(agent, 'muted', color)).join('  ')}`,
-        ...(!options.outcome ? [] : said ? [`  ${clipPanel(said, inner)}`]
-          : indent(panelWrap(outcome!.text!, inner).map(row => styled(row, outcome!.failed ? 'warning' : outcome!.native ? 'success' : [], color)))),
+        ...(!options.outcome ? [] : !shown ? [`  ${styled(clipPanel('Checking what this target will do…', inner), 'muted', color)}`]
+          : indent(panelWrap(shown.text, inner).map(row => styled(row, shown.tone, color)))),
         `  ${keycaps([['← →', 'change target']], inner, color)}`,
         '', section('Workspace'),
         ...indent(panelWrap(`${choice!.path}${choice!.kind === 'override' ? ' (override)' : ''}`, inner)),
@@ -498,12 +498,19 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
           const controller = new AbortController();
           outcomeRequest = controller; outcome = { key };
           // Wait briefly so cycling targets does not start a read for each one passed.
-          void delay(150, undefined, { signal: controller.signal }).then(() => usableWorkspace(value, controller.signal))
-            .then(() => predict(value, controller.signal)).then(
-            found => ({ key, native: found.native, text: found.text }), error => ({ key, failed: true, text: message(error) })).then(found => {
-            if (controller.signal.aborted || !active || stage !== 'target') return;
-            outcome = found; redraw();
-          });
+          void (async () => {
+            let shown: NonNullable<typeof outcome>['shown'];
+            try {
+              await delay(150, undefined, { signal: controller.signal });
+              await usableWorkspace(value.workspace.path, controller.signal);
+              const found = await predict(value, controller.signal);
+              shown = { text: found.text, tone: found.native ? 'success' : [] };
+            } catch (error) { shown = { text: message(error), tone: 'warning' }; }
+            if (controller.signal.aborted || !active) return;
+            // Kept even if another screen is open now, so returning to the target shows it.
+            outcome = { key, shown };
+            if (stage === 'target') redraw();
+          })();
         }
       }
       const hit = active && stage === 'list' && !showingSources ? hits[selected] : undefined;
@@ -578,17 +585,17 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   };
   const continuationRequest = (): ContinuationRequest => ({ source: sourceOf(picked!), target: targets[target]!, workspace: { ...choice! },
     ...(options.compose ? { currentRequest, redactions: [...redactions], fresh } : {}) });
-  const usableWorkspace = async ({ workspace }: ContinuationRequest, signal: AbortSignal): Promise<void> => {
-    const directory = await stat(workspace.path).catch(() => undefined);
-    if (!directory?.isDirectory()) throw new Error(`Workspace unavailable: ${workspace.path}. Press W to choose another folder.`);
-    if (signal.aborted) throw new Error('Cancelled');
+  const usableWorkspace = async (path: string, signal: AbortSignal): Promise<void> => {
+    const directory = await stat(path).catch(() => undefined);
+    if (!directory?.isDirectory()) throw new Error(`Workspace unavailable: ${path}. Press W to choose another folder.`);
+    signal.throwIfAborted();
   };
   const prepare = (): void => {
     // Preparation decides for itself; a prediction still running would only repeat its reads.
-    outcomeRequest?.abort(); outcome = undefined;
+    if (!outcome?.shown) { outcomeRequest?.abort(); outcome = undefined; }
     const requestValue = continuationRequest();
     request(async signal => {
-      await usableWorkspace(requestValue, signal);
+      await usableWorkspace(requestValue.workspace.path, signal);
       return options.prepare(requestValue, signal);
     }, value => { prepared = value; stage = 'summary'; offset = 0; }, prepare);
   };

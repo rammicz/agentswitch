@@ -67,6 +67,8 @@ export interface ApplicationOptions {
 // contains controls or ambiguous-width Unicode. JSON.parse reconstructs the exact bytes.
 const encodedPrompt=(prompt:string):string=>JSON.stringify(prompt).replace(/[\x7f-\x9f\u2028\u2029]|\p{Bidi_Control}/gu,unit=>`\\u${unit.charCodeAt(0).toString(16).padStart(4,'0')}`);
 const publicIdentity=(source:SessionSource):SessionSource=>({agent:source.agent,id:source.id,nativeId:source.nativeId});
+// These agents open an existing native session with no initial request.
+const opensWithoutRequest=(agent:string):boolean=>['opencode','agy','grok'].includes(agent);
 const nativeProjection=(snapshot:NativeSnapshot):ContextSnapshot=>({ref:snapshot.context,items:snapshot.history.items,retained:snapshot.retained,...(snapshot.history.itemTurns?{itemTurns:snapshot.history.itemTurns}:{})});
 
 const archiveRetention=30*24*60*60*1000;
@@ -207,7 +209,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         } catch { /* A missing/replaced/changed target receives a reviewed fresh fallback. */ }
       }
       const choice=chooseContinuation(observed,contexts,validated,request.target,await realpath(request.workspace.path));
-      const ordinaryNative=!prior&&!request.fresh&&(!['opencode','agy','grok'].includes(source.agent)||request.workspace.kind==='source')&&!observed.reason&&source.agent===request.target&&snapshot.runtime.nativeResume==='compatible';
+      const ordinaryNative=!prior&&!request.fresh&&(!opensWithoutRequest(source.agent)||request.workspace.kind==='source')&&!observed.reason&&source.agent===request.target&&snapshot.runtime.nativeResume==='compatible';
       // Native resume/open cannot certify unread records, so only a fresh handoff of the readable items is allowed.
       if(ordinaryNative&&!snapshot.complete) throw new Error('Selected public history is incomplete. Native resume cannot include unread records; select F to send the readable history in a reviewed fresh context.');
       return {metadataOnly:false as const,snapshot,source,redactions,observed,choice,ordinaryNative,sourceRecovery,targetSnapshots};
@@ -224,7 +226,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
       preview:async(source,signal)=>{const snapshot=await resolveSource(source,signal);return snapshot.items;},
       outcome:async(request,signal)=>{
         const decision=await decide(request,signal),agent=request.target;
-        if(decision.metadataOnly||decision.ordinaryNative)return {native:true,text:['opencode','agy','grok'].includes(agent)?`Opens the original ${agent} session natively, without an initial request.`:`Resumes the original ${agent} session natively.`};
+        if(decision.metadataOnly||decision.ordinaryNative)return {native:true,text:opensWithoutRequest(agent)?`Opens the original ${agent} session natively, without an initial request.`:`Resumes the original ${agent} session natively.`};
         if(decision.choice.target)return {native:true,text:`Continues the earlier ${agent} session natively with only the history it is missing.`};
         return {native:false,text:`Starts ${agent} with a handoff of this conversation.`};
       },
@@ -246,7 +248,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         const {observed,choice,ordinaryNative,sourceRecovery,targetSnapshots}=decision;
         let target=ordinaryNative?null:choice.target;
         let fresh=!ordinaryNative&&!target;
-        let reason=sourceRecovery?'Required ancestry is unavailable. Explicit fresh recovery includes only available active source and known included echoes; unavailable application ancestry is excluded.':ordinaryNative?(['opencode','agy','grok'].includes(source.agent)?`Open the selected existing ${source.agent} session without an initial request.`:'Resume the selected source; send only the new current request.'):choice.reason;
+        let reason=sourceRecovery?'Required ancestry is unavailable. Explicit fresh recovery includes only available active source and known included echoes; unavailable application ancestry is excluded.':ordinaryNative?(opensWithoutRequest(source.agent)?`Open the selected existing ${source.agent} session without an initial request.`:'Resume the selected source; send only the new current request.'):choice.reason;
         const completeness:TransferIntent['completeness']=snapshot.complete?'complete':'partial';
         const makeHandoff=(items:readonly HistoryItem[])=>createHandoffPlan({directory:paths.archives,source,items,currentRequest:request.currentRequest??DEFAULT_CURRENT_REQUEST,redactions,completeness});
         let handoff=ordinaryNative?null:makeHandoff(target?choice.items:observed.items);
@@ -269,7 +271,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
           ...(source.agent==='opencode'&&ordinaryNative?['OpenCode opens the exact native session without an initial request. Type the next request in its native terminal.']:[]),
           ...(target?[`Selected history source: ${source.agent} ${source.nativeId}. Actual resumed target: ${target.agent} ${target.nativeId}.`]:[]),
           ...(redactions.length?[handoff?'Selected history redactions require a new context; they cannot erase content already retained by an earlier native context.':'Redactions apply only to this new request. Earlier native context remains retained by its provider.']:[]),
-          `Disclosure: ${request.target} receives ${handoff?'selected public history and the current request':['opencode','agy','grok'].includes(source.agent)?'no initial request; its existing native history remains in the selected session':'only the new current request; native history stays with its existing provider'} under its own account and data policies.`,
+          `Disclosure: ${request.target} receives ${handoff?'selected public history and the current request':opensWithoutRequest(source.agent)?'no initial request; its existing native history remains in the selected session':'only the new current request; native history stays with its existing provider'} under its own account and data policies.`,
           'Hidden reasoning, credentials and native permissions do not transfer. No historical commands are replayed.',
           'Process launch/exit is not proof of prompt consumption. Delivery remains uncertain without a trusted receipt.',
           prepared.plan.observer==='codex-hooks'?'Codex launch-local submit/Stop observation is conditional on native hook enablement, trust and managed policy. Existing callbacks and permissions remain native.':'No supported native receipt transport here. This launch cannot advance accepted coverage.',

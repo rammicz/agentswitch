@@ -261,8 +261,7 @@ const screens={hits:[codexHit,claudeHit],compose:true,
  details:async()=>[{id:'d1',role:'user',status:'complete',text:'<command-message>x</command-message> <command-name>/x</command-name> <command-args>do it</command-args>'}],
  prepare:async request=>({plan:request,summary:{source:request.source,target:request.target,mode:request.target===request.source.agent&&!request.fresh?'native-resume':'fresh-handoff',
   workspace:request.workspace.path,includedItemIds:['item-a','item-b'],omittedItemIds:['item-c'],previewLines:exactLines}}),
- outcome:async request=>{asked.push(request);return {native:request.target==='codex'&&!request.fresh,text:`Outcome for ${request.target}${request.fresh?' fresh':''} in ${request.workspace.kind}.`};}};
-const asked=[];
+ outcome:async request=>({native:request.target==='codex'&&!request.fresh,text:`Outcome for ${request.target}${request.fresh?' fresh':''} in ${request.workspace.kind}.`})};
 const cells=row=>Array.from(row).length;
 const sgrOf=(text,word)=>new RegExp(`(\\x1b\\[[0-9;]*m)${word}`).exec(text)?.[1];
 
@@ -285,8 +284,8 @@ test('#17 T2/T4: the list keeps 80x24 rows, blank rows around results and a labe
  assert.ok(side.every(row=>cells(row)<=128));
 });
 test('#17 T5: the target screen names the five targets and the service outcome, updating with ← → and F',async()=>{
- asked.length=0;
- const p=await picker({...screens,rows:30,columns:80});await open(p);let rows=plainRows(await p.send('\r','Outcome for codex in source.'));
+ const asked=[];
+ const p=await picker({...screens,rows:30,columns:80,outcome:request=>(asked.push(request),screens.outcome(request))});await open(p);let rows=plainRows(await p.send('\r','Outcome for codex in source.'));
  assert.ok(rows.includes('  [codex]  claude  opencode  agy  grok'));assert.ok(rows.includes('  Outcome for codex in source.'));
  for(const heading of ['To','Workspace','Handoff'])assert.equal(rows[rows.indexOf(heading)-1],'',heading);
  assert.ok(rows.every(row=>cells(row)<=78));
@@ -299,6 +298,12 @@ test('#17 T5: the target screen names the five targets and the service outcome, 
  rows=plainRows(await p.send('x','Literal redaction'));await p.send('secret-word','secret-word');rows=plainRows(await p.send('\r','Redactions  1'));
  assert.ok(rows.includes('  Redactions  1 (•••)'));assert.doesNotMatch(rows.join('\n'),/secret-word/);
  await p.stop();
+});
+test('#17 T5: an outcome that arrives while the request editor is open is shown on return',async()=>{
+ const p=await picker({...screens,rows:30,columns:80,outcome:async request=>{await new Promise(r=>setTimeout(r,300));return screens.outcome(request);}});await open(p);
+ await p.send('\r','Checking what this target will do…');await p.send('c','Current request (sent separately');
+ await new Promise(r=>setTimeout(r,500));const rows=plainRows(await p.send('\r','change target'));await p.stop();
+ assert.ok(rows.includes('  Outcome for codex in source.'),JSON.stringify(rows));
 });
 test('#17 T5: an outcome the service refuses is shown as a warning, and no outcome is stated without the service',async()=>{
  const p=await picker({...screens,color:true,rows:30,columns:80,outcome:async()=>{throw Error('Selected public history is incomplete. Select F.');}});await open(p);
