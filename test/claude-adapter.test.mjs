@@ -114,7 +114,7 @@ test('bad records, unknown versions and shapes are isolated with bounded payload
 
 test('oversized lines retain later healthy metadata and graph; file cap reports recovered prefix',async t=>{
   const {root,cwd}=await fixture(t);await write(root,ids[0],[{type:'queue-operation',data:'PRIVATE_'+'x'.repeat(5000)},e(ids[0],cwd,'u',null,'user','Healthy'),e(ids[0],cwd,'a','u','assistant','Answer')]);
-  const a=reader({root,limits:{maxLineBytes:1000}});assert.equal((await a.discover()).length,1);
+  const a=reader({root,limits:{maxLineBytes:1000,maxHistoryLineBytes:1000}});assert.equal((await a.discover()).length,1);
   const r=await a.readHistoryDetailed(ids[0]);assert.deepEqual(texts(r),['Healthy','Answer']);assert.equal(r.complete,false);assert.ok(r.diagnostics.some(d=>d.code==='input-limit'));
   await write(root,ids[1],[e(ids[1],cwd,'u',null,'user','Prefix'),e(ids[1],cwd,'a','u','assistant','x'.repeat(10000))]);
   const limited=reader({root,limits:{maxFileBytes:1000}});assert.ok((await limited.discover()).some(s=>s.nativeId===ids[1]));
@@ -250,6 +250,27 @@ test('image blocks and image or tool_reference result parts are omitted without 
   assert.equal(baseline.complete,true);assert.deepEqual(texts(rich),['Look at this','Screenshot taken','Done']);
   assert.deepEqual(withoutId(rich.items,ids[1]),withoutId(baseline.items,ids[0]));assert.equal(rich.complete,true);
   assert.ok(!rich.diagnostics.some(d=>d.code==='unsupported-shape'));assert.doesNotMatch(JSON.stringify(rich),/PRIVATE_/);
+});
+
+test('an image tool result above the discovery line cap keeps earlier turns; the history line cap still bounds it',async t=>{
+  const {root,cwd}=await fixture(t),data='PRIVATE_BASE64'+'A'.repeat(8192);
+  const transcript=id=>[
+    e(id,cwd,'u',null,'user','First turn'),
+    e(id,cwd,'a','u','assistant',[{type:'tool_use',id:'call1',name:'shot',input:{}}]),
+    e(id,cwd,'r','a','user',[{type:'tool_result',tool_use_id:'call1',content:[{type:'text',text:'Screenshot taken'},{type:'image',source:{type:'base64',media_type:'image/png',data}}]}],{toolUseResult:{file:{base64:data}}}),
+    e(id,cwd,'z','r','assistant','Third turn'),
+  ];
+  await write(root,ids[0],transcript(ids[0]));
+  const discovery=[],a=reader({root,limits:{maxLineBytes:4096},onDiagnostic:d=>discovery.push(d)});
+  const r=await a.readHistoryDetailed(ids[0]);
+  assert.deepEqual(texts(r),['First turn','Screenshot taken','Third turn']);assert.equal(r.complete,true);
+  assert.ok(!r.diagnostics.some(d=>['ancestry-unavailable','input-limit'].includes(d.code)));assert.doesNotMatch(JSON.stringify(r),/PRIVATE_/);
+  // Discovery keeps the shared per-line cap.
+  assert.ok(discovery.some(d=>d.code==='input-limit'));
+  const capped=await reader({root,limits:{maxLineBytes:4096,maxHistoryLineBytes:4096}}).readHistoryDetailed(ids[0]);
+  assert.deepEqual(texts(capped),['Third turn']);assert.equal(capped.complete,false);
+  assert.ok(capped.diagnostics.some(d=>d.code==='input-limit'));assert.ok(capped.diagnostics.some(d=>d.code==='ancestry-unavailable'));
+  assert.throws(()=>reader({root,limits:{maxHistoryLineBytes:8*1024*1024+1}}),RangeError);
 });
 
 test('strictness stays for malformed graph entries, unknown blocks, wrong owners, untyped records and spilled output',async t=>{
