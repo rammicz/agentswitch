@@ -171,7 +171,7 @@ test('changed source invalidates preview without publishing a transfer; cache pu
 // Version table: test/native-catalog.test.mjs. These runs prove an untested producer reaches a native launch.
 for(const {agent,file,id,from,to,label} of [{agent:'codex',file:0,id:codexIds[0],from:'0.171.0',to:'0.172.0',label:'0.172.0'},{agent:'claude',file:3,id:claudeIds[0],from:'2.1.330',to:'2.1.331',label:'2.1.331'},{agent:'claude',file:3,id:claudeIds[0],from:',"version":"2.1.330"',to:'',label:'without a version'}])test(`untested ${agent} producer ${label} resumes natively by exact ID`,async()=>{
  const f=await setup(agent),original=await readFile(f.files[file],'utf8');assert.ok(original.includes(from));await writeFile(f.files[file],original.replaceAll(from,to));
- const [result]=pty(f,[...list,...select(agent),...(agent==='claude'?[{send:'\u001b[C'},{wait:'[claude]'}]:[]),...request,{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ const [result]=pty(f,[...list,...select(agent),...(agent==='claude'?[{send:'\u001b[C'},{wait:'[claude]'}]:[]),{wait:`Resumes the original ${agent} session natively.`},...request,{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
  assert.equal(result.restored,true);assert.match(result.output,/Mode  native resume/);
  const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());
  assert.ok(launch.args.some(arg=>arg.includes(id)),JSON.stringify(launch.args));assert.equal(launch.args.at(-1),'Do next NEEDLE_SECRET');

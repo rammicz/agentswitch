@@ -7,7 +7,7 @@ import type { AgentId, HistoryItem, Scope, Session, SessionQuery } from '../doma
 import { DEFAULT_CURRENT_REQUEST } from '../handoff-format.js';
 import { searchSessions } from '../search.js';
 import { windowsConsoleMode } from '../windows-runtime.js';
-import type { PickerOptions, PreparedContinuation, SessionHit, SessionSource, WorkspaceChoice } from './contracts.js';
+import type { ContinuationRequest, PickerOptions, PreparedContinuation, SessionHit, SessionSource, WorkspaceChoice } from './contracts.js';
 export type * from './contracts.js';
 
 const filters = ['all', 'codex', 'claude', 'opencode', 'agy', 'grok'] as const;
@@ -313,6 +313,9 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   let pending: AbortController | undefined;
   let dispatch: PreparedContinuation<Plan> | undefined;
   let detailRequest: AbortController | undefined;
+  // The target screen's outcome for one request key; `text` is unset while the service decides.
+  let outcome: { key: string; native?: boolean; failed?: boolean; text?: string } | undefined;
+  let outcomeRequest: AbortController | undefined;
   let detailId: string | undefined;
   let detailLines: readonly string[] = [];
   let clock: ReturnType<typeof setInterval> | undefined;
@@ -337,6 +340,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     if (!active) return;
     active = false;
     detailRequest?.abort();
+    outcomeRequest?.abort();
     clearInterval(clock);
     noticeController.abort();
     invalidate();
@@ -453,8 +457,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       const title = source.title.endsWith(` ${source.nativeId}`) ? `Session …${source.nativeId.slice(-8)}` : source.title;
       const chosen = targets[target]!;
       // The same rule as runtime preparation: the source's own agent resumes natively unless fresh is chosen.
-      const native = chosen === source.agent && !fresh;
-      const outcome = native ? `Resumes the original ${chosen} session natively.` : `Starts ${chosen} with a handoff of this conversation.`;
+      const said = outcome?.text === undefined ? styled('Checking what this target will do…', 'muted', color) : undefined;
       const selector = targets.map(agent => agent === chosen ? `[${agent}]` : agent).join('  ');
       const lines = [
         section('From'),
@@ -462,7 +465,8 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
         '', section('To'),
         `  ${cellCount(selector) > inner ? clipPanel(selector, inner)
           : targets.map(agent => agent === chosen ? styled(`[${agent}]`, ['title', agent], color) : styled(agent, 'muted', color)).join('  ')}`,
-        ...indent(panelWrap(outcome, inner).map(row => native ? styled(row, 'success', color) : row)),
+        ...(!options.outcome ? [] : said ? [`  ${clipPanel(said, inner)}`]
+          : indent(panelWrap(outcome!.text!, inner).map(row => styled(row, outcome!.failed ? 'warning' : outcome!.native ? 'success' : [], color)))),
         `  ${keycaps([['← →', 'change target']], inner, color)}`,
         '', section('Workspace'),
         ...indent(panelWrap(`${choice!.path}${choice!.kind === 'override' ? ' (override)' : ''}`, inner)),
@@ -485,6 +489,23 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   };
   const redraw = (): void => {
     try {
+      const predict = options.outcome;
+      if (active && predict && stage === 'target' && picked && !busy) {
+        const value = continuationRequest();
+        const key = JSON.stringify([value.source, value.target, value.workspace, value.redactions ?? [], value.fresh ?? false]);
+        if (outcome?.key !== key) {
+          outcomeRequest?.abort();
+          const controller = new AbortController();
+          outcomeRequest = controller; outcome = { key };
+          // Wait briefly so cycling targets does not start a read for each one passed.
+          void delay(150, undefined, { signal: controller.signal }).then(() => usableWorkspace(value, controller.signal))
+            .then(() => predict(value, controller.signal)).then(
+            found => ({ key, native: found.native, text: found.text }), error => ({ key, failed: true, text: message(error) })).then(found => {
+            if (controller.signal.aborted || !active || stage !== 'target') return;
+            outcome = found; redraw();
+          });
+        }
+      }
       const hit = active && stage === 'list' && !showingSources ? hits[selected] : undefined;
       if (hit?.id !== detailId) {
         detailRequest?.abort(); detailId = hit?.id; detailLines = [];
@@ -555,12 +576,19 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     items = []; offset = 0; expandTools = false; focusMatch = true;
     request(signal => options.preview(source, signal), found => { items = found; }, preview);
   };
+  const continuationRequest = (): ContinuationRequest => ({ source: sourceOf(picked!), target: targets[target]!, workspace: { ...choice! },
+    ...(options.compose ? { currentRequest, redactions: [...redactions], fresh } : {}) });
+  const usableWorkspace = async ({ workspace }: ContinuationRequest, signal: AbortSignal): Promise<void> => {
+    const directory = await stat(workspace.path).catch(() => undefined);
+    if (!directory?.isDirectory()) throw new Error(`Workspace unavailable: ${workspace.path}. Press W to choose another folder.`);
+    if (signal.aborted) throw new Error('Cancelled');
+  };
   const prepare = (): void => {
-    const requestValue = { source: sourceOf(picked!), target: targets[target]!, workspace: { ...choice! }, ...(options.compose ? {currentRequest, redactions: [...redactions], fresh} : {}) };
+    // Preparation decides for itself; a prediction still running would only repeat its reads.
+    outcomeRequest?.abort(); outcome = undefined;
+    const requestValue = continuationRequest();
     request(async signal => {
-      const directory = await stat(requestValue.workspace.path).catch(() => undefined);
-      if (!directory?.isDirectory()) throw new Error(`Workspace unavailable: ${requestValue.workspace.path}. Press W to choose another folder.`);
-      if (signal.aborted) throw new Error('Cancelled');
+      await usableWorkspace(requestValue, signal);
       return options.prepare(requestValue, signal);
     }, value => { prepared = value; stage = 'summary'; offset = 0; }, prepare);
   };

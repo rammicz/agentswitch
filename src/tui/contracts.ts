@@ -17,6 +17,8 @@ export interface ContinuationRequest {
   redactions?: readonly string[];
   fresh?: boolean;
 }
+/** What confirming a request would do, from the same decision as preparation. `native` continues an existing native session. */
+export interface ContinuationOutcome { native: boolean; text: string }
 export interface ContinuationSummary {
   source: SessionSource;
   target: AgentId;
@@ -53,6 +55,8 @@ export interface PickerOptions<Plan> {
   query(query: SessionQuery, signal: AbortSignal, publish: (hits: readonly SessionHit[]) => void): Promise<readonly SessionHit[]>;
   details?(source: SessionSource, signal: AbortSignal): Promise<readonly HistoryItem[]>;
   preview(source: SessionSource, signal: AbortSignal): Promise<readonly HistoryItem[]>;
+  /** Read-only: describes the outcome on the target screen. Without it the screen states no outcome. */
+  outcome?(request: ContinuationRequest, signal: AbortSignal): Promise<ContinuationOutcome>;
   prepare(request: ContinuationRequest, signal: AbortSignal): Promise<PreparedContinuation<Plan>>;
   continue(plan: Plan): Promise<void>;
 }

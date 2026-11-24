@@ -43,6 +43,10 @@ try {
       ];
       return [{id:source.id === 'two' ? 'b7':'a1',role:'assistant',text:'Public transcript needle',status:'complete'}];
     },
+    // Stands in for the service decision; the real rule is tested through the application.
+    outcome: async request => request.target === request.source.agent && !request.fresh
+      ? { native: true, text: `Resumes the original ${request.target} session natively.` }
+      : { native: false, text: `Starts ${request.target} with a handoff of this conversation.` },
     prepare: async (request) => {
       if (scenario === 'prepare-error' && reads++ === 0) throw Error('offline preparation failed');
       if (scenario === 'late-prepare') { await later(); console.log('LATE PREPARE'); }

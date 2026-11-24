@@ -35,7 +35,7 @@ async function switchToB(f) {
 test('default CLI A→B→A resumes actual A, aliases echo, sends missing IDs only and atomically accepts a real-shaped successful main turn',async()=>{
  const f=await setup();const bLaunch=await switchToB(f),bBefore=await hash(bLaunch.path);
  const [first]=await record(f);const originalIds=first.includedItemIds;
- const result=pty(f,[...select('B response'),{send:'\r'},{wait:'Actual resumed target: codex '+ids[0]},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'accepted — correlated native turn'}]);
+ const result=pty(f,[...select('B response'),{wait:'Continues the earlier codex session natively with only the history it is missing.'},{send:'\r'},{wait:'Actual resumed target: codex '+ids[0]},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'accepted — correlated native turn'}]);
  assert.equal(result.code,0);assert.equal(result.restored,true);assert.equal(await hash(bLaunch.path),bBefore);
  assert.ok(result.output.includes('Current request  '+DEFAULT_CURRENT_REQUEST.slice(0,100)),'unedited target screen shows the shared default request');
  assert.equal(await hash(f.config),f.configHash);
@@ -143,7 +143,7 @@ test('an uncertain attempted return is never replayed; the next selection review
 test('unknown source-native compatibility gets a reviewed fresh bounded rebuild under the supported target',async()=>{
  // Any well-formed Codex producer resumes natively; a malformed producer version leaves compatibility unknown.
  const f=await setup();await writeFile(f.aFile,(await readFile(f.aFile,'utf8')).replace('0.171.0','v0.170'));const before=await hash(f.aFile);
- const result=pty(f,[...select('A original'),...confirm,{wait:'accepted — correlated native turn'}]);assert.equal(result.code,0);assert.equal(await hash(f.aFile),before);
+ const result=pty(f,[...select('A original'),{wait:'Starts codex with a handoff of this conversation.'},...confirm,{wait:'accepted — correlated native turn'}]);assert.equal(result.code,0);assert.equal(await hash(f.aFile),before);
  const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());assert.ok(!launch.args.includes('resume'));assert.deepEqual(JSON.parse(launch.args.at(-1)).history.map(item=>item.text),['A original request','A original answer']);
 });
 for(const mode of ['disabled','submit-only','wrong-hash','wrong-turn','background','wrong-root','unsupported','failure','malformed'])test(`default CLI ${mode} observation never accepts or advances coverage`,async()=>{

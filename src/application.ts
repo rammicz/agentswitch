@@ -12,7 +12,7 @@ import { NativeCatalog, partialHistoryNotice, recordedPartialHistory, type Nativ
 import { createRuntime, RuntimeError, type LaunchPlan, type RuntimeSource } from './runtime.js';
 import { defaultMaxCacheBytes, SearchIndex } from './search-index.js';
 import { digest, TransferJournal, type TransferIntent } from './transfer-journal.js';
-import { runPicker, type SessionSource } from './tui/app.js';
+import { runPicker, type ContinuationRequest, type SessionSource } from './tui/app.js';
 import { canonicalActivity, chooseContinuation, contextKey, matchingEcho, observeContext, retainedContext, retainedPrefix, type ContextRef, type ContextSnapshot, type NativeContext, type NativeItemTurn } from './continuity.js';
 import { observerCommand } from './native-observer.js';
 
@@ -134,6 +134,84 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
     const recoverySession:Session|undefined=prior?{...prior.source,title:`Recovery of ${prior.id}: prior delivery ${prior.state}`,workspace:prior.workspace,updatedAt:prior.updatedAt,messages:recovered?.items??[]}:undefined;
     const initialRequest=prior?.prompt ? storedRequest(prior.prompt,prior.archive) : DEFAULT_CURRENT_REQUEST;
     const checkNotice = options.checkNotice;
+    /** The read-only continuation decision shared by preparation and the target screen's outcome. */
+    const decide=async(request:ContinuationRequest,signal?:AbortSignal)=>{
+      const snapshot=await resolveSource(request.source,signal);
+      if(!snapshot.complete&&!snapshot.items.length&&!(snapshot.runtime.agent==='agy'&&snapshot.metadataOnly)) throw new Error('Selected public history is incomplete and has no readable items. Restore the source before transferring.');
+      const source=publicIdentity(snapshot.runtime);sourceKeys.set(`${source.agent}:${source.nativeId}`,snapshot.sourceKey);
+      const redactions=request.redactions??[];
+      if(source.agent==='agy'&&snapshot.metadataOnly) {
+        if(prior||request.fresh||request.target!=='agy')throw new Error('Antigravity cache contains metadata only. Public history is unavailable for outgoing or fresh handoffs; open the exact native session instead.');
+        if(redactions.length)throw new Error('Native open sends no history. Redactions cannot alter existing provider history.');
+        return {metadataOnly:true as const,snapshot,source,redactions};
+      }
+      // Routing fields must remain exact. Never retain a selected secret through an identifier or path.
+      const routes=[source.agent,source.id,source.nativeId,request.workspace.path,await realpath(request.workspace.path),paths.root];
+      if(redactions.some(value=>routes.some(route=>route.includes(value)))) throw new Error('Redaction overlaps a routing identity or storage/workspace path. Choose a different source or private storage path before transfer.');
+      const contexts=journal.contexts(),attempts=journal.list();
+      const ref=snapshot.context??{...source,workspace:request.workspace.path,root:catalog.rootKey(source.agent),incarnation:`recovery:${prior?.id??randomUUID()}`,sourceKey:snapshot.sourceKey};
+      const existing=contexts.find(context=>contextKey(context.ref)===contextKey(ref));
+      const aliases=attempts.filter(attempt=>attempt.continuity&&journal.lineage(attempt.continuity.lineage.id));
+      const echo=snapshot.items.map(item=>matchingEcho(item,ref,aliases)).find(Boolean);
+      const known=prior?undefined:journal.lineage(existing?.lineageId??echo?.continuity?.lineage.id??'');
+      const retainedItems=new Map<string,HistoryItem>();
+      let unavailableAncestry=false,expiredAncestry=false;
+      if(known)for(const attempt of attempts.filter(attempt=>attempt.continuity?.lineage.id===known.id&&!attempt.deleted&&!attempt.deleting)) {
+        if(attempt.archiveExpiredAt) {
+          // The delivered prompt outlives its expired archive. Omitted items must come from native history below.
+          expiredAncestry=true;
+          if(attempt.prompt)for(const item of parseHandoffPrompt(attempt.prompt).history)retainedItems.set(item.id,item);
+        } else if(attempt.archive) {
+          try {for(const item of (await readArchiveSnapshot(attempt.archive)).items)retainedItems.set(item.id,item);}
+          catch {
+            if(!request.fresh)throw new Error('Required lineage archive is unavailable. Restore it, or select F and review an active-source recovery.');
+            unavailableAncestry=true;
+            if(attempt.prompt)for(const item of parseHandoffPrompt(attempt.prompt).history)retainedItems.set(item.id,item);
+          }
+        }
+        if(attempt.prompt&&attempt.continuity) {
+          const text=storedRequest(attempt.prompt,attempt.archive);
+          retainedItems.set(attempt.continuity.requestId,{id:attempt.continuity.requestId,role:'user',status:'complete',text,origin:{agent:attempt.target,context:digest(JSON.stringify([attempt.continuity.targetRoot,attempt.targetNativeId]))}});
+        }
+      }
+      const nativeSnapshots=new Map<string,NativeSnapshot>();
+      const sourceIds=new Set(snapshot.items.map(item=>canonicalActivity(ref,item).id)),knownIds=new Set(known?.ids);
+      // A completed native turn's new public output is metadata-only until consent.
+      // Hydrate just those known own IDs from its still-matching native prefix.
+      if(known)for(const context of contexts.filter(context=>context.lineageId===known.id&&context.epoch===known.epoch&&context.ref.root===catalog.rootKey(context.ref.agent)&&context.ownIds.some(id=>knownIds.has(id)&&!retainedItems.has(id)&&!sourceIds.has(id)))) {
+        try {
+          const native=await catalog.snapshot(context.ref,signal);nativeSnapshots.set(contextKey(context.ref),native);
+          const ownIds=new Set(context.ownIds);
+          if(native.history.complete&&retainedPrefix(context,nativeProjection(native)))for(const item of native.history.items.slice(0,context.nativeItems.length)) {
+            const canonical=canonicalActivity(native.context,item);
+            if(ownIds.has(canonical.id)&&knownIds.has(canonical.id))retainedItems.set(canonical.id,canonical);
+          }
+        } catch { /* Unavailable native output requires restored history or explicit source recovery. */ }
+      }
+      unavailableAncestry ||= Boolean(known?.ids.some(id=>!retainedItems.has(id)&&!sourceIds.has(id)));
+      if(expiredAncestry&&unavailableAncestry&&!request.fresh)throw new Error('Required lineage archive expired (older than 30 days). Select F for a fresh handoff.');
+      const sourceRecovery=Boolean(request.fresh&&unavailableAncestry);
+      // A partial source context is never a later reuse target.
+      const observed=observeContext({ref,items:snapshot.items,retained:(snapshot.retained??false)&&snapshot.complete,...(snapshot.itemTurns?{itemTurns:snapshot.itemTurns}:{})},prior?[]:contexts,[...aliases,...attempts.filter(attempt=>attempt.deleted||attempt.deleting)],[...retainedItems.values()],known,Boolean(prior||request.fresh||(redactions.length&&source.agent!==request.target)),sourceRecovery);
+      const validated=new Map<string,NativeContext>();
+      const targetSnapshots=new Map<string,NativeSnapshot>();
+      // A partial source never reuses an earlier native target, so its candidates need no validation.
+      if(!prior&&!request.fresh&&!redactions.length&&snapshot.complete)for(const candidate of contexts.filter(context=>context.lineageId===observed.lineage.id&&context.epoch===observed.lineage.epoch&&context.ref.agent===request.target&&request.target==='codex'&&context.ref.root===catalog.rootKey(request.target))) {
+        try {
+          const target=nativeSnapshots.get(contextKey(candidate.ref))??await catalog.snapshot(candidate.ref,signal);
+          const echoes=candidate.acceptedAttempts?.every(id=>{
+            const attempt=aliases.find(attempt=>attempt.id===id);
+            return attempt?.archive&&target.history.items.some(item=>matchingEcho(item,target.context,[attempt])?.id===id);
+          })??true;
+          if(target.history.complete&&target.retained&&echoes&&retainedContext(candidate,nativeProjection(target))) {validated.set(contextKey(candidate.ref),candidate);targetSnapshots.set(contextKey(candidate.ref),target);sourceKeys.set(`${candidate.ref.agent}:${candidate.ref.nativeId}`,target.sourceKey);}
+        } catch { /* A missing/replaced/changed target receives a reviewed fresh fallback. */ }
+      }
+      const choice=chooseContinuation(observed,contexts,validated,request.target,await realpath(request.workspace.path));
+      const ordinaryNative=!prior&&!request.fresh&&(!['opencode','agy','grok'].includes(source.agent)||request.workspace.kind==='source')&&!observed.reason&&source.agent===request.target&&snapshot.runtime.nativeResume==='compatible';
+      // Native resume/open cannot certify unread records, so only a fresh handoff of the readable items is allowed.
+      if(ordinaryNative&&!snapshot.complete) throw new Error('Selected public history is incomplete. Native resume cannot include unread records; select F to send the readable history in a reviewed fresh context.');
+      return {metadataOnly:false as const,snapshot,source,redactions,observed,choice,ordinaryNative,sourceRecovery,targetSnapshots};
+    };
     await runPicker<Dispatch>({workspace:options.workspace,scope:options.scope??'folder',compose:true,initialRequest,
       label:prior?'agentswitch / EXPLICIT FRESH RECOVERY — earlier delivery may have happened':'agentswitch / local native sessions',
       notices:()=>catalog.notices(),
@@ -144,14 +222,16 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
       },
       details: (source,signal) => recoverySession ? Promise.resolve(recoverySession.messages) : catalog.details(source,signal),
       preview:async(source,signal)=>{const snapshot=await resolveSource(source,signal);return snapshot.items;},
+      outcome:async(request,signal)=>{
+        const decision=await decide(request,signal),agent=request.target;
+        if(decision.metadataOnly||decision.ordinaryNative)return {native:true,text:['opencode','agy','grok'].includes(agent)?`Opens the original ${agent} session natively, without an initial request.`:`Resumes the original ${agent} session natively.`};
+        if(decision.choice.target)return {native:true,text:`Continues the earlier ${agent} session natively with only the history it is missing.`};
+        return {native:false,text:`Starts ${agent} with a handoff of this conversation.`};
+      },
       prepare:async(request,signal)=>{
-        const snapshot=await resolveSource(request.source,signal);
-        if(!snapshot.complete&&!snapshot.items.length&&!(snapshot.runtime.agent==='agy'&&snapshot.metadataOnly)) throw new Error('Selected public history is incomplete and has no readable items. Restore the source before transferring.');
-        const source=publicIdentity(snapshot.runtime);sourceKeys.set(`${source.agent}:${source.nativeId}`,snapshot.sourceKey);
-        const redactions=request.redactions??[];
-        if(source.agent==='agy'&&snapshot.metadataOnly) {
-          if(prior||request.fresh||request.target!=='agy')throw new Error('Antigravity cache contains metadata only. Public history is unavailable for outgoing or fresh handoffs; open the exact native session instead.');
-          if(redactions.length)throw new Error('Native open sends no history. Redactions cannot alter existing provider history.');
+        const decision=await decide(request,signal);
+        const {snapshot,source,redactions}=decision;
+        if(decision.metadataOnly) {
           const prepared=await runtime.prepare(request,request.currentRequest===undefined?{}:{currentRequest:request.currentRequest},signal);
           const intent:TransferIntent={source,sourceKey:snapshot.sourceKey,target:'agy',workspace:prepared.plan.workspace,mode:'native-resume',prompt:'',archive:null,includedItemIds:[],omittedItemIds:[],completeness:'unknown'};
           return {plan:{launch:prepared.plan,handoff:null,intent,fingerprint:snapshot.fingerprint,source},summary:{...prepared.summary,previewLines:[
@@ -163,71 +243,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
             'Exact current request (0 UTF-8 bytes):', 'BEGIN EXACT PROMPT JSON STRING', '""', 'END EXACT PROMPT JSON STRING',
           ]}};
         }
-        // Routing fields must remain exact. Never retain a selected secret through an identifier or path.
-        const routes=[source.agent,source.id,source.nativeId,request.workspace.path,await realpath(request.workspace.path),paths.root];
-        if(redactions.some(value=>routes.some(route=>route.includes(value)))) throw new Error('Redaction overlaps a routing identity or storage/workspace path. Choose a different source or private storage path before transfer.');
-        const contexts=journal.contexts(),attempts=journal.list();
-        const ref=snapshot.context??{...source,workspace:request.workspace.path,root:catalog.rootKey(source.agent),incarnation:`recovery:${prior?.id??randomUUID()}`,sourceKey:snapshot.sourceKey};
-        const existing=contexts.find(context=>contextKey(context.ref)===contextKey(ref));
-        const aliases=attempts.filter(attempt=>attempt.continuity&&journal.lineage(attempt.continuity.lineage.id));
-        const echo=snapshot.items.map(item=>matchingEcho(item,ref,aliases)).find(Boolean);
-        const known=prior?undefined:journal.lineage(existing?.lineageId??echo?.continuity?.lineage.id??'');
-        const retainedItems=new Map<string,HistoryItem>();
-        let unavailableAncestry=false,expiredAncestry=false;
-        if(known)for(const attempt of attempts.filter(attempt=>attempt.continuity?.lineage.id===known.id&&!attempt.deleted&&!attempt.deleting)) {
-          if(attempt.archiveExpiredAt) {
-            // The delivered prompt outlives its expired archive. Omitted items must come from native history below.
-            expiredAncestry=true;
-            if(attempt.prompt)for(const item of parseHandoffPrompt(attempt.prompt).history)retainedItems.set(item.id,item);
-          } else if(attempt.archive) {
-            try {for(const item of (await readArchiveSnapshot(attempt.archive)).items)retainedItems.set(item.id,item);}
-            catch {
-              if(!request.fresh)throw new Error('Required lineage archive is unavailable. Restore it, or select F and review an active-source recovery.');
-              unavailableAncestry=true;
-              if(attempt.prompt)for(const item of parseHandoffPrompt(attempt.prompt).history)retainedItems.set(item.id,item);
-            }
-          }
-          if(attempt.prompt&&attempt.continuity) {
-            const text=storedRequest(attempt.prompt,attempt.archive);
-            retainedItems.set(attempt.continuity.requestId,{id:attempt.continuity.requestId,role:'user',status:'complete',text,origin:{agent:attempt.target,context:digest(JSON.stringify([attempt.continuity.targetRoot,attempt.targetNativeId]))}});
-          }
-        }
-        const nativeSnapshots=new Map<string,NativeSnapshot>();
-        const sourceIds=new Set(snapshot.items.map(item=>canonicalActivity(ref,item).id)),knownIds=new Set(known?.ids);
-        // A completed native turn's new public output is metadata-only until consent.
-        // Hydrate just those known own IDs from its still-matching native prefix.
-        if(known)for(const context of contexts.filter(context=>context.lineageId===known.id&&context.epoch===known.epoch&&context.ref.root===catalog.rootKey(context.ref.agent)&&context.ownIds.some(id=>knownIds.has(id)&&!retainedItems.has(id)&&!sourceIds.has(id)))) {
-          try {
-            const native=await catalog.snapshot(context.ref,signal);nativeSnapshots.set(contextKey(context.ref),native);
-            const ownIds=new Set(context.ownIds);
-            if(native.history.complete&&retainedPrefix(context,nativeProjection(native)))for(const item of native.history.items.slice(0,context.nativeItems.length)) {
-              const canonical=canonicalActivity(native.context,item);
-              if(ownIds.has(canonical.id)&&knownIds.has(canonical.id))retainedItems.set(canonical.id,canonical);
-            }
-          } catch { /* Unavailable native output requires restored history or explicit source recovery. */ }
-        }
-        unavailableAncestry ||= Boolean(known?.ids.some(id=>!retainedItems.has(id)&&!sourceIds.has(id)));
-        if(expiredAncestry&&unavailableAncestry&&!request.fresh)throw new Error('Required lineage archive expired (older than 30 days). Select F for a fresh handoff.');
-        const sourceRecovery=Boolean(request.fresh&&unavailableAncestry);
-        // A partial source context is never a later reuse target.
-        const observed=observeContext({ref,items:snapshot.items,retained:(snapshot.retained??false)&&snapshot.complete,...(snapshot.itemTurns?{itemTurns:snapshot.itemTurns}:{})},prior?[]:contexts,[...aliases,...attempts.filter(attempt=>attempt.deleted||attempt.deleting)],[...retainedItems.values()],known,Boolean(prior||request.fresh||(redactions.length&&source.agent!==request.target)),sourceRecovery);
-        const validated=new Map<string,NativeContext>();
-        const targetSnapshots=new Map<string,NativeSnapshot>();
-        // A partial source never reuses an earlier native target, so its candidates need no validation.
-        if(!prior&&!request.fresh&&!redactions.length&&snapshot.complete)for(const candidate of contexts.filter(context=>context.lineageId===observed.lineage.id&&context.epoch===observed.lineage.epoch&&context.ref.agent===request.target&&request.target==='codex'&&context.ref.root===catalog.rootKey(request.target))) {
-          try {
-            const target=nativeSnapshots.get(contextKey(candidate.ref))??await catalog.snapshot(candidate.ref,signal);
-            const echoes=candidate.acceptedAttempts?.every(id=>{
-              const attempt=aliases.find(attempt=>attempt.id===id);
-              return attempt?.archive&&target.history.items.some(item=>matchingEcho(item,target.context,[attempt])?.id===id);
-            })??true;
-            if(target.history.complete&&target.retained&&echoes&&retainedContext(candidate,nativeProjection(target))) {validated.set(contextKey(candidate.ref),candidate);targetSnapshots.set(contextKey(candidate.ref),target);sourceKeys.set(`${candidate.ref.agent}:${candidate.ref.nativeId}`,target.sourceKey);}
-          } catch { /* A missing/replaced/changed target receives a reviewed fresh fallback. */ }
-        }
-        const choice=chooseContinuation(observed,contexts,validated,request.target,await realpath(request.workspace.path));
-        const ordinaryNative=!prior&&!request.fresh&&(!['opencode','agy','grok'].includes(source.agent)||request.workspace.kind==='source')&&!observed.reason&&source.agent===request.target&&snapshot.runtime.nativeResume==='compatible';
-        // Native resume/open cannot certify unread records, so only a fresh handoff of the readable items is allowed.
-        if(ordinaryNative&&!snapshot.complete) throw new Error('Selected public history is incomplete. Native resume cannot include unread records; select F to send the readable history in a reviewed fresh context.');
+        const {observed,choice,ordinaryNative,sourceRecovery,targetSnapshots}=decision;
         let target=ordinaryNative?null:choice.target;
         let fresh=!ordinaryNative&&!target;
         let reason=sourceRecovery?'Required ancestry is unavailable. Explicit fresh recovery includes only available active source and known included echoes; unavailable application ancestry is excluded.':ordinaryNative?(['opencode','agy','grok'].includes(source.agent)?`Open the selected existing ${source.agent} session without an initial request.`:'Resume the selected source; send only the new current request.'):choice.reason;

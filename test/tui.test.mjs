@@ -260,7 +260,9 @@ const exactLines=['Exact initial user prompt (7 UTF-8 bytes):','BEGIN EXACT PROM
 const screens={hits:[codexHit,claudeHit],compose:true,
  details:async()=>[{id:'d1',role:'user',status:'complete',text:'<command-message>x</command-message> <command-name>/x</command-name> <command-args>do it</command-args>'}],
  prepare:async request=>({plan:request,summary:{source:request.source,target:request.target,mode:request.target===request.source.agent&&!request.fresh?'native-resume':'fresh-handoff',
-  workspace:request.workspace.path,includedItemIds:['item-a','item-b'],omittedItemIds:['item-c'],previewLines:exactLines}})};
+  workspace:request.workspace.path,includedItemIds:['item-a','item-b'],omittedItemIds:['item-c'],previewLines:exactLines}}),
+ outcome:async request=>{asked.push(request);return {native:request.target==='codex'&&!request.fresh,text:`Outcome for ${request.target}${request.fresh?' fresh':''} in ${request.workspace.kind}.`};}};
+const asked=[];
 const cells=row=>Array.from(row).length;
 const sgrOf=(text,word)=>new RegExp(`(\\x1b\\[[0-9;]*m)${word}`).exec(text)?.[1];
 
@@ -282,18 +284,29 @@ test('#17 T2/T4: the list keeps 80x24 rows, blank rows around results and a labe
  assert.ok(side.some(row=>/3m ago │ Details$/.test(row)));assert.ok(side.some(row=>row.endsWith('│ Opening request: /x do it')));
  assert.ok(side.every(row=>cells(row)<=128));
 });
-test('#17 T5: the target screen names the five targets and what happens, updating with ← → and F',async()=>{
- const p=await picker({...screens,rows:30,columns:80});await open(p);let rows=plainRows(await p.send('\r','change target'));
- assert.ok(rows.includes('  [codex]  claude  opencode  agy  grok'));assert.ok(rows.includes('  Resumes the original codex session natively.'));
+test('#17 T5: the target screen names the five targets and the service outcome, updating with ← → and F',async()=>{
+ asked.length=0;
+ const p=await picker({...screens,rows:30,columns:80});await open(p);let rows=plainRows(await p.send('\r','Outcome for codex in source.'));
+ assert.ok(rows.includes('  [codex]  claude  opencode  agy  grok'));assert.ok(rows.includes('  Outcome for codex in source.'));
  for(const heading of ['To','Workspace','Handoff'])assert.equal(rows[rows.indexOf(heading)-1],'',heading);
  assert.ok(rows.every(row=>cells(row)<=78));
  for(const row of ['  Current request  Review the historical context','  Redactions  none','  Fresh context  off (automatic)','Enter review  Esc back  C edit request  X redact  F toggle fresh'])assert.ok(rows.some(line=>line.startsWith(row)),row);
- rows=plainRows(await p.send('\x1b[C','[claude]'));assert.ok(rows.includes('  Starts claude with a handoff of this conversation.'));
- rows=plainRows(await p.send('\x1b[D','[codex]'));assert.ok(rows.includes('  Resumes the original codex session natively.'));
- rows=plainRows(await p.send('f','Fresh context  on'));assert.ok(rows.includes('  Starts codex with a handoff of this conversation.'));
+ rows=plainRows(await p.send('\x1b[C','[claude]'));assert.ok(rows.includes('  Checking what this target will do…'),'no stale outcome while the service decides');
+ rows=plainRows(await p.until(text=>text.includes('Outcome for claude in source.'),'claude outcome'));
+ await p.send('\x1b[D','Outcome for codex in source.');
+ await p.send('f','Outcome for codex fresh in source.');
+ assert.deepEqual(asked.map(request=>[request.target,request.fresh,request.workspace.kind]),[['codex',false,'source'],['claude',false,'source'],['codex',false,'source'],['codex',true,'source']]);
  rows=plainRows(await p.send('x','Literal redaction'));await p.send('secret-word','secret-word');rows=plainRows(await p.send('\r','Redactions  1'));
  assert.ok(rows.includes('  Redactions  1 (•••)'));assert.doesNotMatch(rows.join('\n'),/secret-word/);
  await p.stop();
+});
+test('#17 T5: an outcome the service refuses is shown as a warning, and no outcome is stated without the service',async()=>{
+ const p=await picker({...screens,color:true,rows:30,columns:80,outcome:async()=>{throw Error('Selected public history is incomplete. Select F.');}});await open(p);
+ const text=await p.send('\r','Select F.');await p.stop();
+ assert.match(text,/\x1b\[38;2;[0-9;]*mSelected public history is incomplete\. Select F\.\x1b\[0m/);
+ const {outcome,...without}=screens;const q=await picker({...without,rows:30,columns:80});await open(q);
+ const rows=plainRows(await q.send('\r','change target'));await q.stop();
+ assert.equal(rows[rows.indexOf('  [codex]  claude  opencode  agy  grok')+1],'  ← → change target');
 });
 test('#17 T6: the summary states mode and counts before IDs and keeps the exact payload rows unchanged',async()=>{
  const p=await picker({...screens,color:true,rows:40,columns:100});await open(p);await p.send('\r','change target');await p.send('\x1b[C','[claude]');
@@ -305,7 +318,7 @@ test('#17 T6: the summary states mode and counts before IDs and keeps the exact 
 });
 test('#17 T7: NO_COLOR and TERM=dumb render the coloured rows without any SGR sequence',async()=>{
  const render=async options=>{const p=await picker({...screens,rows:30,columns:100,...options});const list=await p.until(text=>text.includes('Opening request'),'excerpt');
-  await open(p);const target=await p.send('\r','change target');const summary=await p.send('\r','Enter confirm continuation');await p.stop();return [list,target,summary];};
+  await open(p);const target=await p.send('\r','Outcome for codex in source.');const summary=await p.send('\r','Enter confirm continuation');await p.stop();return [list,target,summary];};
  const colored=await render({color:true});
  for(const plain of [await render({}),await render({dumb:true})]) {
   for(const [index,frame] of plain.entries()) {assert.doesNotMatch(frame,/\x1b\[/);assert.equal(frame,colored[index].replace(sgr,''));}
@@ -323,7 +336,7 @@ test('#17 input rows that do not fit show their end at 80 columns',async()=>{
  await p.stop();
 });
 for(const [rows,columns,color] of [[24,80,true],[32,130,true],[24,80,false]]) test(`#17 PTY: list, target and summary fit ${columns}x${rows}${color?'':' with NO_COLOR'}`,()=>{
- const r=run([{resize:[rows,columns],wait:'Alpha task'},key('\r','Enter choose target'),key('\r','change target'),key('\r','Enter confirm continuation'),key('\x03','DONE')],'',color?{TERM:'xterm-256color'}:{NO_COLOR:'1'});
+ const r=run([{resize:[rows,columns],wait:'Alpha task'},key('\r','Enter choose target'),key('\r','session natively.'),key('\r','Enter confirm continuation'),key('\x03','DONE')],'',color?{TERM:'xterm-256color'}:{NO_COLOR:'1'});
  const [list,target,summary]=[1,3,4].map(index=>r.frames[index].split('\x1b[2J\x1b[H').at(-1));
  for(const frame of [list,target,summary]) {
   if(color)assert.match(frame,hasSgr);else assert.doesNotMatch(frame,hasSgr);
