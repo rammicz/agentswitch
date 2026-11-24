@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, stat, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildHandoff, prepareHandoff, createHandoffPlan, publishHandoffPlan } from '../dist/handoff.js';
-import * as handoff from '../dist/handoff.js';
+import { buildHandoff, prepareHandoff, createHandoffPlan, publishHandoffPlan, parseHandoffPrompt, DEFAULT_CURRENT_REQUEST } from '../dist/handoff.js';
 import { listArchive, readArchiveItem, deleteArchive } from '../dist/archive.js';
 
 const source = { agent: 'codex', id: 'public-session', nativeId: 'native-session' };
@@ -238,22 +237,21 @@ test('many origins at every byte budget never overrun the limit or fail preparat
     const result = buildHandoff({ ...base, items, maxBytes, reserveBytes });
     assert.ok(result.bytes + reserveBytes <= maxBytes);
     assert.equal(result.bytes, Buffer.byteLength(result.prompt));
-    assert.deepEqual(handoff.parseHandoffPrompt(result.prompt).history, items.filter(x => result.includedItemIds.includes(x.id)));
+    assert.deepEqual(parseHandoffPrompt(result.prompt).history, items.filter(x => result.includedItemIds.includes(x.id)));
   }
 });
 
 test('parseHandoffPrompt restores status and origin from stored v1 and v2 prompts', () => {
-  assert.equal(typeof handoff.parseHandoffPrompt, 'function');
-  assert.deepEqual(handoff.parseHandoffPrompt(frozenV1), { format: 'agentswitch-historical-context-v1', currentRequest: base.currentRequest, history: attributed });
+  assert.deepEqual(parseHandoffPrompt(frozenV1), { format: 'agentswitch-historical-context-v1', currentRequest: base.currentRequest, history: attributed });
   const v2 = buildHandoff({ ...base, items: attributed });
-  assert.deepEqual(handoff.parseHandoffPrompt(v2.prompt), { format: 'agentswitch-historical-context-v2', currentRequest: base.currentRequest, history: attributed });
+  assert.deepEqual(parseHandoffPrompt(v2.prompt), { format: 'agentswitch-historical-context-v2', currentRequest: base.currentRequest, history: attributed });
   const envelope = JSON.parse(v2.prompt);
   for (const broken of [{ ...envelope, format: 'agentswitch-historical-context-v3' }, { ...envelope, history: [{ ...envelope.history[0], o: 2 }] }, { ...envelope, history: [{ ...envelope.history[0], o: -1 }] }, { ...envelope, currentRequest: 1 }, { ...envelope, history: {} }])
-    assert.throws(() => handoff.parseHandoffPrompt(JSON.stringify(broken)), /handoff/i);
+    assert.throws(() => parseHandoffPrompt(JSON.stringify(broken)), /handoff/i);
 });
 
 test('shared default request asks for a status summary when the work already finished; paging discloses the external archive', () => {
-  assert.equal(handoff.DEFAULT_CURRENT_REQUEST, 'Review the historical context and current workspace state. If work is unfinished, continue it; if the last turn already completed, summarize where things stand and confirm next steps.');
+  assert.equal(DEFAULT_CURRENT_REQUEST, 'Review the historical context and current workspace state. If work is unfinished, continue it; if the last turn already completed, summarize where things stand and confirm next steps.');
   const { paging } = JSON.parse(buildHandoff({ ...base, items: [] }).prompt).omissions;
   assert.match(paging, /outside the workspace/);
   assert.match(paging, /sandbox/);

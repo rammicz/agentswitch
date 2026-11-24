@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { Scope, Session, HistoryItem } from './domain.js';
 import { deleteArchive, protectArchive, readArchiveSnapshot, releaseArchive } from './archive.js';
-import { createHandoffPlan, DEFAULT_CURRENT_REQUEST, parseHandoffPrompt, publishHandoffPlan, type HandoffPlan } from './handoff.js';
+import { createHandoffPlan, DEFAULT_CURRENT_REQUEST, parseHandoffPrompt, publishHandoffPlan, storedRequest, type HandoffPlan } from './handoff.js';
 import { grokPaths } from './adapters/grok.js';
 import { agyPaths } from './adapters/agy.js';
 import { openCodePaths } from './adapters/opencode.js';
@@ -101,8 +101,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
       },acquire:()=>()=>{}}});
     const sourceKeys=new Map<string,string>();
     const recoverySession:Session|undefined=prior?{...prior.source,title:`Recovery of ${prior.id}: prior delivery ${prior.state}`,workspace:prior.workspace,updatedAt:prior.updatedAt,messages:recovered?.items??[]}:undefined;
-    // Any attempt with an archive (fresh or Codex reuse) stored a handoff envelope, not a bare request.
-    const initialRequest=prior?.prompt ? (prior.archive ? parseHandoffPrompt(prior.prompt).currentRequest : prior.prompt) : DEFAULT_CURRENT_REQUEST;
+    const initialRequest=prior?.prompt ? storedRequest(prior.prompt,prior.archive) : DEFAULT_CURRENT_REQUEST;
     const checkNotice = options.checkNotice;
     await runPicker<Dispatch>({workspace:options.workspace,scope:options.scope??'folder',compose:true,initialRequest,
       label:prior?'agentswitch / EXPLICIT FRESH RECOVERY — earlier delivery may have happened':'agentswitch / local native sessions',
@@ -154,7 +153,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
             }
           }
           if(attempt.prompt&&attempt.continuity) {
-            const text=attempt.archive?parseHandoffPrompt(attempt.prompt).currentRequest:attempt.prompt;
+            const text=storedRequest(attempt.prompt,attempt.archive);
             retainedItems.set(attempt.continuity.requestId,{id:attempt.continuity.requestId,role:'user',status:'complete',text,origin:{agent:attempt.target,context:digest(JSON.stringify([attempt.continuity.targetRoot,attempt.targetNativeId]))}});
           }
         }

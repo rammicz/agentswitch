@@ -1,11 +1,11 @@
-import type { AgentId, HistoryItem } from './domain.js';
+import type { HistoryItem } from './domain.js';
 
-// Dependency-free on purpose: the picker and continuity readers use it without loading the runtime.
-export const HANDOFF_FORMAT_V1 = 'agentswitch-historical-context-v1';
+// Dependency-free on purpose: the picker imports it without loading the runtime.
+const HANDOFF_FORMAT_V1 = 'agentswitch-historical-context-v1';
 export const HANDOFF_FORMAT = 'agentswitch-historical-context-v2';
 export const DEFAULT_CURRENT_REQUEST = 'Review the historical context and current workspace state. If work is unfinished, continue it; if the last turn already completed, summarize where things stand and confirm next steps.';
 
-type Origin = { agent: AgentId; context: string };
+export type Origin = NonNullable<HistoryItem['origin']>;
 export interface ParsedHandoffPrompt {
   format: typeof HANDOFF_FORMAT_V1 | typeof HANDOFF_FORMAT;
   currentRequest: string;
@@ -13,6 +13,17 @@ export interface ParsedHandoffPrompt {
   history: HistoryItem[];
 }
 interface WireItem { id: string; role: HistoryItem['role']; text: string; status?: HistoryItem['status']; o?: number }
+/** Wire shape: `status` only when not complete, `o` indexes the envelope's `origins` table. */
+export function wireItem(item: HistoryItem, o?: number): WireItem {
+  const wire: WireItem = { id: item.id, role: item.role, text: item.text };
+  if (item.status !== 'complete') wire.status = item.status;
+  if (o !== undefined) wire.o = o;
+  return wire;
+}
+/** Current request of a journaled attempt: an attempt with an archive (fresh or Codex reuse) stored an envelope, otherwise the bare request. */
+export function storedRequest(prompt: string, archive: unknown): string {
+  return archive ? parseHandoffPrompt(prompt).currentRequest : prompt;
+}
 
 function invalid(): never { throw new Error('Invalid stored handoff prompt.'); }
 

@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { rollout, writeRollout, completed, ids } from './fixtures/codex/native.mjs';
-import { TransferJournal } from '../dist/transfer-journal.js';
+import { digest, TransferJournal } from '../dist/transfer-journal.js';
 import { DEFAULT_CURRENT_REQUEST, parseHandoffPrompt } from '../dist/handoff.js';
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
@@ -104,7 +104,7 @@ test('explicit F recovery decodes a journaled v1 envelope with its status and or
  const v1=JSON.stringify({format:'agentswitch-historical-context-v1',notice:v2.notice,source:v2.source,completeness:v2.completeness,history:decoded.history,omissions:v2.omissions,currentRequest:v2.currentRequest});
  assert.equal(parseHandoffPrompt(v1).format,'agentswitch-historical-context-v1');
  const db=new DatabaseSync(join(f.state,'transfers','attempts.sqlite'));
- db.prepare('UPDATE attempts SET data=? WHERE id=?').run(JSON.stringify({...first,prompt:v1,payloadHash:createHash('sha256').update(v1).digest('hex')}),first.id);db.close();
+ db.prepare('UPDATE attempts SET data=? WHERE id=?').run(JSON.stringify({...first,prompt:v1,payloadHash:digest(v1)}),first.id);db.close();
  const echo=(await readFile(bLaunch.path,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(echo[0].message.content,first.prompt);echo[0].message.content=v1;
  await writeFile(bLaunch.path,echo.map(JSON.stringify).join('\n')+'\n');
  await rm(join(first.archive.directory,first.archive.id+'.json'));
