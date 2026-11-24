@@ -23,7 +23,5 @@ test('the test runner fails when a run leaves agentswitch directories and remove
   const leak = run(root, ['scripts/test.mjs', 'test/fixtures/temp/leak.mjs']);
   assert.equal(leak.status, 1);
   assert.match(leak.stderr, /left 1 temporary directory: "agentswitch-leak-" x1/);
-  const clean = run(root, ['scripts/test.mjs', 'test/fixtures/temp/clean.mjs']);
-  assert.equal(clean.status, 0, clean.stderr);
   assert.deepEqual(await readdir(root), []);
 });

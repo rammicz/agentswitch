@@ -1,16 +1,15 @@
 // Runs the test suite in a dedicated temp root and fails when the run leaves agentswitch directories behind.
-// Usage: node scripts/test.mjs [node --test options] [test files]; without files, every test/*.test.mjs runs.
+// Usage: node scripts/test.mjs [node --test options] [test files]; without .mjs files, every test/*.test.mjs runs.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const args = process.argv.slice(2);
-const files = args.some(arg => !arg.startsWith('-')) ? [] :
-  readdirSync('test').filter(name => name.endsWith('.test.mjs')).sort().map(name => join('test', name));
+const files = args.some(arg => arg.endsWith('.mjs')) ? [] : ['test/*.test.mjs'];
 // Only this run's own root is inspected and removed, so concurrent runs and other sessions are not affected.
 const root = mkdtempSync(join(tmpdir(), 'agentswitch-test-run-'));
-let status = 1;
+let status;
 try {
   const run = spawnSync(process.execPath, ['--test', ...args, ...files], {
     stdio: 'inherit', env: { ...process.env, TMPDIR: root, TMP: root, TEMP: root },
