@@ -63,5 +63,7 @@ test('partial-history notice counts blocking selected-history records only and s
  assert.equal(partialHistoryNotice('codex',{complete:false,diagnostics:[d('partial-record'),d('input-limit'),d('diagnostic-limit')]}),'Partial history: at least 2 source records could not be read (partial-record, input-limit, diagnostic-limit) and are not included. Later history may also be unread.');
  // A full list may have been capped without a marker.
  assert.match(partialHistoryNotice('opencode',{complete:false,diagnostics:Array.from({length:100},()=>d('unsupported-shape'))}),/at least 100 source records .* Later history may also be unread\.$/);
+ assert.equal(partialHistoryNotice('grok',{complete:false,diagnostics:[d('partial-record')]}),'Partial history: at least 1 source record could not be read (partial-record) and is not included. Later history may also be unread.');
+ assert.match(partialHistoryNotice('codex',{complete:false,diagnostics:[...Array.from({length:99},()=>d('unsupported-shape')),d('diagnostic-limit')]}),/at least 99 source records could not be read \(unsupported-shape, diagnostic-limit\) .* Later history may also be unread\.$/);
  assert.equal(partialHistoryNotice('grok',{complete:false,diagnostics:[d('input-limit','root')]}),'Partial history: the source reader reported incomplete history. Unread records are not included.');
 });

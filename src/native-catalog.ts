@@ -20,8 +20,9 @@ const harmlessFor: Record<AgentId, ReadonlySet<string>> = {codex:harmless,claude
 const listCodes=(codes:readonly string[]):string=>{const unique=[...new Set(codes)];return unique.length?` (${unique.slice(0,5).join(', ')}${unique.length>5?', …':''})`:'';};
 // Every reader caps its diagnostics at this default, some without a marker, so a full list may hide more.
 const diagnosticCap=defaultLimits.maxDiagnostics;
-// Codes that stand for an unknown amount of later history rather than one unread record.
-const truncating = new Set(['input-limit','invalid-boundary','ancestry-unavailable','ancestry-cycle','diagnostic-limit']);
+// Codes that can stand for an unknown amount of later history rather than one unread record.
+// A partial record is a truncated line, typically a file still being written.
+const truncating = new Set(['partial-record','input-limit','invalid-boundary','ancestry-unavailable','ancestry-cycle','diagnostic-limit']);
 /** Review-screen disclosure for a source whose public history is incomplete. Counts and codes only, never unread content. */
 export function partialHistoryNotice(agent:AgentId, history:Pick<CodexHistory,'complete'|'diagnostics'>):string|undefined {
   if(history.complete)return undefined;

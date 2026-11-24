@@ -116,6 +116,16 @@ test('default CLI transfers readable OpenCode history with an unknown part as di
  assert.doesNotMatch((await readFile(join(f.state,'transfers','attempts.sqlite'))).toString('latin1'),/UNCLASSIFIED_PUBLIC_TEXT/);
  assert.equal(await hash(f.path),before);
 });
+test('retry of a partial OpenCode transfer stays partial and repeats the disclosure without a count',async()=>{
+ const f=await setup('codex');pty(f,[...select('opencode'),{send:'\x03'}]);
+ const db=new DatabaseSync(f.path);db.prepare('INSERT INTO part VALUES (?,?,?,?,?,?)').run('prt_unknown','msg_b',id,3,3,JSON.stringify({type:'future-public-shape',text:'UNCLASSIFIED_PUBLIC_TEXT'}));db.close();
+ pty(f,[...select('opencode'),{send:'\r'},{wait:'Partial history:'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ const [prior]=await records(f);assert.equal(prior.completeness,'partial');
+ const retry=pty(f,[{wait:'EXPLICIT FRESH RECOVERY'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\r'},{wait:'Partial history: the earlier transfer recorded'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}],['transfers','retry',prior.id]);
+ assert.equal(retry.code,0);assert.doesNotMatch(retry.output,/UNCLASSIFIED_PUBLIC_TEXT/);
+ const all=await records(f),again=all.find(record=>record.retryOf===prior.id);assert.equal(all.length,2);assert.equal(again.completeness,'partial');
+ assert.equal(JSON.parse((await launches(f)).at(-1).args.at(-1)).completeness,'partial');
+});
 test('complete OpenCode history shows no partial-history line',async()=>{
  const f=await setup('codex');const result=pty(f,[...select('opencode'),{send:'\r'},{wait:'Enter confirm continuation'},{send:'\x03'}],[],{rows:14,columns:58});
  assert.doesNotMatch(result.output,/Partial history/);
