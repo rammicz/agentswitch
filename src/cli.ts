@@ -25,7 +25,8 @@ Usage: agentswitch [--demo] [--global] [--help] [--version]
 Read-only native roots: CODEX_HOME, CODEX_SQLITE_HOME, CLAUDE_CONFIG_DIR,
 OPENCODE_DB, XDG_DATA_HOME, AGENTSWITCH_AGY_ROOT, GROK_HOME.
 Private local state: AGENTSWITCH_STATE_DIR (defaults to LocalAppData on Windows
-and XDG_STATE_HOME on Linux/macOS, under agentswitch).
+and XDG_STATE_HOME on Linux/macOS, under agentswitch). AGENTSWITCH_SEARCH_CACHE_MIB
+lowers the 256 MiB search cache cap. Unpinned archives expire after 30 days.
 Default operation requires a terminal. Use --demo for synthetic sessions.
 Transfers remain uncertain without a trusted provider consumption receipt.`;
 

@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp,mkdir,writeFile,rename,access,readdir,symlink,utimes } from 'node:fs/promises';
+import { mkdtemp,mkdir,writeFile,rename,access,readdir,symlink,utimes,rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NativeCatalog, partialHistoryNotice } from '../dist/native-catalog.js';
 import { SearchIndex } from '../dist/search-index.js';
-import { applicationPaths } from '../dist/application.js';
+import { applicationPaths, searchCacheBytes } from '../dist/application.js';
 import { rollout, writeRollout, completed, ids, encode as encodeCodex } from './fixtures/codex/native.mjs';
 import { entry,encode,ids as claudeIds } from './fixtures/claude/native.mjs';
 
@@ -89,4 +89,40 @@ test('untested Codex and Claude producers stay natively resumable and retained; 
   assert.equal(codex.session.producerVersion,producer);assert.equal(codex.runtime.nativeResume,compatible?'compatible':'unknown',String(version));assert.equal(codex.retained,compatible&&codex.history.retained===true);
  }
  await f.index.close();
+});
+
+test('T3: a clean discovery prunes cached sessions whose native history is gone; a degraded one keeps them',async()=>{
+ const f=await fixture();
+ const second=await writeRollout(f.codex,rollout(f.cwd,ids[1],[completed('UserMessage','u','second public message',1)]));
+ await writeFile(f.claudePath,encode([entry(claudeIds[0],f.cwd,'u',null,'user','public sibling')]));
+ const cache=async()=>f.index;
+ const search=async(text,catalog)=>{const controller=new AbortController();return catalog.search({...query(f.cwd),text},controller.signal,controller.signal,()=>{},cache,cache);};
+ const cached=async()=>(await f.index.query({...query(f.cwd),agent:'all'})).map(hit=>hit.id).sort();
+ assert.equal((await search('public',f.catalog)).length,3);
+ assert.deepEqual(await cached(),[`claude:${claudeIds[0]}`,`codex:${ids[0]}`,`codex:${ids[1]}`]);
+ // Missing managed root: unavailable, not deleted. Nothing is pruned.
+ await rename(f.codex,f.codex+'.missing');
+ await search('',await NativeCatalog.create(f.env));
+ assert.equal((await cached()).length,3);
+ await rename(f.codex+'.missing',f.codex);
+ // A discovery that reports a blocking diagnostic is degraded. Nothing is pruned.
+ await rm(second);
+ const broken=join(f.codex,'sessions','2026','11','20','rollout-2026-11-20T10-00-00-'+ids[2]+'.jsonl');await writeFile(broken,'{broken\n');
+ const degraded=await NativeCatalog.create(f.env);await search('',degraded);
+ assert.match(degraded.notices().join(' '),/codex: source warnings/);
+ assert.equal((await cached()).length,3);
+ await rm(broken);
+ await search('',await NativeCatalog.create(f.env));
+ assert.deepEqual(await cached(),[`claude:${claudeIds[0]}`,`codex:${ids[0]}`]);
+ // Without an existing cache, a search never creates one just to prune it.
+ const catalog=await NativeCatalog.create(f.env),controller=new AbortController();
+ await catalog.search(query(f.cwd),controller.signal,controller.signal,()=>{},async()=>assert.fail('created a cache'),async()=>undefined);
+ await f.index.close();
+});
+
+test('T2: AGENTSWITCH_SEARCH_CACHE_MIB lowers the 256 MiB search cache cap and never raises it',()=>{
+ assert.equal(searchCacheBytes({}),256*2**20);
+ assert.equal(searchCacheBytes({AGENTSWITCH_SEARCH_CACHE_MIB:' 64 '}),64*2**20);
+ assert.equal(searchCacheBytes({AGENTSWITCH_SEARCH_CACHE_MIB:'256'}),256*2**20);
+ for(const value of ['0','257','1.5','-1','64MiB','1e2'])assert.throws(()=>searchCacheBytes({AGENTSWITCH_SEARCH_CACHE_MIB:value}),/whole number of MiB from 1 to 256/);
 });

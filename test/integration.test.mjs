@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, stat, rename, symlink, access, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, stat, rename, symlink, access, realpath, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -203,6 +203,20 @@ test('fresh retry of a native-resume attempt rereads source history and never si
  const launches=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(launches.length,2);assert.equal(launches[1].args[0],'-C');const prompt=JSON.parse(launches[1].args.at(-1));assert.equal(prompt.history.length,2);assert.equal(prompt.currentRequest,'Do next [REDACTED]');assert.doesNotMatch(launches[1].args.at(-1),/NEEDLE_SECRET/);
 });
 
+
+test('T4: an archive expired at startup leaves the attempt in the journal, and F recovery rereads the active source',async t=>{
+ const f=await setup();t.after(()=>rm(f.root,{recursive:true,force:true}));
+ pty(f,[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},...finish]);
+ const {TransferJournal}=await import('../dist/transfer-journal.js');let journal=await TransferJournal.open(join(f.state,'transfers'));const [prior]=journal.list();journal.close();
+ const archive=join(prior.archive.directory,prior.archive.id+'.json');const old=new Date(Date.now()-31*86400000);await utimes(archive,old,old);
+ await writeRollout(f.codex,rollout(f.cwd,codexIds[0],[completed('UserMessage','u','public source NEEDLE_SECRET',1),completed('AgentMessage','a','public answer',2),completed('UserMessage','u2','turn after the archive',3)]));
+ pty(f,[...list,{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Earlier delivery: uncertain'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}],['transfers','retry',prior.id]);
+ await assert.rejects(access(archive),{code:'ENOENT'});
+ journal=await TransferJournal.open(join(f.state,'transfers'));const [retry,expired]=journal.list();journal.close();
+ assert.equal(retry.retryOf,prior.id);assert.match(expired.archiveExpiredAt,/^\d{4}-\d\d-\d\dT/);assert.deepEqual(expired.archive,prior.archive);assert.equal(expired.prompt,prior.prompt);
+ const launches=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(launches.length,2);
+ assert.deepEqual(JSON.parse(launches[1].args.at(-1)).history.map(item=>item.text),['public source NEEDLE_SECRET','public answer','turn after the archive']);
+});
 
 test('80-column exact preview reconstructs every wire byte with 400 emoji and safely escaped C1 controls',async()=>{
  const f=await setup();

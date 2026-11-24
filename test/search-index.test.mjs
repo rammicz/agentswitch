@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, realpath, rm, stat, symlink, writeFile, readFile, readdir } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, realpath, rm, stat, symlink, writeFile, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SearchIndex } from '../dist/search-index.js';
 
 const query = (text = '', agent = 'all', scope = 'global', workspace = '/') => ({ text, agent, scope, workspace });
 const ids = (hits) => hits.map((hit) => hit.id);
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'agentswitch-index-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   for (const path of ['project', 'project/child', 'project-other', 'elsewhere']) await mkdir(join(root, path), { recursive: true });
@@ -23,7 +23,7 @@ async function fixture(t) {
     rows.set(`${agent}/${nativeId}`, { id: `${agent}:${nativeId}`, agent, nativeId, title: `Session ${nativeId}`, workspace: join(root, workspace), updatedAt: '2026-01-01T00:00:00Z', messages: [{ id: 'm1', role: 'assistant', status: 'complete', text }], ...extra });
   }
   const directory = join(root, 'cache');
-  const index = await SearchIndex.open({ directory, sources });
+  const index = await SearchIndex.open({ directory, sources, ...options });
   t.after(() => index.close());
   return { root, rows, sources, calls, add, directory, index };
 }
@@ -229,4 +229,110 @@ test('corrupt changed rows reject repeatedly without leaking content, and an exi
   });
   await assert.rejects(SearchIndex.open({ directory: f.directory, sources: f.sources }), /Search cache is corrupt/);
   await f.index.rebuild(); assert.deepEqual(ids(await f.index.query(query('sapphire'))), ['codex:same']);
+});
+
+const tool = (id, text) => ({ id, role: 'tool', status: 'complete', text });
+const said = (id, role, text) => ({ id, role, status: 'complete', text });
+const cached = (directory) => import('node:sqlite').then(({ DatabaseSync }) => {
+  const db = new DatabaseSync(join(directory, 'index.sqlite'), { readOnly: true });
+  try { return db.prepare('SELECT native_id, data FROM sessions ORDER BY native_id').all().map((row) => ({ nativeId: row.native_id, ...JSON.parse(row.data) })); } finally { db.close(); }
+});
+
+test('T1: a tool output item contributes only its first 2 KiB to the index; user and assistant text stay whole', async (t) => {
+  const f = await fixture(t);
+  const head = `${'h'.repeat(2047)}TOOL_TAIL_NEEDLE`;
+  const long = `${'u'.repeat(5000)} USER_TAIL_NEEDLE`;
+  f.add('codex', 'tooling', 'project', '', { title: 'Tool heavy', messages: [
+    said('u', 'user', long), tool('t', `TOOL_HEAD_NEEDLE ${head}`), said('a', 'assistant', `${'a'.repeat(5000)} ASSISTANT_TAIL_NEEDLE`),
+  ] });
+  await f.index.refresh();
+  const [row] = await cached(f.directory);
+  const stored = Object.fromEntries(row.messages.map((item) => [item.id, item.text]));
+  assert.equal(stored.u, long);
+  assert.equal(stored.t, `TOOL_HEAD_NEEDLE ${'h'.repeat(2047)}`.slice(0, 2048));
+  assert.ok(Buffer.byteLength(stored.t) <= 2048);
+  assert.equal(stored.a.endsWith('ASSISTANT_TAIL_NEEDLE'), true);
+  for (const needle of ['tool heavy', 'tooling', join(f.root, 'project'), 'tool_head_needle', 'user_tail_needle', 'assistant_tail_needle']) {
+    assert.deepEqual(ids(await f.index.query(query(needle))), ['codex:tooling'], needle);
+  }
+  assert.deepEqual(ids(await f.index.query(query('TOOL_TAIL_NEEDLE'))), []);
+  // A multi-byte character that straddles the limit is dropped whole, never split.
+  f.add('codex', 'tooling', 'project', '', { messages: [tool('t', `${'é'.repeat(1023)}x😀z`)] });
+  await f.index.refresh();
+  assert.equal((await cached(f.directory))[0].messages[0].text, `${'é'.repeat(1023)}x`);
+  // A transcript cached by a matching search is bounded the same way.
+  const session = { ...f.rows.get('codex/tooling'), messages: [tool('t', `REMEMBERED_HEAD ${'r'.repeat(4000)} REMEMBERED_TAIL`)] };
+  await f.index.remember(session);
+  assert.equal((await f.index.remembered(session, 'remembered_head'))?.matches[0].field, 'message');
+  assert.equal(await f.index.remembered(session, 'remembered_tail'), undefined);
+});
+
+test('T2: over the cap, the least recently updated sessions lose their text first and stay listed by title, workspace and ID', async (t) => {
+  const f = await fixture(t, { maxBytes: 2500 });
+  for (const [nativeId, day] of [['oldest', 1], ['middle', 2], ['newest', 3], ['undated', 0]]) {
+    f.add('codex', nativeId, 'project', '', { title: `Title ${nativeId}`, updatedAt: day ? `2026-01-0${day}T00:00:00Z` : '',
+      messages: [said('m', 'assistant', `${nativeId.toUpperCase()}_TEXT ${'x'.repeat(1000)}`)] });
+  }
+  await f.index.refresh();
+  // 4 x ~1012 bytes against a 2500-byte cap: the undated and the oldest session are evicted.
+  const text = async (needle) => ids(await f.index.query(query(needle)));
+  assert.deepEqual(await text('newest_text'), ['codex:newest']);
+  assert.deepEqual(await text('middle_text'), ['codex:middle']);
+  assert.deepEqual(await text('oldest_text'), []);
+  assert.deepEqual(await text('undated_text'), []);
+  assert.deepEqual(await text(''), ['codex:newest', 'codex:middle', 'codex:oldest', 'codex:undated']);
+  assert.deepEqual(await text('title oldest'), ['codex:oldest']);
+  assert.deepEqual(await text('undated'), ['codex:undated']);
+  assert.deepEqual(await text(join(f.root, 'project')), ['codex:newest', 'codex:middle', 'codex:oldest', 'codex:undated']);
+  const rows = await cached(f.directory);
+  assert.deepEqual(rows.filter((row) => row.messages.length).map((row) => row.nativeId), ['middle', 'newest']);
+  const evicted = rows.find((row) => row.nativeId === 'oldest');
+  assert.deepEqual({ ...evicted, messages: undefined }, { nativeId: 'oldest', id: 'codex:oldest', agent: 'codex', title: 'Title oldest', workspace: join(f.root, 'project'), updatedAt: '2026-01-01T00:00:00Z', messages: undefined });
+  // An evicted session that becomes the most recent is indexed again; the next oldest loses its text.
+  f.rows.get('codex/oldest').updatedAt = '2026-01-04T00:00:00Z';
+  await f.index.refresh();
+  assert.deepEqual(await text('oldest_text'), ['codex:oldest']);
+  assert.deepEqual(await text('middle_text'), []);
+  // A transcript remembered by a matching search is bounded too.
+  await f.index.remember({ ...f.rows.get('codex/middle'), updatedAt: '2026-01-05T00:00:00Z' });
+  assert.deepEqual(await text('middle_text'), ['codex:middle']);
+  assert.deepEqual(await text('newest_text'), []);
+  await assert.rejects(SearchIndex.open({ directory: f.directory, sources: f.sources, maxBytes: 256 * 2 ** 20 + 1 }), /cache limit/);
+  await assert.rejects(SearchIndex.open({ directory: f.directory, sources: f.sources, maxBytes: 0 }), /cache limit/);
+});
+
+test('T2: opening a version 1 cache bounds stored tool output, applies the cap and returns the freed space', async (t) => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const f = await fixture(t);
+  await f.index.close();
+  await rm(join(f.directory, 'index.sqlite'));
+  const db = new DatabaseSync(join(f.directory, 'index.sqlite'));
+  db.exec('CREATE TABLE sessions (source TEXT NOT NULL, native_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source, native_id)); PRAGMA user_version=1;');
+  const insert = db.prepare('INSERT INTO sessions VALUES (?, ?, ?)');
+  const source = JSON.stringify(['codex', 'codex-fixture']);
+  for (let day = 1; day <= 9; day++) {
+    insert.run(source, `s${day}`, JSON.stringify({ id: `codex:s${day}`, nativeId: `s${day}`, agent: 'codex', title: `Old ${day}`, workspace: join(f.root, 'project'), updatedAt: `2026-01-0${day}T00:00:00Z`,
+      messages: [said('u', 'user', `USER_${day} ${'u'.repeat(100000)}`), tool('t', `TOOL_${day} ${'t'.repeat(1000000)}`)] }));
+  }
+  db.close();
+  await chmod(join(f.directory, 'index.sqlite'), 0o600);
+  const before = (await stat(join(f.directory, 'index.sqlite'))).size;
+  const index = await SearchIndex.open({ directory: f.directory, sources: f.sources, maxBytes: 320000 });
+  t.after(() => index.close());
+  assert.ok((await stat(join(f.directory, 'index.sqlite'))).size < before / 10, 'freed pages are returned to the file system');
+  const rows = await cached(f.directory);
+  assert.ok(rows.every((row) => row.messages.every((item) => item.role !== 'tool' || Buffer.byteLength(item.text) <= 2048)));
+  assert.deepEqual(rows.filter((row) => row.messages.length).map((row) => row.nativeId), ['s7', 's8', 's9']);
+  assert.deepEqual(ids(await index.query(query('user_9'))), ['codex:s9']);
+  assert.deepEqual(ids(await index.query(query('old 1'))), ['codex:s1']);
+  assert.equal((await index.query(query())).length, 9);
+});
+
+test('T3: pruning drops cached sessions that left a provider while other providers stay', async (t) => {
+  const f = await fixture(t);
+  f.add('codex', 'kept'); f.add('codex', 'gone'); f.add('claude', 'gone');
+  await f.index.refresh();
+  await f.index.prune('codex', ['kept']);
+  assert.deepEqual(ids(await f.index.query(query())), ['claude:gone', 'codex:kept']);
+  await assert.rejects(f.index.prune('grok', []), /not configured/);
 });

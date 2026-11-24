@@ -151,4 +151,4 @@ The handoff architecture draws on a supplied source investigation of [T3 Code](h
 
 [MIT](LICENSE).
 
-The native picker also offers **C** to edit the current request, **X** to add a literal redaction, and **F** to choose a fresh context. Review the exact final prompt before confirming. Use `agentswitch transfers list|show|retry|abort|delete` for deliberate recovery, and `agentswitch cache purge` to remove derived search data separately. A provider exit leaves delivery uncertain without a trusted consumption receipt.
+The native picker also offers **C** to edit the current request, **X** to add a literal redaction, and **F** to choose a fresh context. Review the exact final prompt before confirming. Use `agentswitch transfers list|show|retry|abort|delete` for deliberate recovery. The search cache and handoff archives bound themselves: cached tool output is limited to 2 KiB per item, the cache to 256 MiB (`AGENTSWITCH_SEARCH_CACHE_MIB` lowers it), and unpinned archives expire after 30 days. `agentswitch cache purge` removes derived search data at once. A provider exit leaves delivery uncertain without a trusted consumption receipt.

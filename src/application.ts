@@ -1,16 +1,16 @@
-import { mkdir, lstat, realpath } from 'node:fs/promises';
+import { mkdir, lstat, realpath, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { Scope, Session, HistoryItem } from './domain.js';
-import { deleteArchive, protectArchive, readArchiveSnapshot, releaseArchive } from './archive.js';
+import { deleteArchive, protectArchive, readArchiveSnapshot, releaseArchive, staleArchives } from './archive.js';
 import { createHandoffPlan, DEFAULT_CURRENT_REQUEST, parseHandoffPrompt, publishHandoffPlan, storedRequest, type HandoffPlan } from './handoff.js';
 import { grokPaths } from './adapters/grok.js';
 import { agyPaths } from './adapters/agy.js';
 import { openCodePaths } from './adapters/opencode.js';
 import { NativeCatalog, partialHistoryNotice, recordedPartialHistory, type NativeSnapshot } from './native-catalog.js';
 import { createRuntime, RuntimeError, type LaunchPlan, type RuntimeSource } from './runtime.js';
-import { SearchIndex } from './search-index.js';
+import { defaultMaxCacheBytes, SearchIndex } from './search-index.js';
 import { digest, TransferJournal, type TransferIntent } from './transfer-journal.js';
 import { runPicker, type SessionSource } from './tui/app.js';
 import { canonicalActivity, chooseContinuation, contextKey, matchingEcho, observeContext, retainedContext, retainedPrefix, type ContextRef, type ContextSnapshot, type NativeContext, type NativeItemTurn } from './continuity.js';
@@ -69,20 +69,47 @@ const encodedPrompt=(prompt:string):string=>JSON.stringify(prompt).replace(/[\x7
 const publicIdentity=(source:SessionSource):SessionSource=>({agent:source.agent,id:source.id,nativeId:source.nativeId});
 const nativeProjection=(snapshot:NativeSnapshot):ContextSnapshot=>({ref:snapshot.context,items:snapshot.history.items,retained:snapshot.retained,...(snapshot.history.itemTurns?{itemTurns:snapshot.history.itemTurns}:{})});
 
+const archiveRetention=30*24*60*60*1000;
+/**
+ * Delete unpinned handoff archives older than 30 days, at most `limit` per start. The journal keeps each attempt and
+ * marks its archive expired first, so an interrupted deletion is completed at the next start.
+ */
+export async function expireArchives(directory:string,journal:TransferJournal,now=Date.now(),limit=32):Promise<string[]> {
+  const stale=await staleArchives(directory,now-archiveRetention,limit).catch(()=>[]);
+  const expired:string[]=[];
+  for(const id of stale) {
+    journal.expireArchive(id,new Date(now).toISOString());
+    try {await deleteArchive({directory,id});expired.push(id);} catch {/* Pinned meanwhile, or already gone. */}
+  }
+  return expired;
+}
+
+/** `AGENTSWITCH_SEARCH_CACHE_MIB` lowers the 256 MiB search cache cap; it never raises it. */
+export function searchCacheBytes(env:NodeJS.ProcessEnv):number {
+  const value=env.AGENTSWITCH_SEARCH_CACHE_MIB?.trim();
+  if(!value)return defaultMaxCacheBytes;
+  if(!/^\d{1,3}$/.test(value)||Number(value)<1||Number(value)*2**20>defaultMaxCacheBytes) throw new Error('AGENTSWITCH_SEARCH_CACHE_MIB must be a whole number of MiB from 1 to 256.');
+  return Number(value)*2**20;
+}
+
 /** Real native readers, index, reusable picker, pure consent preview, journal and runtime. */
 export async function runApplication(options:ApplicationOptions):Promise<void> {
-  const env=options.env??process.env;const paths=await applicationPaths(env);const journal=await TransferJournal.open(paths.journal);
+  const env=options.env??process.env;const cacheBytes=searchCacheBytes(env);const paths=await applicationPaths(env);const journal=await TransferJournal.open(paths.journal);
   const discovery=new AbortController();
   let cache:Promise<SearchIndex|undefined>|undefined;
   try {
+    await expireArchives(paths.archives,journal).catch(()=>{});
     const catalog=await NativeCatalog.create(env);
-    const searchCache=()=>cache??=SearchIndex.open({directory:paths.cache,sources:catalog.sources()},{load:false}).catch(()=>undefined);
+    const searchCache=()=>cache??=SearchIndex.open({directory:paths.cache,sources:catalog.sources(),maxBytes:cacheBytes},{load:false}).catch(()=>undefined);
+    // Maintenance never creates the cache; only a matching text search does.
+    const existingCache=async()=>cache??((await stat(paths.cache).catch(()=>undefined))?searchCache():undefined);
     const prior=options.retry?journal.get(options.retry):undefined;
     if(prior?.deleted||prior?.deleting) throw new Error('Deleted transfer cannot be retried.');
-    const recovered=prior?.archive?await readArchiveSnapshot(prior.archive):undefined;
+    const recovered=prior?.archive&&!prior.archiveExpiredAt?await readArchiveSnapshot(prior.archive):undefined;
     const resolveSource=async(source:SessionSource,signal?:AbortSignal):Promise<SourceSnapshot>=>{
       if(prior) {
-        if(prior.mode==='native-resume'&&!prior.archive) {
+        // Without a retained archive, recovery rereads the active source under the original roots.
+        if(prior.mode==='native-resume'&&!prior.archive||prior.archiveExpiredAt) {
           const fresh=await catalog.snapshot(source,signal);
           if(fresh.sourceKey!==prior.sourceKey)throw new Error('Recovery native roots differ from the original source. Restore the configured roots.');
           return {runtime:{...fresh.runtime,workspace:prior.workspace},items:fresh.history.items,complete:fresh.history.complete,partialHistory:partialHistoryNotice(fresh.runtime.agent,fresh.history),fingerprint:fresh.fingerprint,sourceKey:fresh.sourceKey,context:fresh.context,retained:fresh.retained,...(fresh.history.itemTurns?{itemTurns:fresh.history.itemTurns}:{})};
@@ -110,7 +137,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
       ...(checkNotice ? { checkNotice: (signal: AbortSignal) => checkNotice(paths.root, signal) } : {}),
       query:async(query,signal,publish)=>{
         if(recoverySession) {const {messages,...hit}=recoverySession;return [{...hit,matches:[]}];}
-        return catalog.search(query,signal,discovery.signal,publish,searchCache);
+        return catalog.search(query,signal,discovery.signal,publish,searchCache,existingCache);
       },
       details: (source,signal) => recoverySession ? Promise.resolve(recoverySession.messages) : catalog.details(source,signal),
       preview:async(source,signal)=>{const snapshot=await resolveSource(source,signal);return snapshot.items;},

@@ -38,7 +38,7 @@ Remove the installed command with:
 npm uninstall --global --offline --ignore-scripts --no-audit --no-fund agentswitch
 ```
 
-Uninstall removes the npm package and command. Native histories and agentswitch's separately stored search cache, archives and delivery journal are user data and remain on disk; see [integration and explicit retention controls](integration.md). For the source-development `npm link` described in the README, the same global uninstall removes that link.
+Uninstall removes the npm package and command. Native histories and agentswitch's separately stored search cache, archives and delivery journal are user data and remain on disk; see [integration and explicit retention controls](integration.md). While installed, agentswitch bounds the search cache and expires unpinned archives after 30 days on its own. After uninstalling, remove the [agentswitch state directory](integration.md) yourself if you no longer need it. For the source-development `npm link` described in the README, the same global uninstall removes that link.
 
 ## Update an installed copy
 

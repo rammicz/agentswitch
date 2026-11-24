@@ -17,7 +17,12 @@ export interface SearchIndexOptions {
   directory: string;
   /** One adapter per provider; its sourceId namespaces persisted data. */
   sources: readonly SearchSource[];
+  /** Cap on cached message text in UTF-8 bytes, at most the 256 MiB default. */
+  maxBytes?: number;
 }
+/** Each tool output item contributes at most its first 2 KiB to the index. */
+export const maxToolTextBytes = 2048;
+export const defaultMaxCacheBytes = 256 * 2 ** 20;
 interface IndexedSession {
   session: Session;
   title: string;
@@ -25,6 +30,7 @@ interface IndexedSession {
   texts: string[];
   time: number;
 }
+interface StoredSession { updated: number | null; bytes: number; data: string }
 const markerPrefix = 'agentswitch-search-v1\n';
 const files = new Set(['owner', 'index.sqlite', 'index.sqlite-journal']);
 const normalize = (text: string): string => text.toLowerCase();
@@ -55,6 +61,28 @@ function timestamp(value: string): number {
   if (!Number.isFinite(time)) throw new Error('Search session has an invalid timestamp');
   return time;
 }
+/** The longest prefix within `maxBytes` UTF-8 bytes that does not split a code point. */
+function utf8Prefix(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text) <= maxBytes) return text;
+  let bytes = 0;
+  let end = 0;
+  for (const point of text) {
+    bytes += Buffer.byteLength(point);
+    if (bytes > maxBytes) break;
+    end += point.length;
+  }
+  return text.slice(0, end);
+}
+/** The public, bounded row for one session. `bytes` counts the message text that the cache cap applies to. */
+function stored({ id, nativeId, agent, title, workspace, updatedAt, messages }: Session): StoredSession {
+  const items = messages.map(({ id, role, status, text }) => ({ id, role, status, text: role === 'tool' ? utf8Prefix(text, maxToolTextBytes) : text }));
+  const time = Date.parse(updatedAt);
+  return { updated: Number.isFinite(time) ? time : null, bytes: items.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0),
+    data: JSON.stringify({ id, nativeId, agent, title, workspace, updatedAt, messages: items }) };
+}
+// `updated` and `bytes` precede `data` so totals and eviction order never read the large text column.
+const table = (name: string): string => `CREATE TABLE ${name} (source TEXT NOT NULL, native_id TEXT NOT NULL, updated INTEGER, bytes INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source, native_id));`;
+const ageIndex = 'CREATE INDEX sessions_age ON sessions(updated, bytes);';
 function indexed(session: Session): IndexedSession {
   return { session, title: normalize(session.title), workspace: normalize(session.workspace), texts: session.messages.map((item) => normalize(item.text)), time: timestamp(session.updatedAt) };
 }
@@ -107,9 +135,11 @@ export class SearchIndex {
   private closed = false;
   private dataVersion: SQLOutputValue | undefined;
   private operations: Promise<void> = Promise.resolve();
-  private constructor(private readonly directory: string, private readonly sources: readonly SearchSource[], private readonly database: DatabaseSync, private readonly owner: string, private readonly identity: Stats) {}
+  private constructor(private readonly directory: string, private readonly sources: readonly SearchSource[], private readonly database: DatabaseSync, private readonly owner: string, private readonly identity: Stats, private readonly maxBytes: number) {}
 
   static async open(options: SearchIndexOptions, { load = true } = {}): Promise<SearchIndex> {
+    const maxBytes = options.maxBytes ?? defaultMaxCacheBytes;
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > defaultMaxCacheBytes) throw new RangeError('Search cache limit must be between 1 byte and 256 MiB');
     const agents = new Set<AgentId>();
     for (const source of options.sources) {
       if (!source.sourceId || agents.has(source.adapter.id)) throw new Error('Register one nonempty source identity per provider');
@@ -135,10 +165,26 @@ export class SearchIndex {
     const database = new DatabaseSync(filename);
     try {
       database.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON; PRAGMA temp_store=MEMORY;');
-      const version = database.prepare('PRAGMA user_version').get()?.user_version;
-      if (version !== 0 && version !== 1) throw new Error('Unsupported search cache schema; use a new directory or purge with the compatible version');
-      database.exec('CREATE TABLE IF NOT EXISTS sessions (source TEXT NOT NULL, native_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source, native_id)); PRAGMA user_version=1;');
-      const index = new SearchIndex(directory, options.sources.map((source) => ({ ...source })), database, owner, await lstat(filename));
+      const version = () => database.prepare('PRAGMA user_version').get()?.user_version;
+      if (version() === 0) database.exec('PRAGMA auto_vacuum=INCREMENTAL;');
+      const index = new SearchIndex(directory, options.sources.map((source) => ({ ...source })), database, owner, await lstat(filename), maxBytes);
+      if (version() !== 2) {
+        index.transaction(() => {
+          const current = version();
+          if (current === 0) database.exec(table('sessions') + ageIndex);
+          else if (current === 1) {
+            // The VACUUM below rewrites the file without the dropped table, so zeroing its pages first only costs time.
+            database.exec('PRAGMA secure_delete=OFF;');
+            try { index.migrate(); } finally { database.exec('PRAGMA secure_delete=ON;'); }
+          }
+          else if (current !== 2) throw new Error('Unsupported search cache schema; use a new directory or purge with the compatible version');
+          database.exec('PRAGMA user_version=2;');
+        }, false);
+      }
+      // A cache created before automatic limits keeps freed pages until it is rebuilt once with incremental vacuuming.
+      if (database.prepare('PRAGMA auto_vacuum').get()?.auto_vacuum !== 2) {
+        try { database.exec('PRAGMA auto_vacuum=INCREMENTAL; VACUUM;'); } catch { /* Retried at the next open. */ }
+      }
       if (load) index.reload();
       return index;
     } catch (error) { database.close(); throw error; }
@@ -175,23 +221,51 @@ export class SearchIndex {
     this.operations = next.catch(() => {});
     return next;
   }
+  /** Writes, then evicts over the cap in the same transaction and returns freed pages to the file system. */
   private transaction(write: () => void, reload = true): void {
     this.database.exec('BEGIN IMMEDIATE');
-    try { write(); this.database.exec('COMMIT'); } catch (error) { this.database.exec('ROLLBACK'); throw error; }
+    try { write(); this.evict(); this.database.exec('COMMIT'); } catch (error) { this.database.exec('ROLLBACK'); throw error; }
+    try { this.database.exec('PRAGMA incremental_vacuum;'); } catch { /* Freed pages are reused or reclaimed by a later write. */ }
     if (reload) this.reload();
     else this.dataVersion = undefined;
+  }
+  /** Over the cap, the least recently updated sessions (undated first) keep only their title, workspace and identity. */
+  private evict(): void {
+    let total = Number(this.database.prepare('SELECT total(bytes) AS total FROM sessions').get()!.total);
+    if (total <= this.maxBytes) return;
+    const clear = this.database.prepare(`UPDATE sessions SET bytes=0, data=json_set(data, '$.messages', json('[]')) WHERE source=? AND native_id=?`);
+    for (const row of this.database.prepare('SELECT source, native_id, bytes FROM sessions WHERE bytes>0 ORDER BY updated, source, native_id').all()) {
+      if (total <= this.maxBytes) break;
+      clear.run(row.source as string, row.native_id as string);
+      total -= Number(row.bytes);
+    }
+  }
+  /** Version 1 rows had no size or age columns and kept tool output whole. Rewritten in pages to bound memory. */
+  private migrate(): void {
+    this.database.exec(table('sessions_next'));
+    const insert = this.database.prepare('INSERT INTO sessions_next(source, native_id, updated, bytes, data) VALUES (?, ?, ?, ?, ?)');
+    const page = this.database.prepare('SELECT rowid, source, native_id, data FROM sessions WHERE rowid>? ORDER BY rowid LIMIT 64');
+    for (let after = 0, rows = page.all(after); rows.length; rows = page.all(after)) {
+      for (const row of rows) {
+        let session: Session;
+        try { session = JSON.parse(row.data as string) as Session; } catch { throw new Error('Search cache is corrupt; use a fresh private directory and rebuild'); }
+        const { updated, bytes, data } = stored(session);
+        insert.run(row.source as string, row.native_id as string, updated, bytes, data);
+        after = Number(row.rowid);
+      }
+    }
+    this.database.exec('DROP TABLE sessions; ALTER TABLE sessions_next RENAME TO sessions;' + ageIndex);
+  }
+  private insert(source: string, session: Session): void {
+    const { updated, bytes, data } = stored(session);
+    this.database.prepare('INSERT OR REPLACE INTO sessions(source, native_id, updated, bytes, data) VALUES (?, ?, ?, ?, ?)').run(source, session.nativeId, updated, bytes, data);
   }
 
   /** Cache a complete matched transcript without loading any other cached records. */
   remember(session: Session): Promise<void> {
     const source = this.sources.find(item => item.adapter.id === session.agent);
     if (!source) throw new Error('Provider is not configured');
-    const {id, nativeId, agent, title, workspace, updatedAt, messages} = session;
-    const data = JSON.stringify({id, nativeId, agent, title, workspace, updatedAt,
-      messages: messages.map(({id, role, status, text}) => ({id, role, status, text}))});
-    return this.enqueue(async () => this.transaction(() => {
-      this.database.prepare('INSERT OR REPLACE INTO sessions(source, native_id, data) VALUES (?, ?, ?)').run(sourceKey(source), nativeId, data);
-    }, false));
+    return this.enqueue(async () => this.transaction(() => this.insert(sourceKey(source), session), false));
   }
 
   async remembered(session: Session, text: string): Promise<SessionHit | undefined> {
@@ -231,10 +305,9 @@ export class SearchIndex {
       this.transaction(() => {
         if (replaceAll) this.database.exec('DELETE FROM sessions');
         const remove = this.database.prepare('DELETE FROM sessions WHERE source=?');
-        const insert = this.database.prepare('INSERT OR REPLACE INTO sessions(source, native_id, data) VALUES (?, ?, ?)');
         for (const generation of staged) {
           if (!preserveMissing) remove.run(generation.source);
-          for (const session of generation.sessions) insert.run(generation.source, session.nativeId, JSON.stringify(session));
+          for (const session of generation.sessions) this.insert(generation.source, session);
         }
       });
     });
@@ -249,6 +322,22 @@ export class SearchIndex {
       const source = this.sources.find((item) => item.adapter.id === agent);
       if (!source) throw new Error('Provider is not configured');
       this.transaction(() => { this.database.prepare('DELETE FROM sessions WHERE source=? AND native_id=?').run(sourceKey(source), nativeId); });
+    });
+  }
+
+  /** Drop cached sessions of one provider that its complete, healthy discovery no longer lists. */
+  prune(agent: AgentId, present: Iterable<string>): Promise<void> {
+    return this.enqueue(async () => {
+      const source = this.sources.find((item) => item.adapter.id === agent);
+      if (!source) throw new Error('Provider is not configured');
+      const key = sourceKey(source);
+      const keep = new Set(present);
+      this.transaction(() => {
+        const remove = this.database.prepare('DELETE FROM sessions WHERE source=? AND native_id=?');
+        for (const row of this.database.prepare('SELECT native_id FROM sessions WHERE source=?').all(key)) {
+          if (!keep.has(row.native_id as string)) remove.run(key, row.native_id as string);
+        }
+      }, false);
     });
   }
 

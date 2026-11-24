@@ -37,6 +37,8 @@ export interface TransferRecord extends Omit<TransferIntent, 'prompt'> {
   observation?: { target:ContextRef; turnId:string; conflicted:boolean };
   receiptTurnId?:string;
   branchCheckpoint?:string;
+  /** Set when startup maintenance deleted the archive after its retention period. The reference is kept for the record. */
+  archiveExpiredAt?:string;
 }
 /** Only trusted adapters may supply this; stdout, exit status and terminal ACKs are not receipts. */
 export interface TrustedReceipt { attemptId: string; payloadHash: string; target: AgentId; targetNativeId: string; targetRef?:ContextRef; turnId?:string }
@@ -199,6 +201,10 @@ export class TransferJournal {
       }
       this.accept(record,{attemptId:id,payloadHash:record.payloadHash,target:'codex',targetNativeId:event.target.nativeId,targetRef:event.target,turnId:event.turnId});
     });
+  }
+  /** Keep each attempt that referenced this archive and record when the archive was removed. */
+  expireArchive(archiveId: string, at: string): void {
+    this.transaction(()=>{for(const record of this.list())if(record.archive?.id===archiveId&&!record.archiveExpiredAt){record.archiveExpiredAt=at;this.save(record);}});
   }
   abort(id: string): void { this.transaction(()=>{const record=this.get(id);record.retired=true;this.save(record);}); }
   private invalidateLineage(record:TransferRecord):void {

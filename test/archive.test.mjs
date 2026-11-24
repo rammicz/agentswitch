@@ -138,3 +138,34 @@ test('parent path aliases work but archive leaf aliases remain rejected', async 
   assert.equal((await listArchive(reference)).items[0].id, 'unicode');
   await deleteArchive(reference);
 });
+
+test('T4: startup expiry deletes unpinned archives older than 30 days, oldest first and bounded, and marks them expired in the journal', async t => {
+  const { expireArchives } = await import('../dist/application.js');
+  const { TransferJournal } = await import('../dist/transfer-journal.js');
+  const { protectArchive } = await import('../dist/archive.js');
+  const { utimes, writeFile: write } = await import('node:fs/promises');
+  const { parent, directory } = await temporary(t);
+  const journal = await TransferJournal.open(join(parent, 'journal')); t.after(() => journal.close());
+  const now = Date.parse('2026-11-24T12:00:00Z'), day = 86400000;
+  const uuid = n => `33333333-3333-4333-8333-${String(n).padStart(12, '0')}`;
+  const age = async (name, days) => { const time = new Date(now - days * day); await utimes(join(directory, name), time, time); };
+  const intent = archive => ({ source, sourceKey: 'root+source', target: 'codex', workspace: '/synthetic', mode: 'fresh-handoff', prompt: 'approved', includedItemIds: [], omittedItemIds: ['unicode'], archive, completeness: 'partial' });
+  const make = async (n, days, recorded = true) => {
+    const ref = await publishArchive({ directory, id: uuid(n) }, snapshot); await age(`${ref.id}.json`, days);
+    return { ref, record: recorded ? journal.prepare(intent(ref)) : undefined };
+  };
+  const old = await make(1, 31), pinned = await make(2, 45), fresh = await make(3, 29), orphan = await make(4, 60, false);
+  await protectArchive(pinned.ref, pinned.record.id);
+  const leftover = `${uuid(5)}.${uuid(6)}.tmp`; await write(join(directory, leftover), 'partial', { mode: 0o600 }); await age(leftover, 40);
+  assert.deepEqual(await expireArchives(directory, journal, now, 1), [orphan.ref.id]);
+  assert.deepEqual(await expireArchives(directory, journal, now), [uuid(5), old.ref.id]);
+  assert.deepEqual((await readdir(directory)).sort(), ['owner', `${pinned.ref.id}.json`, `${pinned.ref.id}.pin`, `${fresh.ref.id}.json`].sort());
+  const expired = journal.get(old.record.id);
+  assert.equal(expired.archiveExpiredAt, new Date(now).toISOString());
+  assert.deepEqual(expired.archive, old.ref);
+  for (const kept of [pinned, fresh]) assert.equal(journal.get(kept.record.id).archiveExpiredAt, undefined);
+  assert.deepEqual(await expireArchives(directory, journal, now), []);
+  // A state directory without archives is left alone.
+  assert.deepEqual(await expireArchives(join(parent, 'never created'), journal, now), []);
+  await assert.rejects(readdir(join(parent, 'never created')), { code: 'ENOENT' });
+});

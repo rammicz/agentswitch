@@ -211,6 +211,23 @@ export async function deleteArchive(reference: ArchiveReference): Promise<void> 
   });
 }
 
+/** Unpinned archive IDs (including crash leftovers) last written before `before`, oldest first, at most `limit`. */
+export async function staleArchives(directory: string, before: number, limit: number): Promise<string[]> {
+  return controlled(async () => {
+    const { directory: canonical } = await root(directory, false);
+    const names = await readdir(canonical);
+    const pinned = new Set(names.filter(name => name.endsWith('.pin')).map(name => name.slice(0, -'.pin'.length)));
+    const written = new Map<string, number>();
+    for (const name of names) {
+      const id = name.slice(0, 36);
+      if (name === 'owner' || pinned.has(id)) continue;
+      const time = (await lstat(join(canonical, name))).mtimeMs;
+      written.set(id, Math.max(written.get(id) ?? 0, time));
+    }
+    return [...written].filter(([, time]) => time < before).sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0])).slice(0, limit).map(([id]) => id);
+  });
+}
+
 /** Durable archive use reservation. A crashed launcher never loses this protection automatically. */
 export async function protectArchive(reference: ArchiveReference, token: string): Promise<void> {
   return controlled(async () => {
