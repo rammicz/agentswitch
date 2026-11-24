@@ -22,7 +22,7 @@ export interface ClaudeHistory { items: readonly HistoryItem[]; complete: boolea
 interface File { path: string; id: string; mtime: number }
 interface Metadata { cwd: string; created: string; prompt: string; customTitle: string; aiTitle: string; lastPrompt: string; summary: string; producer: string; sidechain: boolean; valid: boolean }
 // History lines hold whole image tool results; see the limits section of docs/claude-reader.md.
-const claudeDefaults = { ...defaultLimits, maxHistoryLineBytes: 8 * 1024 * 1024 };
+const claudeDefaults = { ...defaultLimits, maxHistoryLineBytes: defaultLimits.maxFileBytes };
 const filePattern = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 function date(value: unknown): string {
   const parsed = typeof value === 'string' ? Date.parse(value) : NaN;

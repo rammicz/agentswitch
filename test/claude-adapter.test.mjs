@@ -270,7 +270,7 @@ test('an image tool result above the discovery line cap keeps earlier turns; the
   const capped=await reader({root,limits:{maxLineBytes:4096,maxHistoryLineBytes:4096}}).readHistoryDetailed(ids[0]);
   assert.deepEqual(texts(capped),['Third turn']);assert.equal(capped.complete,false);
   assert.ok(capped.diagnostics.some(d=>d.code==='input-limit'));assert.ok(capped.diagnostics.some(d=>d.code==='ancestry-unavailable'));
-  assert.throws(()=>reader({root,limits:{maxHistoryLineBytes:8*1024*1024+1}}),RangeError);
+  assert.doesNotThrow(()=>reader({root,limits:{maxHistoryLineBytes:32*1024*1024}}));assert.throws(()=>reader({root,limits:{maxHistoryLineBytes:32*1024*1024+1}}),RangeError);
 });
 
 test('strictness stays for malformed graph entries, unknown blocks, wrong owners, untyped records and spilled output',async t=>{
