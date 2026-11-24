@@ -10,7 +10,8 @@ import type { SessionAdapter } from './index.js';
 import type { CodexDiagnostic, DiagnosticCode } from './codex-io.js';
 
 export const openCodeNativeId = /^ses_[A-Za-z0-9]{1,200}$/;
-export interface OpenCodeSession extends Session { createdAt:string; producerVersion:string }
+/** `v2` sessions come from the 2.x `session_v2` store, whose `--session` creates a missing ID instead of failing. */
+export interface OpenCodeSession extends Session { createdAt:string; producerVersion:string; store:'v1'|'v2' }
 export interface OpenCodeHistory { items:readonly HistoryItem[]; complete:boolean; diagnostics:readonly CodexDiagnostic[]; incarnation?:string; retained:false }
 export interface OpenCodeAdapterOptions {
   dbPath?:string; root?:string; home?:string; env?:NodeJS.ProcessEnv;
@@ -36,6 +37,32 @@ const safeString=(value:unknown):value is string=>typeof value==='string'&&!valu
 // 1.x keeps the session/message/part store; 2.x moved history to session_v2/session_message/session_part.
 const openCodeProducer=/^1\.\d{1,9}\.\d{1,9}(?:-[0-9A-Za-z.-]{1,64})?$/;
 export const testedOpenCodeProducer='1.19.6';
+// A 2.x row's version is the creating build ('2.4.1', 'local'), or the copied 1.x string for migrated sessions and their forks.
+const openCodeV2Version=/^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
+// Pinned v2.4.1 packages/schema/src/session-message.ts: message types and assistant part types without public text.
+const excludedV2MessageTypes=new Set(['synthetic','system','skill','shell','compaction','idle','agent-switched','model-switched','location-switched']);
+const v2ToolStates=new Set(['streaming','running','completed','error']);
+const v1Tables={session:['id','directory','workspace_id','parent_id','title','version','time_created','time_updated','time_archived','revert'],message:['id','session_id','time_created','time_updated','data'],part:['id','message_id','session_id','time_created','time_updated','data']};
+const v2Tables={session_v2:['id','directory','workspace_id','parent_id','title','version','time_created','time_updated','time_archived','revert'],session_message:['id','session_id','type','seq','data'],session_part:['message_id','session_id','ordinal','type','data']};
+interface Stores { v1:boolean; v2:boolean; parts:boolean }
+/** Required columns, or undefined when the table is absent. 1.x message/part must match exactly; 2.x tables may grow. */
+function columns(db:DatabaseSync,table:string,required:readonly string[],exact:boolean):boolean {
+  const schema=db.prepare('SELECT type,sql FROM sqlite_schema WHERE name=?').get(table);
+  if(!schema)return false;
+  if(schema.type!=='table'||typeof schema.sql!=='string'||/VIRTUAL/i.test(schema.sql))throw new Error('unsupported-shape');
+  const actual=db.prepare(`PRAGMA table_info(${table})`).all().map(row=>String(row.name));
+  if(!required.every(column=>actual.includes(column))||(exact&&actual.some(column=>!required.includes(column))))throw new Error('unsupported-shape');
+  return true;
+}
+/** Only session_v2 identifies a 2.x store: 1.19.6 already has a session_message table. */
+function stores(db:DatabaseSync):Stores {
+  const v2=columns(db,'session_v2',v2Tables.session_v2,false);
+  if(v2&&!columns(db,'session_message',v2Tables.session_message,false))throw new Error('unsupported-shape');
+  // A fresh 2.x store has no 1.x tables; an upgraded one keeps them, and then they must still be the exact 1.x shape.
+  const v1=!v2||columns(db,'session',v1Tables.session,false);
+  if(v1&&!(columns(db,'session',v1Tables.session,false)&&columns(db,'message',v1Tables.message,true)&&columns(db,'part',v1Tables.part,true)))throw new Error('unsupported-shape');
+  return {v1,v2,parts:v2&&columns(db,'session_part',v2Tables.session_part,false)};
+}
 
 /** No DB copies, provider imports or native mutation PRAGMAs. Only a quiescent immutable 1.x projection, tested on 1.19.6. */
 export class OpenCodeSessionAdapter implements SessionAdapter {
@@ -72,19 +99,13 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
     } finally {await handle.close();}
     return {path,signature:JSON.stringify([requested,path,key(leaf),key(info),key(parent)]),incarnation:nativeIncarnation({dev:Number(info.dev),ino:Number(info.ino),birthtimeMs:Number(info.birthtimeNs)/1e6})};
   }
-  private async snapshot<T>(diagnostics:CodexDiagnostic[],read:(db:DatabaseSync)=>T):Promise<{value:T;signature:string;incarnation:string}|undefined> {
+  private async snapshot<T>(diagnostics:CodexDiagnostic[],read:(db:DatabaseSync,stores:Stores)=>T):Promise<{value:T;signature:string;incarnation:string}|undefined> {
     let db:DatabaseSync|undefined;
     try {
       const before=await this.physical();
       // Node 22.15's SQLite opens URI filenames; immutable avoids sidecar/recovery writes and requires no WAL.
       db=new DatabaseSync(pathToFileURL(before.path).href+'?mode=ro&immutable=1',{readOnly:true});
-      for(const [table,columns] of Object.entries({session:['id','directory','workspace_id','parent_id','title','version','time_created','time_updated','time_archived','revert'],message:['id','session_id','time_created','time_updated','data'],part:['id','message_id','session_id','time_created','time_updated','data']})) {
-        const schema=db.prepare('SELECT type,sql FROM sqlite_schema WHERE name=?').get(table);
-        if(schema?.type!=='table'||typeof schema.sql!=='string'||/VIRTUAL/i.test(schema.sql))throw new Error('unsupported-shape');
-        const actual=db.prepare(`PRAGMA table_info(${table})`).all().map(row=>row.name);
-        if(!columns.every(column=>actual.includes(column))||(table!=='session'&&actual.some(column=>!columns.includes(String(column)))))throw new Error('unsupported-shape');
-      }
-      const value=read(db);db.close();db=undefined;
+      const value=read(db,stores(db));db.close();db=undefined;
       const after=await this.physical();
       if(before.signature!==after.signature)throw new Error('metadata-unstable');
       return {value,signature:after.signature,incarnation:after.incarnation};
@@ -97,20 +118,27 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
   discover():Promise<readonly OpenCodeSession[]> {return this.run(()=>this.catalog([]));}
   private async catalog(diagnostics:CodexDiagnostic[]):Promise<OpenCodeSession[]> {
     this.selected.clear();this.generation='';
-    const snapshot=await this.snapshot(diagnostics,db=>db.prepare('SELECT id,directory,workspace_id,parent_id,title,version,time_created,time_updated,time_archived FROM session ORDER BY time_updated DESC,id LIMIT ?').all(this.limits.maxRows+1));
+    // A shared ID is the 1.x session that 2.x copied into session_v2; later turns go only to the 2.x copy.
+    const snapshot=await this.snapshot(diagnostics,(db,{v1,v2})=>db.prepare([
+      ...(v2?["SELECT 'v2' AS store,id,directory,workspace_id,parent_id,title,version,time_created,time_updated,time_archived FROM session_v2"]:[]),
+      ...(v1?[`SELECT 'v1' AS store,id,directory,workspace_id,parent_id,title,version,time_created,time_updated,time_archived FROM session${v2?' WHERE id NOT IN (SELECT id FROM session_v2)':''}`]:[]),
+    ].join(' UNION ALL ')+' ORDER BY time_updated DESC,id LIMIT ?').all(this.limits.maxRows+1));
     if(!snapshot)return [];
     if(snapshot.value.length>this.limits.maxRows)this.diagnostic(diagnostics,'input-limit');
     let untested=false;
     for(const row of snapshot.value.slice(0,this.limits.maxRows)) {
-      if(!openCodeNativeId.test(String(row.id))||!safeString(row.directory)||!isAbsolute(row.directory)||!safeString(row.title)||!timestamp(row.time_created)||!timestamp(row.time_updated)) {this.diagnostic(diagnostics,'malformed-record');continue;}
-      // Child/archived/remote workspaces are deliberately outside the first local profile.
+      const store=row.store==='v2'?'v2':'v1',nativeId=String(row.id);
+      // A 2.x title is nullable; like Codex, an untitled session is named after its ID until labelled.
+      const title=store==='v2'&&row.title===null?`OpenCode ${nativeId}`:row.title;
+      if(!openCodeNativeId.test(nativeId)||!safeString(row.directory)||!isAbsolute(row.directory)||!safeString(title)||!timestamp(row.time_created)||!timestamp(row.time_updated)) {this.diagnostic(diagnostics,'malformed-record');continue;}
+      // Child/archived/remote workspaces are deliberately outside the first local profile. 2.x forks are top-level.
       if(row.workspace_id||row.parent_id||row.time_archived)continue;
-      if(typeof row.version!=='string'||!openCodeProducer.test(row.version)) {this.diagnostic(diagnostics,'unsupported-shape');continue;}
-      untested||=row.version!==testedOpenCodeProducer;
-      if(Buffer.byteLength(row.title)>4096||Buffer.byteLength(row.directory)>4096){this.diagnostic(diagnostics,'input-limit');continue;}
+      if(typeof row.version!=='string'||!(store==='v2'?openCodeV2Version:openCodeProducer).test(row.version)) {this.diagnostic(diagnostics,'unsupported-shape');continue;}
+      // No real 2.x store has been inspected, so every 2.x session is untested whatever its version string.
+      untested||=store==='v2'||row.version!==testedOpenCodeProducer;
+      if(Buffer.byteLength(title)>4096||Buffer.byteLength(row.directory)>4096){this.diagnostic(diagnostics,'input-limit');continue;}
       let workspace=resolve(row.directory);try{workspace=await realpath(workspace);}catch{this.diagnostic(diagnostics,'workspace-unavailable');}
-      const nativeId=String(row.id);
-      this.selected.set(nativeId,{id:`opencode:${nativeId}`,nativeId,agent:'opencode',workspace,title:row.title,producerVersion:row.version,createdAt:timestamp(row.time_created),updatedAt:timestamp(row.time_updated),messages:[]});
+      this.selected.set(nativeId,{id:`opencode:${nativeId}`,nativeId,agent:'opencode',workspace,title,producerVersion:row.version,store,createdAt:timestamp(row.time_created),updatedAt:timestamp(row.time_updated),messages:[]});
     }
     if(untested)this.diagnostic(diagnostics,'untested-producer');
     this.generation=snapshot.signature;
@@ -123,7 +151,9 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
     const diagnostics:CodexDiagnostic[]=[];
     if(rediscover)await this.catalog([]);
     if(!openCodeNativeId.test(id)||!this.selected.has(id)){this.diagnostic(diagnostics,'selected-rollout-unavailable');return {items:[],complete:false,diagnostics,retained:false};}
-    const snapshot=await this.snapshot(diagnostics,db=>{
+    const store=this.selected.get(id)!.store;
+    const snapshot=await this.snapshot(diagnostics,(db,stores)=>{
+      if(store==='v2')return this.historyV2(db,stores,id,diagnostics);
       const session=db.prepare(`SELECT json_valid(revert) AS valid,CASE WHEN json_valid(revert) THEN json_extract(revert,'$.messageID') END AS message,CASE WHEN json_valid(revert) THEN json_extract(revert,'$.partID') END AS part,revert IS NOT NULL AS reverted FROM session WHERE id=?`).get(id);
       if(!session)throw new Error('selected-rollout-unavailable');
       const messages=db.prepare(`SELECT id,time_created,json_valid(data) AS valid,CASE WHEN json_valid(data) THEN json_extract(data,'$.role') END AS role,CASE WHEN json_valid(data) THEN json_type(data,'$.time.completed')='integer' AND json_extract(data,'$.time.completed')>=0 END AS completed,CASE WHEN json_valid(data) THEN json_type(data,'$.error') END AS error FROM message WHERE session_id=? ORDER BY time_created,id LIMIT ?`).all(id,this.limits.maxRows+1);
@@ -165,7 +195,84 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
     if(!snapshot||snapshot.signature!==this.generation){if(snapshot)this.diagnostic(diagnostics,'metadata-unstable');return {items:[],complete:false,diagnostics,retained:false};}
     const complete=diagnostics.length===0;
     // Catalog reads skip the repeat: discovery already reported it once for the whole scan.
-    if(rediscover&&this.selected.get(id)!.producerVersion!==testedOpenCodeProducer)this.diagnostic(diagnostics,'untested-producer');
+    if(rediscover&&(store==='v2'||this.selected.get(id)!.producerVersion!==testedOpenCodeProducer))this.diagnostic(diagnostics,'untested-producer');
     return {items:snapshot.value,complete,diagnostics,incarnation:snapshot.incarnation,retained:false};
   });}
+  /** 2.x projection (pinned v2.4.1 history.ts): messages by seq; an assistant's part rows by ordinal, then its inline content. */
+  private historyV2(db:DatabaseSync,stores:Stores,id:string,diagnostics:CodexDiagnostic[]):HistoryItem[] {
+    const limit=this.limits.maxRows+1;
+    const session=db.prepare(`SELECT revert IS NOT NULL AS reverted,json_valid(revert) AS valid,CASE WHEN json_valid(revert) THEN json_type(revert,'$.messageID') END AS type,CASE WHEN json_valid(revert) THEN json_extract(revert,'$.messageID') END AS message FROM session_v2 WHERE id=?`).get(id);
+    if(!session)throw new Error('selected-rollout-unavailable');
+    const messages=db.prepare(`SELECT id,type,seq,CASE WHEN json_valid(data) THEN json_type(data)='object' END AS valid,
+      CASE WHEN json_valid(data) THEN json_type(data,'$.text') END AS textType,
+      CASE WHEN NOT json_valid(data) OR type<>'user' THEN NULL WHEN json_type(data,'$.text')='text' THEN json_extract(data,'$.text') END AS text,
+      CASE WHEN json_valid(data) THEN json_type(data,'$.content') END AS contentType,
+      CASE WHEN json_valid(data) THEN json_type(data,'$.time.completed')='integer' AND json_extract(data,'$.time.completed')>=0 END AS completed,
+      CASE WHEN json_valid(data) THEN json_type(data,'$.error') END AS error
+      FROM session_message WHERE session_id=? ORDER BY seq,id LIMIT ?`).all(id,limit);
+    // Each projected value is selected by JSON path, so private fields (input, metadata, native, error.response, files) are never read.
+    const fields=(data:string,path:string,type:string)=>`${type} AS type,
+      CASE WHEN ${type}='text' AND json_type(${data},${path}||'.text')='text' THEN json_extract(${data},${path}||'.text') END AS text,
+      CASE WHEN ${type}='tool' THEN json_extract(${data},${path}||'.state.status') END AS status,
+      CASE WHEN ${type}='tool' THEN json_type(${data},${path}||'.state.content') END AS contentType,
+      CASE WHEN ${type}='tool' AND json_type(${data},${path}||'.state.error.message')='text' THEN json_extract(${data},${path}||'.state.error.message') END AS error`;
+    const assistants=`(SELECT id,seq,CASE WHEN NOT json_valid(data) THEN '{"content":[]}' WHEN json_type(data,'$.content')='array' THEN data ELSE '{"content":[]}' END AS data FROM session_message WHERE session_id=? AND type='assistant')`;
+    const rows=stores.parts?`(SELECT p.message_id,p.ordinal,p.type AS column_type,CASE WHEN json_valid(p.data) THEN json_type(p.data)='object' END AS valid,CASE WHEN json_valid(p.data) THEN p.data ELSE '{}' END AS data FROM session_part p JOIN session_message m ON m.id=p.message_id AND m.session_id=p.session_id WHERE p.session_id=? AND m.type='assistant')`:'';
+    const parts=db.prepare([
+      ...(rows?[`SELECT message_id AS message,0 AS source,ordinal AS position,valid,${fields('data',"'$'",'column_type')} FROM ${rows}`]:[]),
+      `SELECT m.id AS message,1 AS source,CAST(c.key AS INTEGER) AS position,1 AS valid,${fields('m.data','c.fullkey',"json_extract(m.data,c.fullkey||'.type')")} FROM ${assistants} m,json_each(m.data,'$.content') c`,
+    ].join(' UNION ALL ')+' ORDER BY 1,2,3 LIMIT ?').all(...(rows?[id]:[]),id,limit);
+    const content=db.prepare([
+      ...(rows?[`SELECT p.message_id AS message,0 AS source,p.ordinal AS position,json_extract(p.data,c.fullkey||'.type') AS type,CASE WHEN json_type(p.data,c.fullkey||'.text')='text' THEN json_extract(p.data,c.fullkey||'.text') END AS text FROM ${rows} p,json_each(p.data,'$.state.content') c WHERE p.column_type='tool' AND json_type(p.data,'$.state.content')='array'`]:[]),
+      `SELECT m.id AS message,1 AS source,CAST(c.key AS INTEGER) AS position,json_extract(m.data,cc.fullkey||'.type') AS type,CASE WHEN json_type(m.data,cc.fullkey||'.text')='text' THEN json_extract(m.data,cc.fullkey||'.text') END AS text FROM ${assistants} m,json_each(m.data,'$.content') c,json_each(m.data,c.fullkey||'.state.content') cc WHERE json_extract(m.data,c.fullkey||'.type')='tool' AND json_type(m.data,c.fullkey||'.state.content')='array'`,
+    ].join(' UNION ALL ')+' ORDER BY 1,2,3 LIMIT ?').all(...(rows?[id]:[]),id,limit*10);
+    if(messages.length>this.limits.maxRows||parts.length>this.limits.maxRows||content.length>this.limits.maxRows*10)throw new Error('input-limit');
+    // A staged revert hides its message and everything after it; upstream ignores the legacy partID.
+    const boundary=session.reverted?messages.findIndex(row=>row.id===session.message):messages.length;
+    if(session.reverted&&(!session.valid||session.type!=='text'||!validId(session.message)||boundary<0))throw new Error('invalid-boundary');
+    const key=(row:Record<string,unknown>)=>`${String(row.message)}\0${String(row.source)}\0${String(row.position)}`;
+    const partsOf=new Map<unknown,Record<string,unknown>[]>(),contentOf=new Map<string,Record<string,unknown>[]>();
+    for(const part of parts)partsOf.set(part.message,[...partsOf.get(part.message)??[],part]);
+    for(const entry of content)contentOf.set(key(entry),[...contentOf.get(key(entry))??[],entry]);
+    const items:HistoryItem[]=[];let bytes=0;
+    const add=(item:HistoryItem)=>{bytes+=Buffer.byteLength(item.text);if(bytes>this.limits.maxTextBytes)throw new Error('input-limit');if(item.text)items.push(item);};
+    for(const message of messages.slice(0,boundary)) {
+      if(!message.valid||!validId(message.id)||typeof message.type!=='string'||!Number.isSafeInteger(message.seq)){this.diagnostic(diagnostics,'malformed-record');continue;}
+      if(excludedV2MessageTypes.has(message.type))continue;
+      const base=`opencode:${id}:${message.id}`;
+      if(message.type==='user') {
+        if(message.textType!=='text'||!safeString(message.text)){this.diagnostic(diagnostics,'malformed-record');continue;}
+        add({id:base,role:'user',text:message.text,status:'complete'});continue;
+      }
+      if(message.type!=='assistant'){this.diagnostic(diagnostics,'unsupported-shape');continue;}
+      if(message.contentType!==null&&message.contentType!=='array')this.diagnostic(diagnostics,'malformed-record');
+      const status:HistoryItem['status']=message.error?'failed':message.completed?'complete':'interrupted';
+      for(const part of partsOf.get(message.id)??[]) {
+        const partId=`${base}:${part.source?'c':'p'}${String(part.position)}`;
+        if(!part.valid||!Number.isSafeInteger(part.position)){this.diagnostic(diagnostics,'malformed-record');continue;}
+        if(part.type==='reasoning')continue;
+        if(part.type==='text') {
+          if(!safeString(part.text)){this.diagnostic(diagnostics,'malformed-record');continue;}
+          add({id:partId,role:'assistant',text:part.text,status});continue;
+        }
+        if(part.type!=='tool'||typeof part.status!=='string'||!v2ToolStates.has(part.status)){this.diagnostic(diagnostics,'unsupported-shape');continue;}
+        if(part.status==='streaming'||part.status==='running')continue;
+        if(part.status==='error') {
+          if(!safeString(part.error)){this.diagnostic(diagnostics,'malformed-record');continue;}
+          add({id:partId,role:'tool',text:part.error,status:'failed'});continue;
+        }
+        if(part.contentType!=='array'){this.diagnostic(diagnostics,'malformed-record');continue;}
+        // Completed output is text and file entries; file entries (URIs, media) never transfer.
+        const texts:string[]=[];
+        for(const entry of contentOf.get(key(part))??[]) {
+          if(entry.type==='file')continue;
+          if(entry.type!=='text'){this.diagnostic(diagnostics,'unsupported-shape');continue;}
+          if(!safeString(entry.text)){this.diagnostic(diagnostics,'malformed-record');continue;}
+          texts.push(entry.text);
+        }
+        add({id:partId,role:'tool',text:texts.join('\n'),status:'complete'});
+      }
+    }
+    return items;
+  }
 }

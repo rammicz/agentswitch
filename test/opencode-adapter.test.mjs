@@ -162,3 +162,61 @@ test('a session table without a required column still fails closed with unsuppor
  const f=await setup();mutate(f.path,db=>db.exec('ALTER TABLE session DROP COLUMN directory'));const diagnostics=[];
  assert.deepEqual(await new OpenCodeSessionAdapter({dbPath:f.path,onDiagnostic:x=>diagnostics.push(x)}).discover(),[]);assert.ok(diagnostics.some(x=>x.code==='unsupported-shape'));
 });
+
+import { fixtureV2, fixtureMixed, v2Id } from './fixtures/opencode/native-v2.mjs';
+async function setupV2(make=fixtureV2,options){const root=await mkdtemp(join(tmpdir(),'agentswitch-opencode2-'));const cwd=join(root,'workspace');await mkdir(cwd);const path=await make(join(root,'native','opencode.db'),cwd,options);return {root,cwd,path};}
+const v2Expected=[['user','V2 public question','complete'],['assistant','Part one','complete'],['tool','Tool output','complete'],['assistant','Part three','complete'],['tool','Tool failed','failed'],['assistant','Inline after parts','complete'],['assistant','Old inline answer','failed'],['user','Latest question','complete'],['assistant','Streaming answer','interrupted']];
+test('a fresh 2.x store lists local top-level sessions and projects public text in seq, ordinal then inline order',async()=>{
+ const f=await setupV2();const before=await readFile(f.path);const diagnostics=[];const adapter=new OpenCodeSessionAdapter({dbPath:f.path,onDiagnostic:x=>diagnostics.push(x)});
+ const sessions=await adapter.discover();
+ assert.deepEqual(sessions.map(s=>[s.nativeId,s.title,s.producerVersion,s.store]),[[v2Id,'OpenCode '+v2Id,'2.4.1','v2'],['ses_v2fork001','Forked session','1.19.6','v2']]);
+ assert.equal(sessions[0].workspace,await realpath(f.cwd));assert.equal(sessions[0].createdAt,new Date(1795255200000).toISOString());
+ const history=await adapter.readHistoryDetailed(v2Id);
+ assert.deepEqual(history.items.map(x=>[x.role,x.text,x.status]),v2Expected);
+ assert.equal(history.complete,true,JSON.stringify(history.diagnostics));assert.deepEqual(history.diagnostics.map(x=>x.code),['untested-producer']);
+ assert.equal(new Set(history.items.map(x=>x.id)).size,history.items.length);assert.ok(history.items.every(x=>x.id.startsWith(`opencode:${v2Id}:msg_`)));
+ assert.deepEqual((await adapter.readHistoryDetailed('ses_v2fork001')).items.map(x=>x.text),['Fork question']);
+ assert.doesNotMatch(JSON.stringify([sessions,history,diagnostics]),/PRIVATE_/);assert.deepEqual(await readFile(f.path),before);
+});
+test('a 2.x revert hides its message and the tail; a missing or malformed boundary blocks history',async()=>{
+ const f=await setupV2(fixtureV2,{revert:{messageID:'msg_a2',partID:'ignored'}});
+ assert.deepEqual((await new OpenCodeSessionAdapter({dbPath:f.path}).readHistoryDetailed(v2Id)).items.map(x=>x.text),v2Expected.slice(0,6).map(x=>x[1]));
+ for(const revert of [{messageID:'msg_missing'},{messageID:42},{}]) {
+  mutate(f.path,db=>db.prepare('UPDATE session_v2 SET revert=? WHERE id=?').run(JSON.stringify(revert),v2Id));
+  const history=await new OpenCodeSessionAdapter({dbPath:f.path}).readHistoryDetailed(v2Id);
+  assert.equal(history.complete,false);assert.deepEqual(history.items,[]);assert.ok(history.diagnostics.some(x=>x.code==='invalid-boundary'),JSON.stringify(revert));
+ }
+});
+test('unknown 2.x message types, part types, tool states and tool content mark history incomplete without their text',async()=>{
+ const cases=[
+  db=>db.prepare("INSERT INTO session_message VALUES ('msg_new',?,'future-message',20,20,20,?)").run(v2Id,JSON.stringify({text:'UNCLASSIFIED_PUBLIC_TEXT'})),
+  db=>db.prepare("INSERT INTO session_part VALUES ('msg_a1',?,9,'future-part',null,1,1,?)").run(v2Id,JSON.stringify({text:'UNCLASSIFIED_PUBLIC_TEXT'})),
+  db=>db.prepare("INSERT INTO session_part VALUES ('msg_a1',?,9,'tool',null,1,1,?)").run(v2Id,JSON.stringify({state:{status:'future-state',content:[{type:'text',text:'UNCLASSIFIED_PUBLIC_TEXT'}]}})),
+  db=>db.prepare("INSERT INTO session_part VALUES ('msg_a1',?,9,'tool',null,1,1,?)").run(v2Id,JSON.stringify({state:{status:'completed',content:[{type:'future-content',text:'UNCLASSIFIED_PUBLIC_TEXT'}]}})),
+  db=>db.prepare("UPDATE session_message SET data=? WHERE id='msg_a3'").run(JSON.stringify({time:{created:9},content:[{type:'future-inline',text:'UNCLASSIFIED_PUBLIC_TEXT'}]})),
+  db=>db.prepare("UPDATE session_message SET data='{broken' WHERE id='msg_u2'").run(),
+  db=>db.prepare("UPDATE session_message SET data='{broken' WHERE id='msg_a3'").run(),
+  db=>db.prepare("UPDATE session_part SET data='{broken' WHERE message_id='msg_a1' AND ordinal=3").run(),
+ ];
+ for(const [index,change] of cases.entries()) {
+  const f=await setupV2();mutate(f.path,change);
+  const history=await new OpenCodeSessionAdapter({dbPath:f.path}).readHistoryDetailed(v2Id);
+  assert.equal(history.complete,false,String(index));assert.ok(history.diagnostics.some(x=>['unsupported-shape','malformed-record'].includes(x.code)),String(index));
+  assert.doesNotMatch(JSON.stringify(history),/UNCLASSIFIED_PUBLIC_TEXT|PRIVATE_/);assert.ok(history.items.some(x=>x.text==='V2 public question'));
+ }
+});
+test('an upgraded store lists each session once and reads a shared ID from the live 2.x copy',async()=>{
+ const f=await setupV2(fixtureMixed);const adapter=new OpenCodeSessionAdapter({dbPath:f.path});
+ const sessions=await adapter.discover();
+ assert.deepEqual(sessions.map(s=>[s.nativeId,s.store]).sort(),[[id,'v2'],['ses_v1only001','v1'],[v2Id,'v2'],['ses_v2fork001','v2']].sort());
+ assert.deepEqual((await adapter.readHistoryDetailed(id)).items.map(x=>x.text),['First public','OpenCode answer','Post-upgrade turn']);
+ assert.equal((await adapter.readHistoryDetailed('ses_v1only001')).complete,true);
+ const env={GROK_HOME:join(f.root,'grok'),AGENTSWITCH_AGY_ROOT:join(f.root,'agy'),OPENCODE_DB:f.path,XDG_DATA_HOME:join(f.root,'data'),CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude')};
+ const catalog=await NativeCatalog.create(env);const hit=s=>({id:s.id,agent:'opencode',nativeId:s.nativeId});
+ // The 2.x copy keeps the 1.x version string, but 2.x --session creates a missing session, so it never gets native resume.
+ assert.equal((await catalog.snapshot(hit(sessions.find(s=>s.nativeId===id)))).runtime.nativeResume,'unknown');
+ assert.equal((await catalog.snapshot(hit(sessions.find(s=>s.nativeId==='ses_v1only001')))).runtime.nativeResume,'compatible');
+ const hits=[];const controller=new AbortController();
+ await catalog.search({text:'',agent:'opencode',scope:'folder',workspace:f.cwd},controller.signal,controller.signal,published=>hits.push(...published),async()=>undefined);
+ assert.equal(hits.filter(h=>h.nativeId===v2Id).at(-1).title,'V2 public question','an untitled 2.x session is labelled by its first public request');
+});

@@ -23,7 +23,7 @@ The read-only Claude reader follows the official [Python Agent SDK native sessio
 
 ## OpenCode native history and launch evidence
 
-The [1.19.6 compatibility profile](opencode-reader.md) records dated distribution, platform and MIT evidence from official `opencode-ai@1.19.6` and commit `f4e363c8295fa90a03dddc451882fffe8fbce357`. Its implemented public reader uses `session/message/part`, immutable no-sidecar reads and explicit roots. Exact native `ses_` resume omits all initial prompts; fresh transport uses the complete bounded `--prompt=` envelope. Four-direction default-CLI PTYs use synthetic databases and fake providers. Source evidence, fake runtime checks and unverified actual provider behavior are distinguished in that profile. Version 2.3.2 is separately inspected and unsupported.
+The [1.19.6 compatibility profile](opencode-reader.md) records dated distribution, platform and MIT evidence from official `opencode-ai@1.19.6` and commit `f4e363c8295fa90a03dddc451882fffe8fbce357`. Its implemented public reader uses `session/message/part`, immutable no-sidecar reads and explicit roots. Exact native `ses_` resume omits all initial prompts; fresh transport uses the complete bounded `--prompt=` envelope. Four-direction default-CLI PTYs use synthetic databases and fake providers. Source evidence, fake runtime checks and unverified actual provider behavior are distinguished in that profile. 2.x sessions in `session_v2` are read from pinned v2.4.1 source evidence and get only fresh handoffs.
 
 ## Grok Build public schema and native build evidence
 

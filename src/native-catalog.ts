@@ -151,7 +151,7 @@ export class NativeCatalog {
             if(Date.now()-lastPublish>=200)update();
           }
         }
-      } else if(agent==='codex'||agent==='agy') {
+      } else if(agent==='codex'||agent==='agy'||agent==='opencode') {
         const untitled=sessions.filter(session=>session.title.endsWith(` ${session.nativeId}`) &&
           !('metadataOnly' in session&&session.metadataOnly));
         // Results are already available. Read only recent untitled sessions for labels.
@@ -159,6 +159,7 @@ export class NativeCatalog {
           signal.throwIfAborted();
           if(!this.openingTitles.has(session.id)) {
             const items=await (agent==='codex' ? this.adapters.codex.readCatalogTitleItems(session.nativeId,signal)
+              : agent==='opencode' ? this.adapters.opencode.readCatalogHistoryDetailed(session.nativeId).then(history=>history.items)
               : this.adapters.agy.readCatalogTitleItems(session.nativeId)).catch(()=>[]);
             signal.throwIfAborted();
             this.openingTitles.set(session.id,openingTitle(items));
@@ -218,7 +219,8 @@ export class NativeCatalog {
     // Codex and Claude resume their own store by exact ID, so any well-formed producer is compatible; tested versions only add a note.
     // A missing version is compatible. The Claude reader already drops a malformed version; Codex flattens a missing or
     // non-string cli_version to '' and keeps any other string, so only a non-empty malformed Codex version is unknown.
-    const compatible=session.agent==='opencode'?producer===testedOpenCodeProducer:session.agent==='codex'?!producer||wellFormedVersion.test(producer):true;
+    // A 2.x session_v2 row never resumes natively: 2.x --session creates a missing or raced ID, and migrated rows keep a 1.x version.
+    const compatible=session.agent==='opencode'?'store' in session&&session.store==='v1'&&producer===testedOpenCodeProducer:session.agent==='codex'?!producer||wellFormedVersion.test(producer):true;
     const runtime:RuntimeSource={agent:session.agent,id:session.id,nativeId:session.nativeId,workspace:session.workspace,nativeResume:compatible?'compatible':'unknown'};
     const sourceKey=digest(JSON.stringify([source.agent,this.rootKeys[source.agent],source.nativeId]));
     const context:ContextRef={...runtime,root:this.rootKey(source.agent),incarnation:history.incarnation??'unknown',sourceKey};

@@ -7,6 +7,7 @@ import { join,resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { fixture,id } from './fixtures/opencode/native.mjs';
+import { fixtureV2,v2Id } from './fixtures/opencode/native-v2.mjs';
 import { rollout,writeRollout,completed,ids as codexIds } from './fixtures/codex/native.mjs';
 import { entry,encode,ids as claudeIds } from './fixtures/claude/native.mjs';
 import { TransferJournal } from '../dist/transfer-journal.js';
@@ -136,4 +137,12 @@ test('OpenCode source with only unreadable parts refuses before archive, journal
  const result=pty(f,[{wait:'Enter preview'},{send:'OpenCode synthetic'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\r'},{wait:'no readable items'},{send:'\x03'}]);
  assert.equal(result.restored,true);assert.match(result.output,/Selected public history is incomplete/);assert.doesNotMatch(result.output,/UNCLASSIFIED_PUBLIC_TEXT/);
  await assert.rejects(access(f.env.RUNTIME_LOG));await assert.rejects(access(join(f.state,'archives')));assert.equal((await records(f)).length,0);
+});
+test('a 2.x OpenCode session is offered only a fresh handoff, even to OpenCode',async()=>{
+ const f=await setup('opencode');f.env.OPENCODE_DB=await fixtureV2(join(f.root,'opencode2','opencode.db'),f.cwd);
+ const result=pty(f,[{wait:'Enter preview'},{send:'V2 public'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},...target('opencode'),{send:'\r'},{wait:'Mode: fresh-handoff'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ assert.equal(result.restored,true);assert.doesNotMatch(result.output,/PRIVATE_/);
+ const [launch]=await launches(f);assert.ok(launch.args[1].startsWith('--prompt='));assert.ok(!launch.args.some(arg=>arg.startsWith('--session')));
+ const prompt=parseHandoffPrompt(launch.args[1].slice('--prompt='.length));assert.deepEqual(prompt.history.map(item=>item.text).slice(0,3),['V2 public question','Part one','Tool output']);
+ assert.equal((await records(f))[0].mode,'fresh-handoff');
 });
