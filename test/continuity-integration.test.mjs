@@ -141,7 +141,8 @@ test('an uncertain attempted return is never replayed; the next selection review
  const records=await record(f);assert.equal(records[0].state,'uncertain');assert.equal(records[1].state,'uncertain');assert.notEqual(records[0].id,records[1].id);assert.notEqual(records[0].payloadHash,records[1].payloadHash);
 });
 test('unknown source-native compatibility gets a reviewed fresh bounded rebuild under the supported target',async()=>{
- const f=await setup();await writeFile(f.aFile,(await readFile(f.aFile,'utf8')).replace('0.171.0','0.170.0'));const before=await hash(f.aFile);
+ // Any well-formed Codex producer resumes natively; a malformed producer version leaves compatibility unknown.
+ const f=await setup();await writeFile(f.aFile,(await readFile(f.aFile,'utf8')).replace('0.171.0','v0.170'));const before=await hash(f.aFile);
  const result=pty(f,[...select('A original'),...confirm,{wait:'accepted — correlated native turn'}]);assert.equal(result.code,0);assert.equal(await hash(f.aFile),before);
  const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());assert.ok(!launch.args.includes('resume'));assert.deepEqual(JSON.parse(launch.args.at(-1)).history.map(item=>item.text),['A original request','A original answer']);
 });

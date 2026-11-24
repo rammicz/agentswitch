@@ -17,6 +17,7 @@ const canonical = async (path: string): Promise<string> => realpath(resolve(path
 const harmless = new Set(['workspace-unavailable','metadata-unavailable','metadata-schema','metadata-unstable','untested-producer']);
 // grok and agy metadata is the whole source, so any diagnostic degrades it; OpenCode tolerates only an untested producer.
 const harmlessFor: Record<AgentId, ReadonlySet<string>> = {codex:harmless,claude:harmless,opencode:new Set(['untested-producer']),agy:new Set(),grok:new Set()};
+const wellFormedVersion=/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/;
 const listCodes=(codes:readonly string[]):string=>{const unique=[...new Set(codes)];return unique.length?` (${unique.slice(0,5).join(', ')}${unique.length>5?', …':''})`:'';};
 // Every reader caps its diagnostics at this default, some without a marker, so a full list may hide more.
 const diagnosticCap=defaultLimits.maxDiagnostics;
@@ -214,7 +215,8 @@ export class NativeCatalog {
     const history:CodexHistory=await this.adapters[source.agent].readHistoryDetailed(source.nativeId);
     this.report(source.agent,source.agent==='agy'&&'metadataOnly' in session&&session.metadataOnly?'metadata only. Native open available, outgoing public history unavailable':history.complete?'':'selected public history incomplete. A fresh handoff sends only readable items');signal?.throwIfAborted();
     const producer='producerVersion' in session?session.producerVersion:undefined;
-    const compatible=session.agent==='grok'?true:session.agent==='agy'?true:session.agent==='opencode'?producer===testedOpenCodeProducer:session.agent==='codex' ? producer==='0.171.0' : !producer||producer==='2.1.330';
+    // Codex and Claude resume their own store by exact ID, so any well-formed producer is compatible; tested versions only add a note.
+    const compatible=session.agent==='opencode'?producer===testedOpenCodeProducer:session.agent==='codex'?wellFormedVersion.test(producer??''):session.agent==='claude'?!producer||wellFormedVersion.test(producer):true;
     const runtime:RuntimeSource={agent:session.agent,id:session.id,nativeId:session.nativeId,workspace:session.workspace,nativeResume:compatible?'compatible':'unknown'};
     const sourceKey=digest(JSON.stringify([source.agent,this.rootKeys[source.agent],source.nativeId]));
     const context:ContextRef={...runtime,root:this.rootKey(source.agent),incarnation:history.incarnation??'unknown',sourceKey};

@@ -77,7 +77,8 @@ already certified prefix. Missing certified output requires restored native
 history or explicit F recovery. Legacy layouts without this paginated turn
 evidence, incomplete flushes and interactive sessions with additional user turns
 remain conservative fresh fallbacks. Ordinary selected-source native resume is
-still available under its existing compatibility checks.
+still available under its existing compatibility checks. Codex and Claude contexts
+from untested but well-formed producer versions are retained and reusable like tested ones.
 
 Claude Code has no implemented exact-turn receipt adapter. Its Stop lacks the
 correlation proven for this Codex surface. Cross-provider Claude selection uses

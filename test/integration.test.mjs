@@ -169,6 +169,13 @@ test('changed source invalidates preview without publishing a transfer; cache pu
 });
 
 
+for(const [agent,from,to] of [['codex','0.171.0','0.172.0'],['codex','0.171.0','0.163.0'],['claude','2.1.330','2.1.331'],['claude',',"version":"2.1.330"','']])test(`untested ${agent} producer ${to||'without a version'} resumes natively by exact ID`,async()=>{
+ const f=await setup(agent);const file=f.files[agent==='codex'?0:3],original=await readFile(file,'utf8');assert.ok(original.includes(from));await writeFile(file,original.replaceAll(from,to));
+ const [result]=pty(f,[...list,...select(agent),...(agent==='claude'?[{send:'\u001b[C'},{wait:'Target: claude'}]:[]),...request,{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ assert.equal(result.restored,true);assert.match(result.output,/Mode: native-resume/);
+ const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());
+ assert.ok(launch.args.some(arg=>arg.includes(agent==='codex'?codexIds[0]:claudeIds[0])),JSON.stringify(launch.args));assert.equal(launch.args.at(-1),'Do next NEEDLE_SECRET');
+});
 test('supervised native exit releases only writer ownership; intentional selection can resume again',async()=>{
  const f=await setup('codex');
  const actions=[...list,...select('codex'),{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}];

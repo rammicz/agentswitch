@@ -43,7 +43,11 @@ name through absolute PATH entries. Supply a trusted `getSource` lookup returnin
 provider-scoped identity, recorded workspace and native compatibility. The picker
 request alone cannot attest to those facts. `nativeResume: 'compatible'` must come
 from an adapter that knows the source kind; incompatible or unknown native formats
-require explicit fresh recovery. Codex/Claude same-agent resume accepts only an exact UUID; OpenCode accepts an exact `ses_` ID in its recorded workspace with an explicitly empty current request (see [OpenCode profile](opencode-reader.md));
+require explicit fresh recovery. A Codex or Claude session with any well-formed producer
+version (or a Claude session without one) is compatible: the installed CLI resumes its
+own store by exact ID, and tested producer versions only avoid an `untested-producer`
+note. Only a malformed producer version leaves compatibility unknown. OpenCode native
+resume still requires its tested producer. Codex/Claude same-agent resume accepts only an exact UUID; OpenCode accepts an exact `ses_` ID in its recorded workspace with an explicitly empty current request (see [OpenCode profile](opencode-reader.md));
 Grok uses an exact UUID and explicitly empty draft at its recorded workspace; its [public v1 schema](grok-reader.md) is pinned, while the native build is only tested. There is no latest-session, name, picker, fork or cross-provider ID fallback.
 
 `prepare(request, input, signal)` returns `PreparedContinuation<LaunchPlan>` for

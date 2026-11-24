@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp,mkdir,writeFile,rename,access,readdir,symlink } from 'node:fs/promises';
+import { mkdtemp,mkdir,writeFile,readFile,rename,access,readdir,symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NativeCatalog, partialHistoryNotice } from '../dist/native-catalog.js';
@@ -66,4 +66,17 @@ test('partial-history notice counts blocking selected-history records only and s
  assert.equal(partialHistoryNotice('grok',{complete:false,diagnostics:[d('partial-record')]}),'Partial history: at least 1 source record could not be read (partial-record) and is not included. Later history may also be unread.');
  assert.match(partialHistoryNotice('codex',{complete:false,diagnostics:[...Array.from({length:99},()=>d('unsupported-shape')),d('diagnostic-limit')]}),/at least 99 source records could not be read \(unsupported-shape, diagnostic-limit\) .* Later history may also be unread\.$/);
  assert.equal(partialHistoryNotice('grok',{complete:false,diagnostics:[d('input-limit','root')]}),'Partial history: the source reader reported incomplete history. Unread records are not included.');
+});
+
+test('untested Codex and Claude producers stay natively resumable and retained; malformed Codex versions do not',async()=>{
+ const f=await fixture();
+ for(const [version,expected] of [['0.172.0','compatible'],['0.163.0','compatible'],['0.180.0-alpha.2','compatible'],['0.171.0','compatible'],['v0.172',  'unknown']]) {
+  await writeFile(f.path,(await readFile(f.path,'utf8')).replace(/"cli_version":"[^"]*"/,`"cli_version":${JSON.stringify(version)}`));
+  await writeFile(f.claudePath,encode([entry(claudeIds[0],f.cwd,'u',null,'user','healthy sibling',{version:'2.1.331'})]));
+  await f.catalog.refresh(f.index);
+  const [codex]=await f.index.query({...query(f.cwd),agent:'codex'}),[claude]=await f.index.query({...query(f.cwd),agent:'claude'});
+  const codexSnapshot=await f.catalog.snapshot(codex);assert.equal(codexSnapshot.session.producerVersion,version);assert.equal(codexSnapshot.runtime.nativeResume,expected,version);assert.equal(codexSnapshot.retained,expected==='compatible'&&codexSnapshot.history.retained===true);
+  const claudeSnapshot=await f.catalog.snapshot(claude);assert.equal(claudeSnapshot.session.producerVersion,'2.1.331');assert.equal(claudeSnapshot.runtime.nativeResume,'compatible');
+ }
+ await f.index.close();
 });
