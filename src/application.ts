@@ -173,9 +173,13 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         const echo=snapshot.items.map(item=>matchingEcho(item,ref,aliases)).find(Boolean);
         const known=prior?undefined:journal.lineage(existing?.lineageId??echo?.continuity?.lineage.id??'');
         const retainedItems=new Map<string,HistoryItem>();
-        let unavailableAncestry=false;
+        let unavailableAncestry=false,expiredAncestry=false;
         if(known)for(const attempt of attempts.filter(attempt=>attempt.continuity?.lineage.id===known.id&&!attempt.deleted&&!attempt.deleting)) {
-          if(attempt.archive) {
+          if(attempt.archiveExpiredAt) {
+            // The delivered prompt outlives its expired archive. Omitted items must come from native history below.
+            expiredAncestry=true;
+            if(attempt.prompt)for(const item of parseHandoffPrompt(attempt.prompt).history)retainedItems.set(item.id,item);
+          } else if(attempt.archive) {
             try {for(const item of (await readArchiveSnapshot(attempt.archive)).items)retainedItems.set(item.id,item);}
             catch {
               if(!request.fresh)throw new Error('Required lineage archive is unavailable. Restore it, or select F and review an active-source recovery.');
@@ -203,6 +207,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
           } catch { /* Unavailable native output requires restored history or explicit source recovery. */ }
         }
         unavailableAncestry ||= Boolean(known?.ids.some(id=>!retainedItems.has(id)&&!sourceIds.has(id)));
+        if(expiredAncestry&&unavailableAncestry&&!request.fresh)throw new Error('Required lineage archive expired and native history no longer covers it. Select F and review an active-source recovery.');
         const sourceRecovery=Boolean(request.fresh&&unavailableAncestry);
         // A partial source context is never a later reuse target.
         const observed=observeContext({ref,items:snapshot.items,retained:(snapshot.retained??false)&&snapshot.complete,...(snapshot.itemTurns?{itemTurns:snapshot.itemTurns}:{})},prior?[]:contexts,[...aliases,...attempts.filter(attempt=>attempt.deleted||attempt.deleting)],[...retainedItems.values()],known,Boolean(prior||request.fresh||(redactions.length&&source.agent!==request.target)),sourceRecovery);

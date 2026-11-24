@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, readFile, appendFile, rename, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, appendFile, rename, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -159,4 +159,16 @@ test('retrying an uncertain Codex reuse attempt prefills its current request, no
  const [reuse]=await record(f);assert.equal(reuse.mode,'native-resume');assert.ok(reuse.archive);assert.equal(JSON.parse(reuse.prompt).currentRequest,'Reuse request');
  const result=pty(f,[{wait:'EXPLICIT FRESH RECOVERY'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\x03'}],['transfers','retry',reuse.id]);
  assert.match(result.output,/Current request: Reuse request/);assert.doesNotMatch(result.output,/Current request: \{/);
+});
+
+test('T4: an expired A→B archive changes neither the B→A native return nor a retry of the handoff, only archive retrieval',async()=>{
+ const f=await setup();await switchToB(f);const [first]=await record(f);
+ const archive=join(first.archive.directory,first.archive.id+'.json');const old=new Date(Date.now()-31*86400000);await utimes(archive,old,old);
+ const result=pty(f,[...select('B response'),{send:'\r'},{wait:'Actual resumed target: codex '+ids[0]},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'accepted — correlated native turn'}]);
+ assert.equal(result.code,0);await assert.rejects(readFile(archive),{code:'ENOENT'});
+ const aLaunch=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse)[1];assert.equal(aLaunch.args[0],'resume');assert.equal(aLaunch.args.at(-2),ids[0]);
+ assert.deepEqual(JSON.parse(aLaunch.args.at(-1)).history.map(item=>item.text),[DEFAULT_CURRENT_REQUEST,'B response']);
+ const expired=(await record(f)).find(attempt=>attempt.id===first.id);assert.match(expired.archiveExpiredAt,/^\d{4}-/);assert.deepEqual(expired.archive,first.archive);
+ const retry=pty(f,[{wait:'EXPLICIT FRESH RECOVERY'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\x03'}],['transfers','retry',first.id]);
+ assert.match(retry.output,/Current request: Review the historical context/);assert.doesNotMatch(retry.output,/Current request: \{/);
 });
