@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
 import { lstat, mkdir, open, readFile, readdir, realpath, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
+import { DatabaseSync, type SQLOutputValue, type StatementSync } from 'node:sqlite';
 import type { SessionAdapter } from './adapters/index.js';
 import type { AgentId, HistoryItem, Session, SessionQuery } from './domain.js';
 import type { MatchExcerpt, SessionHit } from './tui/contracts.js';
@@ -61,21 +61,13 @@ function timestamp(value: string): number {
   if (!Number.isFinite(time)) throw new Error('Search session has an invalid timestamp');
   return time;
 }
-/** The longest prefix within `maxBytes` UTF-8 bytes that does not split a code point. */
-function utf8Prefix(text: string, maxBytes: number): string {
-  if (Buffer.byteLength(text) <= maxBytes) return text;
-  let bytes = 0;
-  let end = 0;
-  for (const point of text) {
-    bytes += Buffer.byteLength(point);
-    if (bytes > maxBytes) break;
-    end += point.length;
-  }
-  return text.slice(0, end);
-}
+const toolPrefix = new Uint8Array(maxToolTextBytes);
+const encoder = new TextEncoder();
+/** The longest prefix of at most 2 KiB of UTF-8 that does not split a character. Encoding stops at the limit. */
+const toolText = (text: string): string => text.slice(0, encoder.encodeInto(text, toolPrefix).read);
 /** The public, bounded row for one session. `bytes` counts the message text that the cache cap applies to. */
 function stored({ id, nativeId, agent, title, workspace, updatedAt, messages }: Session): StoredSession {
-  const items = messages.map(({ id, role, status, text }) => ({ id, role, status, text: role === 'tool' ? utf8Prefix(text, maxToolTextBytes) : text }));
+  const items = messages.map(({ id, role, status, text }) => ({ id, role, status, text: role === 'tool' ? toolText(text) : text }));
   const time = Date.parse(updatedAt);
   return { updated: Number.isFinite(time) ? time : null, bytes: items.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0),
     data: JSON.stringify({ id, nativeId, agent, title, workspace, updatedAt, messages: items }) };
@@ -134,6 +126,7 @@ export class SearchIndex {
   private rows: IndexedSession[] = [];
   private closed = false;
   private dataVersion: SQLOutputValue | undefined;
+  private upsert: StatementSync | undefined;
   private operations: Promise<void> = Promise.resolve();
   private constructor(private readonly directory: string, private readonly sources: readonly SearchSource[], private readonly database: DatabaseSync, private readonly owner: string, private readonly identity: Stats, private readonly maxBytes: number) {}
 
@@ -166,7 +159,6 @@ export class SearchIndex {
     try {
       database.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON; PRAGMA temp_store=MEMORY;');
       const version = () => database.prepare('PRAGMA user_version').get()?.user_version;
-      if (version() === 0) database.exec('PRAGMA auto_vacuum=INCREMENTAL;');
       const index = new SearchIndex(directory, options.sources.map((source) => ({ ...source })), database, owner, await lstat(filename), maxBytes);
       if (version() !== 2) {
         index.transaction(() => {
@@ -181,7 +173,9 @@ export class SearchIndex {
           database.exec('PRAGMA user_version=2;');
         }, false);
       }
-      // A cache created before automatic limits keeps freed pages until it is rebuilt once with incremental vacuuming.
+      // A lowered cap applies at once rather than at the next write.
+      else if (index.total() > maxBytes) index.transaction(() => {}, false);
+      // Enables incremental vacuuming on a new file, and rebuilds once a cache created before automatic limits.
       if (database.prepare('PRAGMA auto_vacuum').get()?.auto_vacuum !== 2) {
         try { database.exec('PRAGMA auto_vacuum=INCREMENTAL; VACUUM;'); } catch { /* Retried at the next open. */ }
       }
@@ -230,8 +224,9 @@ export class SearchIndex {
     else this.dataVersion = undefined;
   }
   /** Over the cap, the least recently updated sessions (undated first) keep only their title, workspace and identity. */
+  private total(): number { return Number(this.database.prepare('SELECT total(bytes) AS total FROM sessions').get()!.total); }
   private evict(): void {
-    let total = Number(this.database.prepare('SELECT total(bytes) AS total FROM sessions').get()!.total);
+    let total = this.total();
     if (total <= this.maxBytes) return;
     const clear = this.database.prepare(`UPDATE sessions SET bytes=0, data=json_set(data, '$.messages', json('[]')) WHERE source=? AND native_id=?`);
     for (const row of this.database.prepare('SELECT source, native_id, bytes FROM sessions WHERE bytes>0 ORDER BY updated, source, native_id').all()) {
@@ -258,14 +253,20 @@ export class SearchIndex {
   }
   private insert(source: string, session: Session): void {
     const { updated, bytes, data } = stored(session);
-    this.database.prepare('INSERT OR REPLACE INTO sessions(source, native_id, updated, bytes, data) VALUES (?, ?, ?, ?, ?)').run(source, session.nativeId, updated, bytes, data);
+    this.upsert ??= this.database.prepare('INSERT OR REPLACE INTO sessions(source, native_id, updated, bytes, data) VALUES (?, ?, ?, ?, ?)');
+    this.upsert.run(source, session.nativeId, updated, bytes, data);
+  }
+  /** The persisted namespace of one configured provider. */
+  private sourceKey(agent: AgentId): string {
+    const source = this.sources.find((item) => item.adapter.id === agent);
+    if (!source) throw new Error('Provider is not configured');
+    return sourceKey(source);
   }
 
   /** Cache a complete matched transcript without loading any other cached records. */
   remember(session: Session): Promise<void> {
-    const source = this.sources.find(item => item.adapter.id === session.agent);
-    if (!source) throw new Error('Provider is not configured');
-    return this.enqueue(async () => this.transaction(() => this.insert(sourceKey(source), session), false));
+    const source = this.sourceKey(session.agent);
+    return this.enqueue(async () => this.transaction(() => this.insert(source, session), false));
   }
 
   async remembered(session: Session, text: string): Promise<SessionHit | undefined> {
@@ -319,24 +320,17 @@ export class SearchIndex {
   /** Remove only derived text for one configured provider/session. Refresh can import it again. */
   deleteSession(agent: AgentId, nativeId: string): Promise<void> {
     return this.enqueue(async () => {
-      const source = this.sources.find((item) => item.adapter.id === agent);
-      if (!source) throw new Error('Provider is not configured');
-      this.transaction(() => { this.database.prepare('DELETE FROM sessions WHERE source=? AND native_id=?').run(sourceKey(source), nativeId); });
+      const source = this.sourceKey(agent);
+      this.transaction(() => { this.database.prepare('DELETE FROM sessions WHERE source=? AND native_id=?').run(source, nativeId); });
     });
   }
 
   /** Drop cached sessions of one provider that its complete, healthy discovery no longer lists. */
   prune(agent: AgentId, present: Iterable<string>): Promise<void> {
     return this.enqueue(async () => {
-      const source = this.sources.find((item) => item.adapter.id === agent);
-      if (!source) throw new Error('Provider is not configured');
-      const key = sourceKey(source);
-      const keep = new Set(present);
+      const source = this.sourceKey(agent);
       this.transaction(() => {
-        const remove = this.database.prepare('DELETE FROM sessions WHERE source=? AND native_id=?');
-        for (const row of this.database.prepare('SELECT native_id FROM sessions WHERE source=?').all(key)) {
-          if (!keep.has(row.native_id as string)) remove.run(key, row.native_id as string);
-        }
+        this.database.prepare('DELETE FROM sessions WHERE source=? AND native_id NOT IN (SELECT value FROM json_each(?))').run(source, JSON.stringify([...present]));
       }, false);
     });
   }

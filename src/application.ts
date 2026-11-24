@@ -77,8 +77,8 @@ const archiveRetention=30*24*60*60*1000;
 export async function expireArchives(directory:string,journal:TransferJournal,now=Date.now(),limit=32):Promise<string[]> {
   const stale=await staleArchives(directory,now-archiveRetention,limit).catch(()=>[]);
   const expired:string[]=[];
+  journal.expireArchives(stale,new Date(now).toISOString());
   for(const id of stale) {
-    journal.expireArchive(id,new Date(now).toISOString());
     try {await deleteArchive({directory,id});expired.push(id);} catch {/* Pinned meanwhile, or already gone. */}
   }
   return expired;
@@ -88,8 +88,9 @@ export async function expireArchives(directory:string,journal:TransferJournal,no
 export function searchCacheBytes(env:NodeJS.ProcessEnv):number {
   const value=env.AGENTSWITCH_SEARCH_CACHE_MIB?.trim();
   if(!value)return defaultMaxCacheBytes;
-  if(!/^\d{1,3}$/.test(value)||Number(value)<1||Number(value)*2**20>defaultMaxCacheBytes) throw new Error('AGENTSWITCH_SEARCH_CACHE_MIB must be a whole number of MiB from 1 to 256.');
-  return Number(value)*2**20;
+  const mib=Number(value);
+  if(!/^\d+$/.test(value)||mib<1||mib*2**20>defaultMaxCacheBytes) throw new Error('AGENTSWITCH_SEARCH_CACHE_MIB must be a whole number of MiB from 1 to 256.');
+  return mib*2**20;
 }
 
 /** Real native readers, index, reusable picker, pure consent preview, journal and runtime. */
@@ -100,9 +101,11 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
   try {
     await expireArchives(paths.archives,journal).catch(()=>{});
     const catalog=await NativeCatalog.create(env);
-    const searchCache=()=>cache??=SearchIndex.open({directory:paths.cache,sources:catalog.sources(),maxBytes:cacheBytes},{load:false}).catch(()=>undefined);
-    // Maintenance never creates the cache; only a matching text search does.
-    const existingCache=async()=>cache??((await stat(paths.cache).catch(()=>undefined))?searchCache():undefined);
+    // Maintenance passes create=false: only a matching text search creates the cache.
+    const searchCache=async(create=true)=>{
+      if(!cache&&!create&&!(await stat(paths.cache).catch(()=>undefined)))return undefined;
+      return cache??=SearchIndex.open({directory:paths.cache,sources:catalog.sources(),maxBytes:cacheBytes},{load:false}).catch(()=>undefined);
+    };
     const prior=options.retry?journal.get(options.retry):undefined;
     if(prior?.deleted||prior?.deleting) throw new Error('Deleted transfer cannot be retried.');
     const recovered=prior?.archive&&!prior.archiveExpiredAt?await readArchiveSnapshot(prior.archive):undefined;
@@ -137,7 +140,7 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
       ...(checkNotice ? { checkNotice: (signal: AbortSignal) => checkNotice(paths.root, signal) } : {}),
       query:async(query,signal,publish)=>{
         if(recoverySession) {const {messages,...hit}=recoverySession;return [{...hit,matches:[]}];}
-        return catalog.search(query,signal,discovery.signal,publish,searchCache,existingCache);
+        return catalog.search(query,signal,discovery.signal,publish,searchCache);
       },
       details: (source,signal) => recoverySession ? Promise.resolve(recoverySession.messages) : catalog.details(source,signal),
       preview:async(source,signal)=>{const snapshot=await resolveSource(source,signal);return snapshot.items;},

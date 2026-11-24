@@ -67,7 +67,6 @@ export class NativeCatalog {
   private readonly adapters: { codex: CodexSessionAdapter; claude: ClaudeSessionAdapter; opencode:OpenCodeSessionAdapter; agy:AgySessionAdapter; grok:GrokSessionAdapter };
   private readonly staged = new Map<AgentId, Map<string,Session>>();
   private readonly discoveries = new Map<AgentId, Promise<readonly Session[]>>();
-  private readonly prunes = new Map<AgentId, Promise<void>>();
   private readonly openingTitles = new Map<string, string | undefined>();
   private constructor(private readonly roots: Record<AgentId,string>, private readonly rootKeys: Record<AgentId,string>, sqliteRoot: string,opencodeDb:string) {
     const onDiagnostic=(agent:AgentId)=>(diagnostic:CodexDiagnostic)=>{if(this.diagnostics[agent].length<diagnosticCap)this.diagnostics[agent].push(diagnostic);};
@@ -100,7 +99,7 @@ export class NativeCatalog {
   }
   /** List with metadata first and read one relevant transcript at a time for text searches. */
   async search(query:SessionQuery, signal:AbortSignal, lifetime:AbortSignal, publish:(hits:readonly SessionHit[])=>void,
-    searchCache:()=>Promise<SearchIndex|undefined>, existingCache?:()=>Promise<SearchIndex|undefined>):Promise<readonly SessionHit[]> {
+    searchCache:(create?:boolean)=>Promise<SearchIndex|undefined>):Promise<readonly SessionHit[]> {
     const text=query.text.trim();
     if(text) await setTimeout(120,undefined,{signal});
     const workspace=query.scope==='folder'?(await canonical(query.workspace)).normalize('NFC'):undefined;
@@ -116,7 +115,7 @@ export class NativeCatalog {
     };
     await Promise.all(selected.map(async agent=>{
       signal.throwIfAborted();
-      let discovery=this.discoveries.get(agent);
+      let discovery=this.discoveries.get(agent),pruned:Promise<void>|undefined;
       if(!discovery){
         const adapter=this.adapters[agent];
         const listed=adapter instanceof CodexSessionAdapter||adapter instanceof ClaudeSessionAdapter
@@ -126,7 +125,7 @@ export class NativeCatalog {
           return [];
         });
         this.discoveries.set(agent,discovery);
-        this.prunes.set(agent,listed.then(sessions=>this.prune(agent,sessions,existingCache)).catch(()=>{}));
+        pruned=listed.then(sessions=>this.prune(agent,sessions,searchCache)).catch(()=>{});
       }
       const discovered=await discovery;
       const childCounts=new Map<string,number>();
@@ -187,7 +186,7 @@ export class NativeCatalog {
       }
       if(!this.warnings[agent].endsWith('history discovery unavailable'))this.report(agent);
       if(hits.size)update();
-      await this.prunes.get(agent);
+      await pruned;
     }));
     return ordered();
   }
@@ -199,9 +198,9 @@ export class NativeCatalog {
   }
   private isDegraded(agent:AgentId):boolean {return this.diagnostics[agent].some(diagnostic=>!harmlessFor[agent].has(diagnostic.code));}
   /** A clean discovery lists every native session, so cached sessions it no longer lists were deleted at the source. */
-  private async prune(agent:AgentId,sessions:readonly Session[],existingCache?:()=>Promise<SearchIndex|undefined>):Promise<void> {
-    if(!existingCache||this.isDegraded(agent)||!(await this.managedRootAvailable(agent)))return;
-    await (await existingCache())?.prune(agent,sessions.map(session=>session.nativeId));
+  private async prune(agent:AgentId,sessions:readonly Session[],searchCache:(create?:boolean)=>Promise<SearchIndex|undefined>):Promise<void> {
+    if(this.isDegraded(agent)||!(await this.managedRootAvailable(agent)))return;
+    await (await searchCache(false))?.prune(agent,sessions.map(session=>session.nativeId));
   }
   async refresh(index:SearchIndex):Promise<void> {
     for(const agent of agents) {

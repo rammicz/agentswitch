@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { chmod, mkdtemp, mkdir, realpath, rm, stat, symlink, writeFile, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { SearchIndex } from '../dist/search-index.js';
 
 const query = (text = '', agent = 'all', scope = 'global', workspace = '/') => ({ text, agent, scope, workspace });
@@ -233,10 +234,10 @@ test('corrupt changed rows reject repeatedly without leaking content, and an exi
 
 const tool = (id, text) => ({ id, role: 'tool', status: 'complete', text });
 const said = (id, role, text) => ({ id, role, status: 'complete', text });
-const cached = (directory) => import('node:sqlite').then(({ DatabaseSync }) => {
+const cached = (directory) => {
   const db = new DatabaseSync(join(directory, 'index.sqlite'), { readOnly: true });
   try { return db.prepare('SELECT native_id, data FROM sessions ORDER BY native_id').all().map((row) => ({ nativeId: row.native_id, ...JSON.parse(row.data) })); } finally { db.close(); }
-});
+};
 
 test('T1: a tool output item contributes only its first 2 KiB to the index; user and assistant text stay whole', async (t) => {
   const f = await fixture(t);
@@ -246,11 +247,10 @@ test('T1: a tool output item contributes only its first 2 KiB to the index; user
     said('u', 'user', long), tool('t', `TOOL_HEAD_NEEDLE ${head}`), said('a', 'assistant', `${'a'.repeat(5000)} ASSISTANT_TAIL_NEEDLE`),
   ] });
   await f.index.refresh();
-  const [row] = await cached(f.directory);
+  const [row] = cached(f.directory);
   const stored = Object.fromEntries(row.messages.map((item) => [item.id, item.text]));
   assert.equal(stored.u, long);
   assert.equal(stored.t, `TOOL_HEAD_NEEDLE ${'h'.repeat(2047)}`.slice(0, 2048));
-  assert.ok(Buffer.byteLength(stored.t) <= 2048);
   assert.equal(stored.a.endsWith('ASSISTANT_TAIL_NEEDLE'), true);
   for (const needle of ['tool heavy', 'tooling', join(f.root, 'project'), 'tool_head_needle', 'user_tail_needle', 'assistant_tail_needle']) {
     assert.deepEqual(ids(await f.index.query(query(needle))), ['codex:tooling'], needle);
@@ -259,7 +259,7 @@ test('T1: a tool output item contributes only its first 2 KiB to the index; user
   // A multi-byte character that straddles the limit is dropped whole, never split.
   f.add('codex', 'tooling', 'project', '', { messages: [tool('t', `${'é'.repeat(1023)}x😀z`)] });
   await f.index.refresh();
-  assert.equal((await cached(f.directory))[0].messages[0].text, `${'é'.repeat(1023)}x`);
+  assert.equal(cached(f.directory)[0].messages[0].text, `${'é'.repeat(1023)}x`);
   // A transcript cached by a matching search is bounded the same way.
   const session = { ...f.rows.get('codex/tooling'), messages: [tool('t', `REMEMBERED_HEAD ${'r'.repeat(4000)} REMEMBERED_TAIL`)] };
   await f.index.remember(session);
@@ -284,10 +284,9 @@ test('T2: over the cap, the least recently updated sessions lose their text firs
   assert.deepEqual(await text('title oldest'), ['codex:oldest']);
   assert.deepEqual(await text('undated'), ['codex:undated']);
   assert.deepEqual(await text(join(f.root, 'project')), ['codex:newest', 'codex:middle', 'codex:oldest', 'codex:undated']);
-  const rows = await cached(f.directory);
+  const rows = cached(f.directory);
   assert.deepEqual(rows.filter((row) => row.messages.length).map((row) => row.nativeId), ['middle', 'newest']);
-  const evicted = rows.find((row) => row.nativeId === 'oldest');
-  assert.deepEqual({ ...evicted, messages: undefined }, { nativeId: 'oldest', id: 'codex:oldest', agent: 'codex', title: 'Title oldest', workspace: join(f.root, 'project'), updatedAt: '2026-01-01T00:00:00Z', messages: undefined });
+  assert.deepEqual(rows.find((row) => row.nativeId === 'oldest'), { nativeId: 'oldest', id: 'codex:oldest', agent: 'codex', title: 'Title oldest', workspace: join(f.root, 'project'), updatedAt: '2026-01-01T00:00:00Z', messages: [] });
   // An evicted session that becomes the most recent is indexed again; the next oldest loses its text.
   f.rows.get('codex/oldest').updatedAt = '2026-01-04T00:00:00Z';
   await f.index.refresh();
@@ -297,12 +296,15 @@ test('T2: over the cap, the least recently updated sessions lose their text firs
   await f.index.remember({ ...f.rows.get('codex/middle'), updatedAt: '2026-01-05T00:00:00Z' });
   assert.deepEqual(await text('middle_text'), ['codex:middle']);
   assert.deepEqual(await text('newest_text'), []);
+  // Reopening with a lower cap evicts at once.
+  const lowered = await SearchIndex.open({ directory: f.directory, sources: f.sources, maxBytes: 1100 }); t.after(() => lowered.close());
+  assert.deepEqual(ids(await lowered.query(query('middle_text'))), ['codex:middle']);
+  assert.deepEqual(ids(await lowered.query(query('oldest_text'))), []);
   await assert.rejects(SearchIndex.open({ directory: f.directory, sources: f.sources, maxBytes: 256 * 2 ** 20 + 1 }), /cache limit/);
   await assert.rejects(SearchIndex.open({ directory: f.directory, sources: f.sources, maxBytes: 0 }), /cache limit/);
 });
 
 test('T2: opening a version 1 cache bounds stored tool output, applies the cap and returns the freed space', async (t) => {
-  const { DatabaseSync } = await import('node:sqlite');
   const f = await fixture(t);
   await f.index.close();
   await rm(join(f.directory, 'index.sqlite'));
@@ -320,7 +322,7 @@ test('T2: opening a version 1 cache bounds stored tool output, applies the cap a
   const index = await SearchIndex.open({ directory: f.directory, sources: f.sources, maxBytes: 320000 });
   t.after(() => index.close());
   assert.ok((await stat(join(f.directory, 'index.sqlite'))).size < before / 10, 'freed pages are returned to the file system');
-  const rows = await cached(f.directory);
+  const rows = cached(f.directory);
   assert.ok(rows.every((row) => row.messages.every((item) => item.role !== 'tool' || Buffer.byteLength(item.text) <= 2048)));
   assert.deepEqual(rows.filter((row) => row.messages.length).map((row) => row.nativeId), ['s7', 's8', 's9']);
   assert.deepEqual(ids(await index.query(query('user_9'))), ['codex:s9']);

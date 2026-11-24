@@ -202,9 +202,10 @@ export class TransferJournal {
       this.accept(record,{attemptId:id,payloadHash:record.payloadHash,target:'codex',targetNativeId:event.target.nativeId,targetRef:event.target,turnId:event.turnId});
     });
   }
-  /** Keep each attempt that referenced this archive and record when the archive was removed. */
-  expireArchive(archiveId: string, at: string): void {
-    this.transaction(()=>{for(const record of this.list())if(record.archive?.id===archiveId&&!record.archiveExpiredAt){record.archiveExpiredAt=at;this.save(record);}});
+  /** Keep each attempt that referenced these archives and record when its archive was removed. */
+  expireArchives(archiveIds: readonly string[], at: string): void {
+    const expiring=new Set(archiveIds);
+    this.transaction(()=>{for(const record of this.list())if(record.archive&&expiring.has(record.archive.id)&&!record.archiveExpiredAt){record.archiveExpiredAt=at;this.save(record);}});
   }
   abort(id: string): void { this.transaction(()=>{const record=this.get(id);record.retired=true;this.save(record);}); }
   private invalidateLineage(record:TransferRecord):void {

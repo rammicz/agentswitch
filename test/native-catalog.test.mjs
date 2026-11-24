@@ -96,7 +96,7 @@ test('T3: a clean discovery prunes cached sessions whose native history is gone;
  const second=await writeRollout(f.codex,rollout(f.cwd,ids[1],[completed('UserMessage','u','second public message',1)]));
  await writeFile(f.claudePath,encode([entry(claudeIds[0],f.cwd,'u',null,'user','public sibling')]));
  const cache=async()=>f.index;
- const search=async(text,catalog)=>{const controller=new AbortController();return catalog.search({...query(f.cwd),text},controller.signal,controller.signal,()=>{},cache,cache);};
+ const search=async(text,catalog)=>{const controller=new AbortController();return catalog.search({...query(f.cwd),text},controller.signal,controller.signal,()=>{},cache);};
  const cached=async()=>(await f.index.query({...query(f.cwd),agent:'all'})).map(hit=>hit.id).sort();
  assert.equal((await search('public',f.catalog)).length,3);
  assert.deepEqual(await cached(),[`claude:${claudeIds[0]}`,`codex:${ids[0]}`,`codex:${ids[1]}`]);
@@ -116,7 +116,8 @@ test('T3: a clean discovery prunes cached sessions whose native history is gone;
  assert.deepEqual(await cached(),[`claude:${claudeIds[0]}`,`codex:${ids[0]}`]);
  // Without an existing cache, a search never creates one just to prune it.
  const catalog=await NativeCatalog.create(f.env),controller=new AbortController();
- await catalog.search(query(f.cwd),controller.signal,controller.signal,()=>{},async()=>assert.fail('created a cache'),async()=>undefined);
+ const requested=[];await catalog.search(query(f.cwd),controller.signal,controller.signal,()=>{},async create=>{requested.push(create);});
+ assert.ok(requested.length&&requested.every(create=>create===false));
  await f.index.close();
 });
 
