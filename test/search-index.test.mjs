@@ -291,13 +291,17 @@ test('T2: over the cap, the least recently updated sessions lose their text firs
   await f.index.refresh();
   assert.deepEqual(await text('oldest_text'), ['codex:oldest']);
   assert.deepEqual(await text('middle_text'), []);
-  // A transcript remembered by a matching search is bounded too.
+  // A search never refills an evicted transcript, even a newer one; a refresh does.
   await f.index.remember({ ...f.rows.get('codex/middle'), updatedAt: '2026-01-05T00:00:00Z' });
-  assert.deepEqual(await text('middle_text'), ['codex:middle']);
+  assert.deepEqual(await text('middle_text'), []);
+  // A new transcript remembered by a matching search is bounded too.
+  await f.index.remember({ id: 'codex:fresh', agent: 'codex', nativeId: 'fresh', title: 'Title fresh', workspace: join(f.root, 'project'), updatedAt: '2026-01-05T00:00:00Z',
+    messages: [said('m', 'assistant', `FRESH_TEXT ${'x'.repeat(1000)}`)] });
+  assert.deepEqual(await text('fresh_text'), ['codex:fresh']);
   assert.deepEqual(await text('newest_text'), []);
   // Reopening with a lower cap evicts at once.
   const lowered = await SearchIndex.open({ directory: f.directory, sources: f.sources, maxBytes: 1100 }); t.after(() => lowered.close());
-  assert.deepEqual(ids(await lowered.query(query('middle_text'))), ['codex:middle']);
+  assert.deepEqual(ids(await lowered.query(query('fresh_text'))), ['codex:fresh']);
   assert.deepEqual(ids(await lowered.query(query('oldest_text'))), []);
   await assert.rejects(SearchIndex.open({ directory: f.directory, sources: f.sources, maxBytes: 256 * 2 ** 20 + 1 }), /cache limit/);
   await assert.rejects(SearchIndex.open({ directory: f.directory, sources: f.sources, maxBytes: 0 }), /cache limit/);
@@ -355,8 +359,12 @@ test('T4: an unchanged refresh or remembered transcript writes nothing; a change
   const db = observe(f.directory); t.after(db.close);
   const results = async () => [ids(await f.index.query(query('text'))), ids(await f.index.query(query('b-text')))];
   const before = { version: db.version(), rows: db.rows(), results: await results() };
-  await f.index.refresh();
-  await f.index.remember(structuredClone(f.rows.get('codex/a')));
+  // A no-op takes no write lock: it succeeds while another connection holds one.
+  const writer = new DatabaseSync(join(f.directory, 'index.sqlite')); writer.exec('PRAGMA busy_timeout=0; BEGIN IMMEDIATE');
+  try {
+    await f.index.refresh();
+    await f.index.remember(structuredClone(f.rows.get('codex/a')));
+  } finally { writer.exec('ROLLBACK'); writer.close(); }
   assert.deepEqual({ version: db.version(), rows: db.rows(), results: await results() }, before);
   f.rows.get('codex/b').messages = [said('m1', 'assistant', 'b-text changed')];
   await f.index.refresh();
@@ -386,7 +394,21 @@ test('T4: over the cap, an unchanged refresh or a remembered evicted transcript 
   const before = { version: db.version(), rows: db.rows(), results: await results() };
   assert.deepEqual(before.results.slice(0, 4), [['codex:newest'], ['codex:middle'], [], []]);
   await f.index.refresh();
+  await f.index.refresh();
   await f.index.remember(f.rows.get('codex/oldest'));
   await f.index.remember(f.rows.get('codex/newest'));
   assert.deepEqual({ version: db.version(), rows: db.rows(), results: await results() }, before);
+  // An unchanged evicted session stays evicted even when room appears; a newer one is rewritten once.
+  f.rows.delete('codex/newest');
+  await f.index.refresh();
+  const removed = db.rows();
+  assert.deepEqual([removed.newest, removed.oldest, removed.undated], [undefined, before.rows.oldest, before.rows.undated]);
+  assert.deepEqual(ids(await f.index.query(query('oldest_text'))), []);
+  f.rows.get('codex/oldest').updatedAt = '2026-01-04T00:00:00Z';
+  await f.index.refresh();
+  assert.deepEqual(ids(await f.index.query(query('oldest_text'))), ['codex:oldest']);
+  const rewritten = db.rows(), version = db.version();
+  assert.notEqual(rewritten.oldest[0], before.rows.oldest[0]);
+  await f.index.refresh();
+  assert.deepEqual([db.version(), db.rows()], [version, rewritten]);
 });
