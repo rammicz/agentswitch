@@ -9,6 +9,7 @@ import {fixture,id,user} from './fixtures/grok/native.mjs';
 import {rollout,writeRollout,completed,ids} from './fixtures/codex/native.mjs';
 import {entry,encode,ids as claudeIds} from './fixtures/claude/native.mjs';
 import {TransferJournal} from '../dist/transfer-journal.js';
+import {parseHandoffPrompt} from '../dist/handoff.js';
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(t,destination='grok') {
@@ -32,7 +33,7 @@ const launches=async f=>(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split(
 async function records(f){const j=await TransferJournal.open(join(f.state,'transfers'));try{return j.list();}finally{j.close();}}
 for(const [source,destination]of [['grok','codex'],['codex','grok'],['grok','claude'],['claude','grok']])test(`default CLI ${source}→${destination} transfers reviewed public history through exact interactive argv`,async t=>{
  const f=await setup(t,destination);const r=pty(f,[...select(source),...target(destination),...request,...redact,...finish]);assert.equal(r.code,0);assert.equal(r.restored,true);assert.equal(r.sampledWhileAlive,true);const [launch]=await launches(f);assert.equal(launch.cwd,f.cwd);assert.deepEqual(launch.tty,[true,true,true]);
- const wire=launch.args.at(-1),prompt=JSON.parse(wire);assert.equal(prompt.currentRequest,'--literal $(touch sentinel); `echo no` [REDACTED]');assert.ok(prompt.history.every(item=>item.origin.agent===source));assert.ok(Buffer.byteLength(wire)<=16384);assert.doesNotMatch(wire,/NEEDLE_SECRET|PRIVATE_/);if(destination==='grok')assert.deepEqual(launch.args,['--cwd='+f.cwd,'--',wire]);await assert.rejects(access(join(f.cwd,'sentinel')));assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
+ const wire=launch.args.at(-1),prompt=JSON.parse(wire);assert.equal(prompt.currentRequest,'--literal $(touch sentinel); `echo no` [REDACTED]');assert.equal(prompt.format,'agentswitch-historical-context-v2');assert.ok(parseHandoffPrompt(wire).history.every(item=>item.origin.agent===source));assert.ok(Buffer.byteLength(wire)<=16384);assert.doesNotMatch(wire,/NEEDLE_SECRET|PRIVATE_/);if(destination==='grok')assert.deepEqual(launch.args,['--cwd='+f.cwd,'--',wire]);await assert.rejects(access(join(f.cwd,'sentinel')));assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
  const [record]=await records(f);assert.equal(record.state,'uncertain');assert.equal(record.targetNativeId,null);assert.equal(record.observation,undefined);assert.equal(record.writer,'stopped');
 });
 test('Grok native requires explicit empty draft and sends exact UUID in recorded canonical cwd',async t=>{

@@ -4,6 +4,7 @@ import { emitKeypressEvents } from 'node:readline';
 import type { Key } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { AgentId, HistoryItem, Scope, Session, SessionQuery } from '../domain.js';
+import { DEFAULT_CURRENT_REQUEST } from '../handoff-format.js';
 import { searchSessions } from '../search.js';
 import { windowsConsoleMode } from '../windows-runtime.js';
 import type { PickerOptions, PreparedContinuation, SessionHit, SessionSource, WorkspaceChoice } from './contracts.js';
@@ -151,7 +152,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   let offset = 0;
   let choice: WorkspaceChoice | undefined;
   let pathInput = '';
-  let currentRequest = options.initialRequest ?? 'Continue the task from this conversation.';
+  let currentRequest = options.initialRequest ?? DEFAULT_CURRENT_REQUEST;
   let redactionInput = '';
   let redactions: string[] = [];
   let fresh = false;

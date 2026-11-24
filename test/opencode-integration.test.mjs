@@ -10,6 +10,7 @@ import { fixture,id } from './fixtures/opencode/native.mjs';
 import { rollout,writeRollout,completed,ids as codexIds } from './fixtures/codex/native.mjs';
 import { entry,encode,ids as claudeIds } from './fixtures/claude/native.mjs';
 import { TransferJournal } from '../dist/transfer-journal.js';
+import { parseHandoffPrompt } from '../dist/handoff.js';
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(target='opencode') {
@@ -33,7 +34,7 @@ async function records(f){const journal=await TransferJournal.open(join(f.state,
 for(const [source,destination]of [['opencode','codex'],['codex','opencode'],['opencode','claude'],['claude','opencode']])test(`default CLI ${source}→${destination} uses reviewed bounded redacted public history and inherited terminal`,async()=>{
  const f=await setup(destination);const result=pty(f,[...select(source),...target(destination),...request,...redact,...finish]);assert.equal(result.code,0);assert.equal(result.restored,true);assert.equal(result.sampledWhileAlive,true);
  const [launch]=await launches(f);assert.deepEqual(launch.tty,[true,true,true]);assert.equal(launch.cwd,await realpath(f.cwd));
- const wire=destination==='opencode'?launch.args[1].slice('--prompt='.length):launch.args.at(-1);const prompt=JSON.parse(wire);assert.equal(prompt.currentRequest,'--literal $(touch sentinel); `echo no` [REDACTED]');assert.ok(Buffer.byteLength(wire)<=16384);assert.ok(prompt.history.some(item=>item.origin.agent===source));assert.doesNotMatch(wire,/PRIVATE_|NEEDLE_SECRET/);
+ const wire=destination==='opencode'?launch.args[1].slice('--prompt='.length):launch.args.at(-1);const prompt=JSON.parse(wire);assert.equal(prompt.currentRequest,'--literal $(touch sentinel); `echo no` [REDACTED]');assert.ok(Buffer.byteLength(wire)<=16384);assert.ok(parseHandoffPrompt(wire).history.some(item=>item.origin.agent===source));assert.doesNotMatch(wire,/PRIVATE_|NEEDLE_SECRET/);
  if(destination==='opencode')assert.deepEqual(launch.args,[await realpath(f.cwd),'--prompt='+wire]);
  assert.ok(!launch.args.some(arg=>/skip-permissions|yolo|--session|--continue|--fork/.test(arg)));
  assert.ok(result.output.replace(/\r?\n/g,'').includes(JSON.stringify(wire)));assert.match(result.output,/No supported native receipt transport|conditional on native hook/);assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);

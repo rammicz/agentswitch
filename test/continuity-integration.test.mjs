@@ -5,8 +5,10 @@ import { mkdtemp, mkdir, writeFile, readFile, appendFile, rename, rm } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { rollout, writeRollout, completed, ids } from './fixtures/codex/native.mjs';
 import { TransferJournal } from '../dist/transfer-journal.js';
+import { DEFAULT_CURRENT_REQUEST, parseHandoffPrompt } from '../dist/handoff.js';
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(mode='valid') {
@@ -17,8 +19,8 @@ async function setup(mode='valid') {
  for(const provider of ['codex','claude'])await writeFile(join(bin,provider),`#!${process.execPath}\nprocess.env.FAKE_PROVIDER=${JSON.stringify(provider)};await import(${JSON.stringify(join(repo,'test/fixtures/continuity-provider.mjs'))});\n`,{mode:0o700});
  return {root,cwd,state,codex,claude,aFile,config,configHash:await hash(config),env:{GROK_HOME:join(root,'grok'),AGENTSWITCH_AGY_ROOT:join(root,'agy'),XDG_DATA_HOME:join(root,'xdg-data'),OPENCODE_DB:join(root,'opencode','opencode.db'),CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:state,PATH:bin+':'+process.env.PATH,RUNTIME_LOG:join(root,'launches'),HOOK_LOG:join(root,'hooks'),FAKE_HOOK_MODE:mode,AGENTSWITCH_OBSERVER:'inherited-unrelated-locator-must-be-scrubbed',...(process.env.AGENTSWITCH_TEST_ENTRY?{CLI_ENTRY_MODULE:process.env.AGENTSWITCH_TEST_ENTRY}:{})}};
 }
-function pty(f,actions) {
- const result=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions}),timeout:40000,maxBuffer:8*1024*1024});
+function pty(f,actions,args=[]) {
+ const result=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args}),timeout:40000,maxBuffer:8*1024*1024});
  assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout)[0];
 }
 const select=(text)=>[{wait:'Enter preview'},{send:text},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
@@ -35,13 +37,15 @@ test('default CLI A→B→A resumes actual A, aliases echo, sends missing IDs on
  const [first]=await record(f);const originalIds=first.includedItemIds;
  const result=pty(f,[...select('B response'),{send:'\r'},{wait:'Actual resumed target: codex '+ids[0]},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'accepted — correlated native turn'}]);
  assert.equal(result.code,0);assert.equal(result.restored,true);assert.equal(await hash(bLaunch.path),bBefore);
+ assert.ok(result.output.includes('Current request: '+DEFAULT_CURRENT_REQUEST.slice(0,100)),'unedited target screen shows the shared default request');
  assert.equal(await hash(f.config),f.configHash);
  const launches=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse),aLaunch=launches[1];
  assert.equal(aLaunch.args[0],'resume');assert.equal(aLaunch.args.at(-2),ids[0]);assert.deepEqual(aLaunch.tty,[true,true,true]);
- const payload=JSON.parse(aLaunch.args.at(-1));assert.deepEqual(payload.history.map(item=>item.text),['Continue the task from this conversation.','B response']);
- assert.ok(payload.history.every(item=>!originalIds.includes(item.id)));assert.equal(payload.currentRequest,'Continue the task from this conversation.');
+ const payload=JSON.parse(aLaunch.args.at(-1));assert.deepEqual(payload.history.map(item=>item.text),[DEFAULT_CURRENT_REQUEST,'B response']);
+ assert.ok(payload.history.every(item=>!originalIds.includes(item.id)));assert.equal(payload.currentRequest,DEFAULT_CURRENT_REQUEST);
  assert.ok(Buffer.byteLength(aLaunch.args.at(-1))<=16384);assert.ok(aLaunch.args.filter(arg=>arg.startsWith('hooks.')).length===2);
- assert.ok(!aLaunch.args.some(arg=>/trust|approval|sandbox|enable|notify/.test(arg)));
+ // Flags only: the prompt payload itself discloses that a sandboxed target may need archive access approval.
+ assert.ok(!aLaunch.args.slice(0,-1).some(arg=>/trust|approval|sandbox|enable|notify/.test(arg)));
  const [accepted]=await record(f);assert.equal(accepted.state,'accepted');assert.equal(accepted.targetNativeId,ids[0]);assert.equal(accepted.writer,'stopped');
  const journal=await TransferJournal.open(join(f.state,'transfers'));const a=journal.contexts().find(context=>context.ref.nativeId===ids[0]);assert.deepEqual(new Set(a.coveredIds),new Set([...payload.history.map(item=>item.id),accepted.continuity.requestId]));journal.close();
  const hooks=(await readFile(f.env.HOOK_LOG,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(hooks.length,3);assert.equal(new Set(hooks.map(hook=>hook.command)).size,1);for(const hook of hooks){assert.equal(hook.status,0);assert.equal(hook.stdout,'');assert.equal(hook.stderr,'');assert.ok(!hook.command.includes(accepted.id));const helper=process.env.AGENTSWITCH_TEST_ENTRY?process.env.AGENTSWITCH_TEST_ENTRY.replace(/cli\.js$/,'native-observer.js'):resolve('dist/native-observer.js');assert.ok(hook.command.includes(helper.replaceAll("'","'\\''")));}
@@ -52,7 +56,7 @@ test('default CLI A→B→A repeated returns reuse accepted A and evolve only th
   const result=pty(f,[...select('B response'),...confirm,{wait:'accepted — correlated native turn'}]);assert.equal(result.code,0);
   const launch=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse).at(-1);
   assert.equal(launch.args[0],'resume','An accepted native turn must remain reusable on the next return');assert.equal(launch.args.at(-2),ids[0]);
-  assert.deepEqual(JSON.parse(launch.args.at(-1)).history.map(item=>item.text),turn===0?['Continue the task from this conversation.','B response']:[]);
+  assert.deepEqual(JSON.parse(launch.args.at(-1)).history.map(item=>item.text),turn===0?[DEFAULT_CURRENT_REQUEST,'B response']:[]);
  }
  const entries=(await readFile(b.path,'utf8')).trim().split('\n').map(JSON.parse),base=entries.at(-1);
  for(const [uuid,parentUuid,type,content]of [['b-next','b-answer','user','B incremental request'],['b-next-answer','b-next','assistant','B incremental answer']])entries.push({...base,uuid,parentUuid,type,message:{id:'response-'+uuid,role:type,content}});
@@ -80,14 +84,36 @@ for(const change of ['growth','replacement','root'])test(`default CLI ${change} 
  if(change==='root'){const root=join(f.root,'other codex');await mkdir(root);f.env.CODEX_HOME=root;f.env.CODEX_SQLITE_HOME=root;}
  const result=pty(f,[...select('B response'),...confirm,{wait:'accepted — correlated native turn'}]);
  const launch=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse).at(-1);assert.ok(!launch.args.includes('resume'));assert.match(result.output,/fresh bounded rebuild/);
- const payload=JSON.parse(launch.args.at(-1));assert.deepEqual(payload.history.map(item=>item.text),['A original request','A original answer','Continue the task from this conversation.','B response']);
+ const payload=JSON.parse(launch.args.at(-1));assert.deepEqual(payload.history.map(item=>item.text),['A original request','A original answer',DEFAULT_CURRENT_REQUEST,'B response']);
 });
 test('explicit F recovers active source after direct archive deletion without importing unavailable ancestry',async()=>{
  const f=await setup();await switchToB(f);const [first]=await record(f);
  await rm(join(first.archive.directory,first.archive.id+'.json'));
  const result=pty(f,[...select('B response'),{send:'f'},{wait:'Fresh context: explicitly selected'},...confirm,{wait:'accepted — correlated native turn'}]);
  assert.equal(result.code,0);const launch=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse).at(-1);assert.ok(!launch.args.includes('resume'));
- assert.deepEqual(JSON.parse(launch.args.at(-1)).history.map(item=>item.text),['A original request','A original answer','Continue the task from this conversation.','B response']);
+ assert.deepEqual(JSON.parse(launch.args.at(-1)).history.map(item=>item.text),['A original request','A original answer',DEFAULT_CURRENT_REQUEST,'B response']);
+ // Recovered ancestry keeps its attribution: the first attempt's stored v2 prompt is decoded, not just its texts.
+ const stored=new Map(parseHandoffPrompt(first.prompt).history.map(item=>[item.id,item])),recovered=parseHandoffPrompt(launch.args.at(-1)).history;
+ assert.deepEqual(recovered.map(item=>item.origin?.agent),['codex','codex','claude','claude']);
+ for(const item of recovered.slice(0,2))assert.deepEqual(item,stored.get(item.id));
+});
+test('explicit F recovery decodes a journaled v1 envelope with its status and origin',async()=>{
+ const f=await setup();const bLaunch=await switchToB(f);const [first]=await record(f);
+ // Rewrite the first attempt as a pre-v2 transfer: journal prompt, its payload hash and the target's native echo stay consistent.
+ const v2=JSON.parse(first.prompt),decoded=parseHandoffPrompt(first.prompt);
+ const v1=JSON.stringify({format:'agentswitch-historical-context-v1',notice:v2.notice,source:v2.source,completeness:v2.completeness,history:decoded.history,omissions:v2.omissions,currentRequest:v2.currentRequest});
+ assert.equal(parseHandoffPrompt(v1).format,'agentswitch-historical-context-v1');
+ const db=new DatabaseSync(join(f.state,'transfers','attempts.sqlite'));
+ db.prepare('UPDATE attempts SET data=? WHERE id=?').run(JSON.stringify({...first,prompt:v1,payloadHash:createHash('sha256').update(v1).digest('hex')}),first.id);db.close();
+ const echo=(await readFile(bLaunch.path,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(echo[0].message.content,first.prompt);echo[0].message.content=v1;
+ await writeFile(bLaunch.path,echo.map(JSON.stringify).join('\n')+'\n');
+ await rm(join(first.archive.directory,first.archive.id+'.json'));
+ pty(f,[...select('B response'),{send:'f'},{wait:'Fresh context: explicitly selected'},...confirm,{wait:'accepted — correlated native turn'}]);
+ const launch=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse).at(-1);assert.ok(!launch.args.includes('resume'));
+ const recovered=parseHandoffPrompt(launch.args.at(-1)).history;
+ assert.deepEqual(recovered.map(item=>item.text),['A original request','A original answer',DEFAULT_CURRENT_REQUEST,'B response']);
+ for(const item of recovered.slice(0,2))assert.deepEqual(item,decoded.history.find(stored=>stored.id===item.id));
+ assert.deepEqual(recovered.map(item=>item.origin?.agent),['codex','codex','claude','claude']);
 });
 test('rollback invalidates the causal suffix and does not reuse A that already retained the removed B response',async()=>{
  const f=await setup();const b=await switchToB(f);const [first]=await record(f);
@@ -115,4 +141,11 @@ for(const mode of ['disabled','submit-only','wrong-hash','wrong-turn','backgroun
  const [attempt]=await record(f);assert.equal(attempt.state,'uncertain');assert.equal(attempt.targetNativeId,null);
  const journal=await TransferJournal.open(join(f.state,'transfers'));assert.ok(journal.contexts().every(context=>context.coveredIds.length===0));journal.close();
  if(mode==='unsupported'){const launch=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse).at(-1);assert.ok(!launch.args.includes('resume'));assert.match(result.output,/receipt capability is unavailable/);}
+});
+test('retrying an uncertain Codex reuse attempt prefills its current request, not the whole envelope',async()=>{
+ const f=await setup('disabled');await switchToB(f);
+ pty(f,[...select('B response'),{send:'c'},{wait:'Current request (sent separately'},{send:'\u0015Reuse request\r'},{wait:'Current request: Reuse request'},...confirm,{wait:'uncertain — process exited'}]);
+ const [reuse]=await record(f);assert.equal(reuse.mode,'native-resume');assert.ok(reuse.archive);assert.equal(JSON.parse(reuse.prompt).currentRequest,'Reuse request');
+ const result=pty(f,[{wait:'EXPLICIT FRESH RECOVERY'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\x03'}],['transfers','retry',reuse.id]);
+ assert.match(result.output,/Current request: Reuse request/);assert.doesNotMatch(result.output,/Current request: \{/);
 });

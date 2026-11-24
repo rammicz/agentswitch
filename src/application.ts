@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { Scope, Session, HistoryItem } from './domain.js';
 import { deleteArchive, protectArchive, readArchiveSnapshot, releaseArchive } from './archive.js';
-import { createHandoffPlan, publishHandoffPlan, type HandoffPlan } from './handoff.js';
+import { createHandoffPlan, DEFAULT_CURRENT_REQUEST, parseHandoffPrompt, publishHandoffPlan, type HandoffPlan } from './handoff.js';
 import { grokPaths } from './adapters/grok.js';
 import { agyPaths } from './adapters/agy.js';
 import { openCodePaths } from './adapters/opencode.js';
@@ -101,7 +101,8 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
       },acquire:()=>()=>{}}});
     const sourceKeys=new Map<string,string>();
     const recoverySession:Session|undefined=prior?{...prior.source,title:`Recovery of ${prior.id}: prior delivery ${prior.state}`,workspace:prior.workspace,updatedAt:prior.updatedAt,messages:recovered?.items??[]}:undefined;
-    const initialRequest=prior?.prompt ? (prior.mode==='fresh-handoff' ? (JSON.parse(prior.prompt) as {currentRequest:string}).currentRequest : prior.prompt) : 'Continue the task from this conversation.';
+    // Any attempt with an archive (fresh or Codex reuse) stored a handoff envelope, not a bare request.
+    const initialRequest=prior?.prompt ? (prior.archive ? parseHandoffPrompt(prior.prompt).currentRequest : prior.prompt) : DEFAULT_CURRENT_REQUEST;
     const checkNotice = options.checkNotice;
     await runPicker<Dispatch>({workspace:options.workspace,scope:options.scope??'folder',compose:true,initialRequest,
       label:prior?'agentswitch / EXPLICIT FRESH RECOVERY — earlier delivery may have happened':'agentswitch / local native sessions',
@@ -149,11 +150,11 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
             catch {
               if(!request.fresh)throw new Error('Required lineage archive is unavailable. Restore it, or select F and review an active-source recovery.');
               unavailableAncestry=true;
-              if(attempt.prompt)for(const item of (JSON.parse(attempt.prompt) as {history:HistoryItem[]}).history)retainedItems.set(item.id,item);
+              if(attempt.prompt)for(const item of parseHandoffPrompt(attempt.prompt).history)retainedItems.set(item.id,item);
             }
           }
           if(attempt.prompt&&attempt.continuity) {
-            const text=attempt.archive?(JSON.parse(attempt.prompt) as {currentRequest:string}).currentRequest:attempt.prompt;
+            const text=attempt.archive?parseHandoffPrompt(attempt.prompt).currentRequest:attempt.prompt;
             retainedItems.set(attempt.continuity.requestId,{id:attempt.continuity.requestId,role:'user',status:'complete',text,origin:{agent:attempt.target,context:digest(JSON.stringify([attempt.continuity.targetRoot,attempt.targetNativeId]))}});
           }
         }
@@ -191,10 +192,10 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         let target=ordinaryNative?null:choice.target;
         let fresh=!ordinaryNative&&!target;
         let reason=sourceRecovery?'Required ancestry is unavailable. Explicit fresh recovery includes only available active source and known included echoes; unavailable application ancestry is excluded.':ordinaryNative?(['opencode','agy','grok'].includes(source.agent)?`Open the selected existing ${source.agent} session without an initial request.`:'Resume the selected source; send only the new current request.'):choice.reason;
-        const makeHandoff=(items:readonly HistoryItem[])=>createHandoffPlan({directory:paths.archives,source,items,currentRequest:request.currentRequest??'Continue the task from this conversation.',redactions,completeness:'complete'});
+        const makeHandoff=(items:readonly HistoryItem[])=>createHandoffPlan({directory:paths.archives,source,items,currentRequest:request.currentRequest??DEFAULT_CURRENT_REQUEST,redactions,completeness:'complete'});
         let handoff=ordinaryNative?null:makeHandoff(target?choice.items:observed.items);
         // Use the same redaction implementation for native current-request-only transport.
-        const nativeRequest=ordinaryNative?JSON.parse(makeHandoff([]).prepared.prompt).currentRequest as string:'';
+        const nativeRequest=ordinaryNative?parseHandoffPrompt(makeHandoff([]).prepared.prompt).currentRequest:'';
         const prepareLaunch=()=>runtime.prepare(request,{mode:fresh?'fresh':'auto',...(handoff?{handoff:handoff.prepared,observerCommand:observerCommand()}:{currentRequest:nativeRequest}),...(target?{resumeTarget:{...target,nativeResume:'compatible' as const},requireReceipt:true}:{})},signal);
         let prepared;
         try {prepared=await prepareLaunch();}catch(error) {

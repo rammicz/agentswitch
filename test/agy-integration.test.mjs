@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { rollout,writeRollout,completed,ids } from './fixtures/codex/native.mjs';
 import { entry,encode,ids as claudeIds } from './fixtures/claude/native.mjs';
 import { TransferJournal } from '../dist/transfer-journal.js';
+import { parseHandoffPrompt } from '../dist/handoff.js';
 import { fixture as agyFixture } from './fixtures/agy/native.mjs';
 const repo=resolve('.'),id='12345678-1234-1234-1234-123456789abc';
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
@@ -37,7 +38,7 @@ for(const destination of ['codex','claude'])test(`default CLI agy→${destinatio
  const f=await setup(t);const native=await publicSource(f,{kind:'tool'});f.env.RUNTIME_TARGET=destination;
  const r=pty(f,[...select('agy',true),...(destination==='claude'?[{send:'\x1b[C'},{wait:'Target: claude'}]:[]),{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions: 1'},{send:'\r'},{wait:'Excluded native tool step indexes: 1, 2'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'hello\n'},{wait:'INPUT "hello\\n"'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
  assert.equal(r.restored,true);const [launch]=await launches(f);assert.equal(launch.cwd,f.cwd);assert.deepEqual(launch.tty,[true,true,true]);const wire=launch.args.at(-1),payload=JSON.parse(wire);
- assert.equal(payload.history.length,2);assert.ok(payload.history.every(x=>x.origin.agent==='agy'));assert.match(wire,/\[REDACTED\]/);assert.doesNotMatch(wire,/PRIVATE_|NEEDLE_SECRET|GENERIC|EXCLUDED_TOOL/);
+ assert.equal(payload.history.length,2);assert.ok(parseHandoffPrompt(wire).history.every(x=>x.origin.agent==='agy'));assert.match(wire,/\[REDACTED\]/);assert.doesNotMatch(wire,/PRIVATE_|NEEDLE_SECRET|GENERIC|EXCLUDED_TOOL/);
  const [record]=await records(f);assert.equal(record.state,'uncertain');assert.equal(record.completeness,'complete');const {readArchiveSnapshot}=await import('../dist/archive.js');const archive=await readArchiveSnapshot(record.archive);assert.equal(archive.items.length,2);assert.doesNotMatch(JSON.stringify(archive),/PRIVATE_|NEEDLE_SECRET/);assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
  const before=(await launches(f)).length;pty(f,[{wait:'EXPLICIT FRESH RECOVERY'},{wait:'Enter preview'},{send:'\x03'}],['transfers','retry',record.id]);assert.equal((await launches(f)).length,before);
 });
@@ -61,7 +62,7 @@ test('agy outgoing missing target refuses preparation without archive, journal o
 for(const source of ['codex','claude'])test(`default CLI ${source}→agy uses reviewed bounded redacted context and inherited terminal`,async t=>{
  const f=await setup(t);const r=pty(f,[...select(source),...target,{send:'c'},{wait:'Current request (sent separately'},{send:'\x15--literal $(touch sentinel); `echo no` NEEDLE_SECRET\r'},{wait:'Current request: --literal'},{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions: 1'},...finish]);
  assert.equal(r.code,0);assert.equal(r.restored,true);assert.equal(r.sampledWhileAlive,true);const [launch]=await launches(f);assert.equal(launch.cwd,f.cwd);assert.deepEqual(launch.tty,[true,true,true]);assert.equal(launch.args.length,2);assert.equal(launch.args[0],'--prompt-interactive');
- const wire=launch.args[1],prompt=JSON.parse(wire);assert.equal(prompt.currentRequest,'--literal $(touch sentinel); `echo no` [REDACTED]');assert.equal(prompt.history.length,2);assert.ok(prompt.history.every(item=>item.origin.agent===source));assert.ok(Buffer.byteLength(wire)<=16384);assert.doesNotMatch(wire,/NEEDLE_SECRET|PRIVATE_/);await assert.rejects(access(join(f.cwd,'sentinel')));assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
+ const wire=launch.args[1],prompt=JSON.parse(wire);assert.equal(prompt.currentRequest,'--literal $(touch sentinel); `echo no` [REDACTED]');assert.equal(prompt.history.length,2);assert.ok(parseHandoffPrompt(wire).history.every(item=>item.origin.agent===source));assert.ok(Buffer.byteLength(wire)<=16384);assert.doesNotMatch(wire,/NEEDLE_SECRET|PRIVATE_/);await assert.rejects(access(join(f.cwd,'sentinel')));assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
  const [record]=await records(f);assert.equal(record.state,'uncertain');assert.equal(record.targetNativeId,null);assert.equal(record.continuity.targetRef,null);assert.equal(record.observation,undefined);assert.equal(record.writer,'stopped');
 });
 test('agy native open requires explicitly cleared draft, exact cache ID/cwd and sends no history or new request',async t=>{
