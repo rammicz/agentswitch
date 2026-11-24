@@ -16,7 +16,7 @@ const agents: readonly AgentId[] = ['codex','claude','opencode','agy','grok'];
 const canonical = async (path: string): Promise<string> => realpath(resolve(path)).catch(()=>resolve(path));
 const harmless = new Set(['workspace-unavailable','metadata-unavailable','metadata-schema','metadata-unstable','untested-producer']);
 // grok and agy metadata is the whole source, so any other diagnostic degrades it; OpenCode tolerates only an untested producer.
-const harmlessFor: Record<AgentId, ReadonlySet<string>> = {codex:new Set([...harmless,'superseded-record','abandoned-record']),claude:harmless,opencode:new Set(['untested-producer']),agy:new Set(['step-count-lag']),grok:new Set()};
+const harmlessFor: Record<AgentId, ReadonlySet<string>> = {codex:new Set([...harmless,'superseded-record','abandoned-record']),claude:harmless,opencode:new Set(['untested-producer']),agy:new Set(['step-count-lag','truncated-content']),grok:new Set()};
 const wellFormedVersion=/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/;
 const listCodes=(codes:readonly string[]):string=>{const unique=[...new Set(codes)];return unique.length?` (${unique.slice(0,5).join(', ')}${unique.length>5?', …':''})`:'';};
 // Every reader caps its diagnostics at this default, some without a marker, so a full list may hide more.
@@ -35,15 +35,22 @@ export function partialHistoryNotice(agent:AgentId, history:Pick<CodexHistory,'c
     ? `Partial history: at least ${records} source record${records===1?'':'s'} could not be read${listed} and ${records===1?'is':'are'} not included.${more}`
     : `Partial history: the source reader reported incomplete history${listed}. Unread records are not included.${more}`;
 }
-/** Ascending excluded step indexes as a count and at most ten compact ranges, so the notice stays bounded. */
-export function excludedStepsSummary(steps:readonly number[]):string {
-  if(!steps.length)return 'none';
+/** Ascending step indexes as at most ten compact ranges, so a notice stays bounded. */
+function stepIndexes(steps:readonly number[]):string {
   const ranges:string[]=[];
   for(let start=0;start<steps.length&&ranges.length<=10;) {
     let end=start;while(end+1<steps.length&&steps[end+1]===steps[end]!+1)end++;
     ranges.push(start===end?`${steps[start]}`:`${steps[start]}–${steps[end]}`);start=end+1;
   }
-  return `${steps.length} (indexes ${ranges.slice(0,10).join(', ')}${ranges.length>10?', …':''})`;
+  return `indexes ${ranges.slice(0,10).join(', ')}${ranges.length>10?', …':''}`;
+}
+/** Excluded step indexes as a count and bounded ranges. */
+export function excludedStepsSummary(steps:readonly number[]):string {
+  return steps.length?`${steps.length} (${stepIndexes(steps)})`:'none';
+}
+/** Steps whose public text the producer shortened, or nothing when there are none. */
+function truncatedStepsNotice(steps:readonly number[]):string {
+  return steps.length?` Antigravity shortened ${steps.length} included step${steps.length===1?'':'s'} (${stepIndexes(steps)}).`:'';
 }
 /** Disclosure for a retry of a transfer recorded as partial: its counts and codes were not persisted. */
 export const recordedPartialHistory='Partial history: the earlier transfer recorded this history as partial. Unread records are not included; their count was not recorded.';
@@ -247,6 +254,6 @@ export class NativeCatalog {
     const runtime:RuntimeSource={agent:session.agent,id:session.id,nativeId:session.nativeId,workspace:session.workspace,nativeResume:compatible?'compatible':'unknown'};
     const sourceKey=digest(JSON.stringify([source.agent,this.rootKeys[source.agent],source.nativeId]));
     const context:ContextRef={...runtime,root:this.rootKey(source.agent),incarnation:history.incarnation??'unknown',sourceKey};
-    return {session,history,runtime,fingerprint:digest(JSON.stringify([runtime,history.items,history.complete,context.incarnation,history.retained,history.itemTurns,'snapshotIdentity' in history?history.snapshotIdentity:null,'excludedSteps' in history?history.excludedSteps:[]])),sourceKey,context,retained:compatible&&history.retained===true,...(source.agent==='agy'?{metadataOnly:'metadataOnly' in session&&session.metadataOnly===true,projectionNotice:`Antigravity public-text projection excludes internal metadata, settings, thinking and raw tool data. Excluded native tool and system steps: ${excludedStepsSummary('excludedSteps' in history&&Array.isArray(history.excludedSteps)?history.excludedSteps:[])}. Archive completeness describes this public-text projection.`}:{})};
+    return {session,history,runtime,fingerprint:digest(JSON.stringify([runtime,history.items,history.complete,context.incarnation,history.retained,history.itemTurns,'snapshotIdentity' in history?history.snapshotIdentity:null,'excludedSteps' in history?history.excludedSteps:[]])),sourceKey,context,retained:compatible&&history.retained===true,...(source.agent==='agy'?{metadataOnly:'metadataOnly' in session&&session.metadataOnly===true,projectionNotice:`Antigravity public-text projection excludes internal metadata, settings, thinking and raw tool data. Excluded native tool and system steps: ${excludedStepsSummary('excludedSteps' in history&&Array.isArray(history.excludedSteps)?history.excludedSteps:[])}. Archive completeness describes this public-text projection.${truncatedStepsNotice('truncatedSteps' in history&&Array.isArray(history.truncatedSteps)?history.truncatedSteps:[])}`}:{})};
   }
 }

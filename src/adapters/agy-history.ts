@@ -23,7 +23,7 @@ function request(text:string):string {
  * steps whose calls, results and bodies are never read into items, whatever their tool name or status. `lagging`
  * marks a writer that has not yet appended the last step its idle summary counts.
  */
-export function parseAgyHistory(text:string,id:string,stepCount:number,limits:{maxItems:number;maxLineBytes:number}):{items:HistoryItem[];excludedSteps:number[];lagging:boolean} {
+export function parseAgyHistory(text:string,id:string,stepCount:number,limits:{maxItems:number;maxLineBytes:number}):{items:HistoryItem[];excludedSteps:number[];truncatedSteps:number[];lagging:boolean} {
   if(!text.endsWith('\n'))throw Error('partial-record');
   const lines=text.slice(0,-1).split('\n');
   const lagging=lines.length===stepCount-1;
@@ -35,11 +35,13 @@ export function parseAgyHistory(text:string,id:string,stepCount:number,limits:{m
     if(row.step_index!==index)throw Error('invalid-ordinal');
     if(typeof row.created_at!=='string'||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(row.created_at)||!Number.isFinite(Date.parse(row.created_at)))throw Error('unsupported-shape');
     if(row.thinking!==undefined && typeof row.thinking!=='string')throw Error('unsupported-shape');
+    // The producer lists the fields it shortened; only `content` of a projected step is public text.
+    if(row.truncated_fields!==undefined&&(!Array.isArray(row.truncated_fields)||!row.truncated_fields.every(field=>typeof field==='string')))throw Error('unsupported-shape');
     for(const key of ['input_tokens','cache_read_tokens','output_tokens'])if(row[key]!==undefined&&(!Number.isSafeInteger(row[key])||Number(row[key])<0))throw Error('unsupported-shape');
     if(row.model!==undefined&&(!validText(row.model)||row.model.length>200))throw Error('unsupported-shape');
     return row;
   });
-  const items:HistoryItem[]=[],excludedSteps:number[]=[];
+  const items:HistoryItem[]=[],excludedSteps:number[]=[],truncatedSteps:number[]=[];
   // Results are only accepted after a tool-call step, until the next public item.
   let previousTime=0,inTools=false;
   for(let ordinal=0;ordinal<records.length;ordinal++) {
@@ -67,8 +69,9 @@ export function parseAgyHistory(text:string,id:string,stepCount:number,limits:{m
       if(!validText(row.content)||!row.content)throw Error('unsupported-shape');
       role='assistant';value=row.content;
     } else throw Error('unsupported-shape');
+    if((row.truncated_fields as string[]|undefined)?.includes('content'))truncatedSteps.push(ordinal);
     items.push({id:createHash('sha256').update(JSON.stringify([id,row.step_index,role,value])).digest('hex'),role,text:value,status:'complete'});
   }
   if(items.at(-1)?.role!=='assistant')throw Error('partial-record');
-  return {items,excludedSteps,lagging};
+  return {items,excludedSteps,truncatedSteps,lagging};
 }

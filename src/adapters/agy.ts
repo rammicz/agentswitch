@@ -13,7 +13,7 @@ import { contains } from './codex-io.js';
 
 export const agyNativeId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export interface AgySession extends Session { readonly metadataOnly:boolean }
-export interface AgyHistory { items:readonly HistoryItem[]; complete:boolean; retained:false; incarnation?:string; snapshotIdentity?:string; excludedSteps?:readonly number[]; diagnostics:readonly CodexDiagnostic[] }
+export interface AgyHistory { items:readonly HistoryItem[]; complete:boolean; retained:false; incarnation?:string; snapshotIdentity?:string; excludedSteps?:readonly number[]; truncatedSteps?:readonly number[]; diagnostics:readonly CodexDiagnostic[] }
 export interface AgyAdapterOptions {
   root?:string; home?:string; env?:NodeJS.ProcessEnv;
   limits?:Partial<typeof defaults>;
@@ -230,8 +230,9 @@ export class AgySessionAdapter implements SessionAdapter {
       await this.noSidecars(join(catalog.root,'conversations',id+'.db'),catalog);
       if(catalog.cacheSignature&&identity(await lstat(join(catalog.root,'cache','last_conversations.json')))!==catalog.cacheSignature)throw Error('metadata-unstable');
       if(parsed.lagging&&!forTitle)this.diagnostic(diagnostics,'step-count-lag','history');
+      if(parsed.truncatedSteps.length&&!forTitle)this.diagnostic(diagnostics,'truncated-content','history');
       return {
-        items:parsed.items,complete:true,retained:false,diagnostics,excludedSteps:parsed.excludedSteps,
+        items:parsed.items,complete:true,retained:false,diagnostics,excludedSteps:parsed.excludedSteps,truncatedSteps:parsed.truncatedSteps,
         incarnation:createHash('sha256').update(JSON.stringify([catalog.root,id,JSON.parse(before.signature).slice(0,2)])).digest('hex'),
         snapshotIdentity:createHash('sha256').update(JSON.stringify([catalog.signature,catalog.cacheSignature,before.signature])).digest('hex'),
       };

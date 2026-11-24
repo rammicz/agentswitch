@@ -236,3 +236,38 @@ test('agy catalog history reads each get their own byte budget and charge the tr
   assert.equal(sessions.length, 3);
   for (const session of sessions) assert.equal((await adapter.readCatalogHistoryDetailed(session.nativeId)).complete, true, session.nativeId);
 });
+
+test('agy text the producer marked as shortened stays included with a note and its step indexes', async t => {
+  const f = await setup(t), rows = toolSession();
+  rows[0].truncated_fields = ['content']; rows[13].truncated_fields = ['tool_calls', 'content']; rows[15].truncated_fields = ['content'];
+  const h = await writeSession(f, rows);
+  assert.equal(h.complete, true);
+  assert.deepEqual(h.items.map(x => x.text), ['Run the checks', 'I will run them', 'Checks pass', 'Thanks', 'You are welcome']);
+  assert.deepEqual(h.diagnostics, [{ code: 'truncated-content', source: 'history' }]);
+  assert.deepEqual(h.truncatedSteps, [0, 13, 15]);
+  const { NativeCatalog } = await import('../dist/native-catalog.js'), { SearchIndex } = await import('../dist/search-index.js');
+  const env = { AGENTSWITCH_AGY_ROOT: f.root, GROK_HOME: join(f.base, 'grok'), CODEX_HOME: join(f.base, 'codex'), CLAUDE_CONFIG_DIR: join(f.base, 'claude'), OPENCODE_DB: join(f.base, 'missing.db'), XDG_DATA_HOME: join(f.base, 'xdg') };
+  const catalog = await NativeCatalog.create(env), index = await SearchIndex.open({ directory: join(f.base, 'index'), sources: catalog.sources() }); t.after(() => index.close());
+  await catalog.refresh(index);
+  const [hit] = await index.query({ text: '', agent: 'agy', scope: 'folder', workspace: f.cwd });
+  const snapshot = await catalog.snapshot(hit);
+  assert.equal(snapshot.history.complete, true);
+  assert.match(snapshot.projectionNotice, /Antigravity shortened 3 included steps \(indexes 0, 13, 15\)\./);
+  assert.deepEqual(catalog.notices().filter(notice => notice.startsWith('agy:')), ['agy: source warnings (truncated-content)']);
+});
+
+for (const [name, fields] of [['only non-projected fields', ['tool_calls', 'thinking']], ['an empty list', []], ['unknown field names', ['PRIVATE_FUTURE_FIELD']]])
+  test(`agy truncated_fields with ${name} changes nothing`, async t => {
+    const f = await setup(t), rows = toolSession();
+    rows[1].truncated_fields = fields; rows[0].truncated_fields = fields.filter(field => field !== 'tool_calls' && field !== 'thinking'); rows[2].truncated_fields = ['content'];
+    const h = await writeSession(f, rows);
+    assert.equal(h.complete, true); assert.deepEqual(h.diagnostics, []); assert.deepEqual(h.truncatedSteps, []);
+  });
+
+for (const value of ['content', [1], { content: true }, null])
+  test(`agy truncated_fields ${JSON.stringify(value)} stays strict`, async t => {
+    const f = await setup(t), rows = toolSession();
+    rows[4].truncated_fields = value;
+    const h = await writeSession(f, rows);
+    assert.equal(h.complete, false); assert.deepEqual(h.items, []); assert.deepEqual(h.diagnostics.map(d => d.code), ['unsupported-shape']);
+  });

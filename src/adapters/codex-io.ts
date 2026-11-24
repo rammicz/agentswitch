@@ -15,7 +15,7 @@ export type DiagnosticCode = 'root-unavailable' | 'unsafe-path' | 'read-failed' 
    * Non-blocking notes: a torn line its re-emitted record replaced, a torn final line of a long-idle file, and an
    * Antigravity summary counting one step its writer has not appended yet.
    */
-  'superseded-record' | 'abandoned-record' | 'step-count-lag';
+  'superseded-record' | 'abandoned-record' | 'step-count-lag' | 'truncated-content';
 export interface CodexDiagnostic { code: DiagnosticCode; source: 'history' | 'metadata' | 'workspace' | 'root'; line?: number }
 /** `maxLineBytes` bounds discovery, header and metadata lines; `maxHistoryLineBytes` bounds lines in a history read. */
 export interface CodexLimits {
