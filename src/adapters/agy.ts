@@ -235,5 +235,5 @@ export class AgySessionAdapter implements SessionAdapter {
 }
 interface CatalogRecord {session:AgySession;stepCount?:number}
 interface Catalog {root:string;records:Map<string,CatalogRecord>;diagnostics:CodexDiagnostic[];signature:string;cacheSignature:string;budget:{bytes:number};directories:Map<string,{signature:string;names:Set<string>}>}
-const summaryColumns=['conversation_id','title','preview','step_count','last_modified_time','workspace_uris','status','source','project_id','agent_name','parent_conversation_id','nesting_depth','battle_id','winning_conversation_id','not_fully_idle','killed','last_user_input_time','last_user_input_step_index','app_data_dir','raw_summary','group_id'];
-const selectedColumns=summaryColumns.filter(c=>!['title','preview','raw_summary','last_user_input_time','last_user_input_step_index','project_id','group_id'].includes(c));
+// conversation_summaries columns the reader needs; other columns are ignored.
+const selectedColumns=['conversation_id','step_count','last_modified_time','workspace_uris','status','source','agent_name','parent_conversation_id','nesting_depth','battle_id','winning_conversation_id','not_fully_idle','killed','app_data_dir'];

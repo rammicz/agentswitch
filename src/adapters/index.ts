@@ -22,7 +22,7 @@ export type { CodexAdapterOptions, CodexDiagnostic, CodexHistory, CodexLimits, C
 export { ClaudeSessionAdapter } from './claude.js';
 export type { ClaudeAdapterOptions, ClaudeDiagnostic, ClaudeHistory, ClaudeLimits, ClaudeSession } from './claude.js';
 
-export { OpenCodeSessionAdapter, openCodePaths } from './opencode.js';
+export { OpenCodeSessionAdapter, openCodePaths, testedOpenCodeProducer } from './opencode.js';
 export type { OpenCodeAdapterOptions, OpenCodeSession, OpenCodeHistory } from './opencode.js';
 
 export { GrokSessionAdapter, grokPaths } from './grok.js';

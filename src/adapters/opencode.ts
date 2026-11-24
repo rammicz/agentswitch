@@ -37,7 +37,7 @@ const safeString=(value:unknown):value is string=>typeof value==='string'&&!valu
 const openCodeProducer=/^1\.\d{1,9}\.\d{1,9}(?:-[0-9A-Za-z.-]{1,64})?$/;
 export const testedOpenCodeProducer='1.19.6';
 
-/** No DB copies, provider imports or native mutation PRAGMAs. Only a quiescent immutable 1.19.6 projection. */
+/** No DB copies, provider imports or native mutation PRAGMAs. Only a quiescent immutable 1.x projection, tested on 1.19.6. */
 export class OpenCodeSessionAdapter implements SessionAdapter {
   readonly id='opencode' as const;
   private readonly limits;
@@ -100,17 +100,19 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
     const snapshot=await this.snapshot(diagnostics,db=>db.prepare('SELECT id,directory,workspace_id,parent_id,title,version,time_created,time_updated,time_archived FROM session ORDER BY time_updated DESC,id LIMIT ?').all(this.limits.maxRows+1));
     if(!snapshot)return [];
     if(snapshot.value.length>this.limits.maxRows)this.diagnostic(diagnostics,'input-limit');
+    let untested=false;
     for(const row of snapshot.value.slice(0,this.limits.maxRows)) {
       if(!openCodeNativeId.test(String(row.id))||!safeString(row.directory)||!isAbsolute(row.directory)||!safeString(row.title)||!timestamp(row.time_created)||!timestamp(row.time_updated)) {this.diagnostic(diagnostics,'malformed-record');continue;}
       // Child/archived/remote workspaces are deliberately outside the first local profile.
       if(row.workspace_id||row.parent_id||row.time_archived)continue;
       if(typeof row.version!=='string'||!openCodeProducer.test(row.version)) {this.diagnostic(diagnostics,'unsupported-shape');continue;}
-      if(row.version!==testedOpenCodeProducer)this.diagnostic(diagnostics,'untested-producer');
+      untested||=row.version!==testedOpenCodeProducer;
       if(Buffer.byteLength(row.title)>4096||Buffer.byteLength(row.directory)>4096){this.diagnostic(diagnostics,'input-limit');continue;}
       let workspace=resolve(row.directory);try{workspace=await realpath(workspace);}catch{this.diagnostic(diagnostics,'workspace-unavailable');}
       const nativeId=String(row.id);
       this.selected.set(nativeId,{id:`opencode:${nativeId}`,nativeId,agent:'opencode',workspace,title:row.title,producerVersion:row.version,createdAt:timestamp(row.time_created),updatedAt:timestamp(row.time_updated),messages:[]});
     }
+    if(untested)this.diagnostic(diagnostics,'untested-producer');
     this.generation=snapshot.signature;
     return [...this.selected.values()];
   }
@@ -121,7 +123,6 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
     const diagnostics:CodexDiagnostic[]=[];
     if(rediscover)await this.catalog([]);
     if(!openCodeNativeId.test(id)||!this.selected.has(id)){this.diagnostic(diagnostics,'selected-rollout-unavailable');return {items:[],complete:false,diagnostics,retained:false};}
-    if(this.selected.get(id)!.producerVersion!==testedOpenCodeProducer)this.diagnostic(diagnostics,'untested-producer');
     const snapshot=await this.snapshot(diagnostics,db=>{
       const session=db.prepare(`SELECT json_valid(revert) AS valid,CASE WHEN json_valid(revert) THEN json_extract(revert,'$.messageID') END AS message,CASE WHEN json_valid(revert) THEN json_extract(revert,'$.partID') END AS part,revert IS NOT NULL AS reverted FROM session WHERE id=?`).get(id);
       if(!session)throw new Error('selected-rollout-unavailable');
@@ -162,6 +163,9 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
       return items;
     });
     if(!snapshot||snapshot.signature!==this.generation){if(snapshot)this.diagnostic(diagnostics,'metadata-unstable');return {items:[],complete:false,diagnostics,retained:false};}
-    return {items:snapshot.value,complete:diagnostics.every(diagnostic=>diagnostic.code==='untested-producer'),diagnostics,incarnation:snapshot.incarnation,retained:false};
+    const complete=diagnostics.length===0;
+    // Catalog reads skip the repeat: discovery already reported it once for the whole scan.
+    if(rediscover&&this.selected.get(id)!.producerVersion!==testedOpenCodeProducer)this.diagnostic(diagnostics,'untested-producer');
+    return {items:snapshot.value,complete,diagnostics,incarnation:snapshot.incarnation,retained:false};
   });}
 }

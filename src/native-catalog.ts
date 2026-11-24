@@ -1,7 +1,7 @@
 import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { CodexSessionAdapter, ClaudeSessionAdapter, OpenCodeSessionAdapter, openCodePaths, AgySessionAdapter, agyPaths, GrokSessionAdapter, grokPaths } from './adapters/index.js';
+import { CodexSessionAdapter, ClaudeSessionAdapter, OpenCodeSessionAdapter, openCodePaths, testedOpenCodeProducer, AgySessionAdapter, agyPaths, GrokSessionAdapter, grokPaths } from './adapters/index.js';
 import type { CodexDiagnostic, CodexHistory, CodexSession, ClaudeSession, OpenCodeSession, AgySession, GrokSession } from './adapters/index.js';
 import { setTimeout } from 'node:timers/promises';
 import type { AgentId, HistoryItem, Session, SessionQuery } from './domain.js';
@@ -14,6 +14,8 @@ import type { ContextRef } from './continuity.js';
 const agents: readonly AgentId[] = ['codex','claude','opencode','agy','grok'];
 const canonical = async (path: string): Promise<string> => realpath(resolve(path)).catch(()=>resolve(path));
 const harmless = new Set(['workspace-unavailable','metadata-unavailable','metadata-schema','metadata-unstable','untested-producer']);
+// grok and agy metadata is the whole source, so any diagnostic degrades it; OpenCode tolerates only an untested producer.
+const harmlessFor: Record<AgentId, ReadonlySet<string>> = {codex:harmless,claude:harmless,opencode:new Set(['untested-producer']),agy:new Set(),grok:new Set()};
 const implicitContext = /^(?:# AGENTS\.md instructions|<(?:environment_context|permissions instructions|collaboration_mode|subagent_notification)\b)/iu;
 function openingTitle(items: readonly HistoryItem[]): string | undefined {
   for (const item of items) {
@@ -162,8 +164,7 @@ export class NativeCatalog {
           this.warnings[agent]=`${agent}: history root unavailable; previous search data retained`;continue;
         }
         const sessions=await this.adapters[agent].discover();
-        // agy's metadata file is its entire source, rather than optional enrichment.
-        const isDegraded=()=>this.diagnostics[agent].some(diagnostic=>agent==='grok'||agent==='agy'||(agent==='opencode'&&diagnostic.code!=='untested-producer')||!harmless.has(diagnostic.code));
+        const isDegraded=()=>this.diagnostics[agent].some(diagnostic=>!harmlessFor[agent].has(diagnostic.code));
         let degraded=isDegraded();
         const healthy:Session[]=[];
         for(const session of sessions) {
@@ -193,7 +194,7 @@ export class NativeCatalog {
     const history:CodexHistory=await this.adapters[source.agent].readHistoryDetailed(source.nativeId);
     this.report(source.agent,source.agent==='agy'&&'metadataOnly' in session&&session.metadataOnly?'metadata only. Native open available, outgoing public history unavailable':history.complete?'':'selected public history incomplete. Transfer blocked');signal?.throwIfAborted();
     const producer='producerVersion' in session?session.producerVersion:undefined;
-    const compatible=session.agent==='grok'?true:session.agent==='agy'?true:session.agent==='opencode'?producer==='1.19.6':session.agent==='codex' ? producer==='0.171.0' : !producer||producer==='2.1.330';
+    const compatible=session.agent==='grok'?true:session.agent==='agy'?true:session.agent==='opencode'?producer===testedOpenCodeProducer:session.agent==='codex' ? producer==='0.171.0' : !producer||producer==='2.1.330';
     const runtime:RuntimeSource={agent:session.agent,id:session.id,nativeId:session.nativeId,workspace:session.workspace,nativeResume:compatible?'compatible':'unknown'};
     const sourceKey=digest(JSON.stringify([source.agent,this.rootKeys[source.agent],source.nativeId]));
     const context:ContextRef={...runtime,root:this.rootKey(source.agent),incarnation:history.incarnation??'unknown',sourceKey};

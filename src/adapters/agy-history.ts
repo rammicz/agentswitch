@@ -3,10 +3,9 @@ import type { HistoryItem } from '../domain.js';
 
 const object = (v:unknown):v is Record<string,unknown> => !!v && typeof v==='object' && !Array.isArray(v);
 const validText = (v:unknown):v is string => typeof v==='string' && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ud800-\udfff]/u.test(v);
-const fields = new Set(['step_index','source','type','status','created_at','content','model','input_tokens','cache_read_tokens','output_tokens','thinking','tool_calls']);
-const plainFields = new Set(['step_index','source','type','status','created_at','content']);
 // Unknown top-level keys from newer releases are ignored and never projected; known keys keep their checks.
-const onlyPlainKnown = (row:Record<string,unknown>):boolean => Object.keys(row).every(key=>!fields.has(key)||plainFields.has(key));
+const modelFields = ['model','input_tokens','cache_read_tokens','output_tokens','thinking','tool_calls'];
+const onlyPlainKnown = (row:Record<string,unknown>):boolean => !modelFields.some(key=>Object.hasOwn(row,key));
 function request(text:string):string {
   const boundary='\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\n';
   const parts=text.split(boundary);
