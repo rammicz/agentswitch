@@ -57,6 +57,21 @@ function panelWrap(text: string, width: number): string[] {
   }
   return [...lines, row];
 }
+/** Like panelWrap, but breaks after spaces where it can; a word wider than the row is split. */
+function wordWrap(text: string, width: number): string[] {
+  const rows: string[] = [];
+  let row = '', cells = 0;
+  for (const word of clean(text).split(/(?<= )/)) {
+    const visible = cellCount(word.trimEnd());
+    if (row && cells + visible > width) { rows.push(row.trimEnd()); row = ''; cells = 0; }
+    if (visible > width) {
+      const parts = panelWrap(word, width);
+      rows.push(...parts.slice(0, -1));
+      row = parts.at(-1)!; cells = cellCount(row);
+    } else { row += word; cells += cellCount(word); }
+  }
+  return [...rows, row.trimEnd()];
+}
 function clipPanel(text: string, width: number): string {
   const lines = panelWrap(text, width);
   return lines.length === 1 ? lines[0]! : `${panelWrap(lines[0]!, width - 1)[0]!.trimEnd()}…`;
@@ -65,9 +80,75 @@ const palette = {
   heading: '1;38;2;221;210;252;48;2;47;40;65',
   selected: '1;38;2;202;239;222;48;2;37;61;57',
   time: '38;2;203;220;248;48;2;41;51;70',
+  title: '1',
+  muted: '38;2;147;153;178',
+  user: '1;38;2;203;220;248',
+  assistant: '1;38;2;202;239;222',
+  warning: '38;2;249;226;175',
+  danger: '38;2;243;139;168',
+  highlight: '1;38;2;30;30;46;48;2;249;226;175',
 };
 type Tone = keyof typeof palette;
 const styled = (text: string, tone: Tone, color: boolean) => color ? `\x1b[${palette[tone]}m${text}\x1b[0m` : text;
+
+const exactTime = (timestamp: string): string => Number.isFinite(Date.parse(timestamp))
+  ? new Date(timestamp).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'Unknown';
+const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? '' : 's'}`;
+/** Paint a body row, wrapping each case-insensitive occurrence of `needle` in the highlight tone. */
+function highlightRow(row: string, tone: Tone | undefined, needle: string, color: boolean): string {
+  const base = (text: string) => text && tone ? styled(text, tone, color) : text;
+  if (!color || !needle) return base(row);
+  const pattern = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
+  let painted = '', last = 0;
+  for (const found of row.matchAll(pattern)) {
+    painted += base(row.slice(last, found.index)) + styled(found[0], 'highlight', color);
+    last = found.index + found[0].length;
+  }
+  return painted + base(row.slice(last));
+}
+/**
+ * The preview stage as a readable transcript: a session header, then one block per item with a role header and its
+ * text indented below. Line breaks become rows and tabs two spaces; every other control stays visibly escaped.
+ * Returns painted rows that already fit `width`, and the row of the first matched item's header.
+ */
+function transcriptRows(source: SessionHit, items: readonly HistoryItem[], width: number, color: boolean,
+  expandTools: boolean, needle: string, loading: boolean): { rows: string[]; focus: number } {
+  const rows: string[] = [];
+  const line = (text: string, tone?: Tone) => rows.push(styled(clipPanel(text, width), tone ?? 'title', color && tone !== undefined));
+  const counts = (['user', 'assistant', 'tool'] as const).map(role => `${items.filter(item => item.role === role).length} ${role}`);
+  line(source.title, 'title');
+  for (const label of [`Agent: ${source.agent}`, `Folder: ${source.workspace}`,
+    `Last used: ${lastUsed(source.lastUsedAt ?? source.updatedAt, Date.now())} (${exactTime(source.lastUsedAt ?? source.updatedAt)})`,
+    `Session ID: ${source.nativeId}`, [plural(items.length, 'item'), ...counts].join(' · ')]) line(label, 'muted');
+  if (!items.length) {
+    if (!loading) rows.push('', styled('No readable conversation in this session (metadata only).', 'muted', color));
+    return { rows, focus: 0 };
+  }
+  const matched = source.matches.find(match => match.field === 'message')?.itemId;
+  const textWidth = Math.max(1, width - 2);
+  const body = (text: string, tone?: Tone) => wordWrap(text, textWidth).map(row => rows.push('  ' + highlightRow(row, tone, needle, color)));
+  let focus = 0;
+  for (const item of items) {
+    rows.push('');
+    if (item.id === matched) focus = rows.length;
+    const lines = item.text.replace(/\r\n/g, '\n').replace(/\t/g, '  ').split('\n');
+    if (lines.length > 1 && lines.at(-1) === '') lines.pop();
+    const tag = item.status === 'complete' ? '' : '  ' + styled(item.status, item.status === 'failed' ? 'danger' : 'warning', color);
+    const label = item.role === 'user' ? '● You' : item.role === 'assistant' ? `● ${source.agent}` : `⏺ tool output · ${plural(lines.length, 'line')}`;
+    const tone: Tone = item.role === 'user' ? 'user' : item.role === 'assistant' ? 'assistant' : 'muted';
+    rows.push(styled(clipPanel(label, Math.max(1, width - (tag ? item.status.length + 2 : 0))), tone, color) + tag);
+    if (item.role !== 'tool' || expandTools) { for (const text of lines) body(text, item.role === 'tool' ? 'muted' : undefined); continue; }
+    // Collapsed tool output: the first three non-empty lines, one row each.
+    let shown = 0, last = -1;
+    for (let index = 0; index < lines.length && shown < 3; index++) {
+      if (!lines[index]!.trim()) continue;
+      rows.push('  ' + highlightRow(clipPanel(lines[index]!, textWidth), 'muted', needle, color));
+      shown++; last = index;
+    }
+    if (lines.length - last - 1 > 0) rows.push(styled(`  … ${plural(lines.length - last - 1, 'more line')}`, 'muted', color));
+  }
+  return { rows, focus };
+}
 
 function lastUsed(timestamp: string, now: number): string {
   const time = Date.parse(timestamp);
@@ -101,7 +182,7 @@ function sessionList(hits: readonly SessionHit[], selected: number, text: string
   if (!detailRows) return list.map(row => row.painted);
   const hit = hits[selected]!;
   const timestamp = hit.lastUsedAt ?? hit.updatedAt;
-  const exact = Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'Unknown';
+  const exact = exactTime(timestamp);
   const match = hit.matches.find(item => item.field === 'message');
   const notes = [...panelWrap(hit.title, detailWidth).slice(0, 2), ...panelWrap(`Last used: ${exact}`, detailWidth),
     ...panelWrap(`Folder: ${hit.workspace}`, detailWidth).slice(0, 3),
@@ -150,6 +231,9 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   let picked: SessionHit | undefined;
   let items: readonly HistoryItem[] = [];
   let offset = 0;
+  let expandTools = false;
+  let focusMatch = false;
+  let pageRows = 1;
   let choice: WorkspaceChoice | undefined;
   let pathInput = '';
   let currentRequest = options.initialRequest ?? DEFAULT_CURRENT_REQUEST;
@@ -237,6 +321,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       ...(hints ? [hints] : []),
     ].flatMap(line => panelWrap(line, width)).slice(0, Math.max(0, height - header.length - 3));
     const bodyRows = Math.max(1, height - header.length - status.length - 2);
+    pageRows = bodyRows;
     let body: string[];
     let footer: string;
     if (showingSources) {
@@ -252,18 +337,12 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       footer = selected < 0 && hits.length ? `↓ Results · ${back}` : `↑ ↓ Select · Enter preview · ${back}`;
       if (busy) footer = hits.length ? `↑ ↓ Select · Enter open session · ${back} · ${progress}` : back;
     } else if (stage === 'preview') {
-      const source = picked!;
-      const provenance = `${source.agent}/${source.id}`;
-      const lines = wrap([
-        `Source: ${provenance} · ${source.title}`, `Workspace: ${source.workspace}`,
-        ...source.matches.map(match => match.field === 'message'
-          ? `Match ${provenance}/${match.itemId} [${match.role}]: ${match.text}`
-          : `Match ${provenance} [${match.field}]: ${match.text}`),
-        ...items.map(item => `${provenance}/${item.id} [${item.role}, ${item.status}]: ${item.text}`),
-      ], width);
-      offset = Math.max(0, Math.min(offset, Math.max(0, lines.length - bodyRows)));
-      body = lines.slice(offset, offset + bodyRows);
-      footer = '↑ ↓ Scroll · Enter choose target · Esc back';
+      const { rows, focus } = transcriptRows(picked!, items, width, color, expandTools, query.text.trim(), busy);
+      if (focusMatch && items.length) { offset = focus; focusMatch = false; }
+      offset = Math.max(0, Math.min(offset, Math.max(0, rows.length - bodyRows)));
+      body = rows.slice(offset, offset + bodyRows);
+      const tools = items.some(item => item.role === 'tool') ? ` · T ${expandTools ? 'hide' : 'show'} tool output` : '';
+      footer = `Enter choose target · Esc back · ↑ ↓ PgUp PgDn scroll${tools}`;
     } else if (stage === 'request' || stage === 'redaction') {
       body = [stage === 'request' ? 'Current request (sent separately from historical data):' : 'Literal redaction (replace every match before transfer retention):', stage === 'request' ? currentRequest : redactionInput, 'Enter save · Esc cancel'];
       footer = 'Backspace edit · Ctrl+U clear';
@@ -300,7 +379,8 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     }
     const lines = [...header, ...body, '', busy && !inList && !showingSources ? 'Loading… · Esc back' : footer, ...status];
     const frame = lines.slice(0, height).map((line, index) => {
-      if (inList && (index === header.length - 1 || (hits.length && index >= header.length && index < header.length + body.length))) return line;
+      const painted = (inList && hits.length) || (stage === 'preview' && !showingSources);
+      if (inList && index === header.length - 1 || painted && index >= header.length && index < header.length + body.length) return line;
       const clipped = clipPanel(line, width);
       return index === 0 ? styled(clipped, 'heading', color) : clipped;
     });
@@ -375,7 +455,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   };
   const preview = (): void => {
     const source = sourceOf(picked!);
-    items = []; offset = 0;
+    items = []; offset = 0; expandTools = false; focusMatch = true;
     request(signal => options.preview(source, signal), found => { items = found; }, preview);
   };
   const prepare = (): void => {
@@ -457,6 +537,9 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       } else if (stage === 'preview') {
         if (key.name === 'up') offset--;
         else if (key.name === 'down') offset++;
+        else if (key.name === 'pageup') offset -= pageRows;
+        else if (key.name === 'pagedown') offset += pageRows;
+        else if (key.name === 't') expandTools = !expandTools;
         else if (key.name === 'return' && !busy && !retry) {
           stage = 'target'; target = 0; offset = 0; choice = { kind: 'source', path: picked!.workspace };
         }

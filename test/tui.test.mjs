@@ -21,9 +21,10 @@ test('production picker confirms exact prepared plan after terminal cleanup',()=
  assert.equal(dispatched.exact,true);assert.equal(dispatched.raw,false);assert.equal(dispatched.calls,1);
  assert.equal(dispatched.plan.request.target,'claude');assert.deepEqual(dispatched.plan.request.workspace,{kind:'source',path:root});
 });
-test('search shows a message excerpt in the list and attribution in the preview',()=>{
+test('search shows a message excerpt in the list and the matched item in the preview',()=>{
  const r=run([key('needle','Beta task · the hidden needle'),key('\r','Enter choose target'),key('\x1b','Enter preview'),key('\x1b','DONE')]);
- assert.match(r.output,/b7 \[assistant\]: the hidden needle/);assert.doesNotMatch(r.output,/DISPATCH/);
+ const preview=r.frames[2].replace(/\x1b\[[0-9;]*m/g,'');
+ assert.match(preview,/● claude\r?\n  Public transcript needle/);assert.doesNotMatch(preview,/Match |b7/);assert.doesNotMatch(r.output,/DISPATCH/);
 });
 test('up from the first result focuses search and down selects the first filtered result',()=>{
  const r=run([key('\x1b[A','› Search:'),key('needle','Beta task · the hidden needle'),
@@ -145,4 +146,97 @@ test('obsolete preview cannot replace the list after backing out',()=>{
 test('PTY reader preserves ordered markers across split and coalesced output',()=>{
  const result=spawnSync('python3',['test/fixtures/terminal_reader_test.py'],{encoding:'utf8',timeout:5000});
  assert.equal(result.status,0,result.stderr);
+});
+
+// Transcript preview (#16). In-process terminal with controlled size and colour.
+const transcript=[
+ {id:'item-u1-7f3a',role:'user',status:'complete',text:'First line of the request\nSecond line\r\nThird\tafter tab'},
+ {id:'item-a1-91bc',role:'assistant',status:'complete',text:'Answer with \x1b[31mred\x1b[0m and ‮bidi‬ markers'},
+ {id:'item-t1-0d2e',role:'tool',status:'complete',text:Array.from({length:10},(_,i)=>`tool line ${i+1}`).join('\n')},
+ {id:'item-a2-55f0',role:'assistant',status:'interrupted',text:'Partial reply that stopped'},
+ {id:'item-t2-c3d4',role:'tool',status:'failed',text:'command failed: needle-xyz'},
+];
+const sessionHit={id:'codex:sess',nativeId:'sess-native-1',agent:'codex',title:'Fix the flaky upload test',workspace:root,updatedAt:new Date(Date.now()-18*60_000).toISOString()};
+const sgr=/\x1b\[[0-9;]*m/g;
+async function picker({items=transcript,rows=60,columns=100,color=false,match=false}={}) {
+ const t=terminal();t.output.rows=rows;t.output.columns=columns;
+ let written='';t.output.on('data',chunk=>{written+=chunk;});
+ const saved={NO_COLOR:process.env.NO_COLOR,TERM:process.env.TERM};
+ if(color){delete process.env.NO_COLOR;process.env.TERM='xterm-256color';}else process.env.NO_COLOR='1';
+ const running=runPicker({terminal:t,workspace:root,
+  query:async q=>[{...sessionHit,matches:match&&q.text==='needle-xyz'?[{field:'message',itemId:'item-t2-c3d4',role:'tool',text:'command failed: needle-xyz'}]:[]}],
+  preview:async()=>items,prepare:async()=>{throw Error('unused');},continue:async()=>{throw Error('unexpected dispatch');}});
+ const frames=()=>written.split('\x1b[2J\x1b[H').slice(1);
+ const frame=()=>frames().at(-1)??'';
+ const until=async(test,label)=>{for(let i=0;i<200;i++){if(test(frame()))return frame();await new Promise(r=>setTimeout(r,10));}throw Error(`Missing ${label} in ${JSON.stringify(frame())}`);};
+ const send=async(data,expect,label=expect)=>{const before=frames().length;t.input.write(data);return until(text=>frames().length>before&&(typeof expect==='function'?expect(text):text.includes(expect)),label);};
+ await until(text=>text.includes('Fix the flaky upload test'),'list');
+ return {t,frame,until,send,written:()=>written,stop:async()=>{t.input.write('\x03');await running;Object.assign(process.env,saved);for(const k of ['NO_COLOR','TERM'])if(saved[k]===undefined)delete process.env[k];}};
+}
+const open=p=>p.send('\r','Enter choose target');
+const plainRows=text=>text.replace(sgr,'').split('\n');
+
+test('T1/T4/T5: the preview renders a session header and role blocks without item IDs or complete tags',async()=>{
+ const p=await picker();const text=await open(p);const rows=plainRows(text);await p.stop();
+ for(const row of ['Fix the flaky upload test','Agent: codex',`Folder: ${root}`,'Session ID: sess-native-1','5 items · 1 user · 2 assistant · 2 tool'])assert.ok(rows.some(line=>line.includes(row)),row);
+ assert.equal(rows.filter(line=>line.includes('sess-native-1')).length,1);
+ assert.ok(rows.some(line=>/^Last used: 18m ago/.test(line)));
+ const you=rows.findIndex(line=>line.startsWith('● You'));const codex=rows.findIndex(line=>line.startsWith('● codex'));
+ assert.ok(you>0&&codex>you);assert.equal(rows[codex-1],'');assert.equal(rows[you-1],'');
+ for(const item of transcript)assert.ok(!p.written().includes(item.id),item.id);
+ assert.ok(!rows.join('\n').includes('complete'));
+ assert.match(rows.find(line=>line.includes('Partial reply')===false&&line.startsWith('● codex')&&line.includes('interrupted'))??'',/interrupted/);
+ assert.ok(rows.some(line=>line.startsWith('⏺ tool output · 1 line')&&line.includes('failed')));
+ assert.ok(rows.some(line=>line.startsWith('⏺ tool output · 10 lines')));
+});
+test('T2: line breaks and tabs become rows and spaces while terminal controls stay escaped',async()=>{
+ const p=await picker();const text=await open(p);const rows=plainRows(text);await p.stop();
+ const first=rows.indexOf('  First line of the request');
+ assert.ok(first>0);assert.equal(rows[first+1],'  Second line');assert.equal(rows[first+2],'  Third  after tab');
+ assert.doesNotMatch(p.written(),/\\u000a|\\u000d|\\u0009/);
+ assert.ok(rows.some(line=>line.includes('Answer with \\u001b[31mred\\u001b[0m and \\u202ebidi\\u202c markers')));
+ assert.ok(!p.written().includes('\x1b[31m')&&!p.written().includes('‮'));
+});
+test('T3: tool output shows three lines until T expands it, and T collapses it again',async()=>{
+ const p=await picker();let rows=plainRows(await open(p));
+ assert.ok(rows.includes('  tool line 3')&&!rows.includes('  tool line 4'));assert.ok(rows.includes('  … 7 more lines'));assert.match(rows.join('\n'),/T show tool output/);
+ rows=plainRows(await p.send('t','tool line 10'));assert.ok(rows.includes('  tool line 10')&&!rows.some(line=>line.includes('more lines')));assert.match(rows.join('\n'),/T hide tool output/);
+ rows=plainRows(await p.send('t','7 more lines'));assert.ok(!rows.includes('  tool line 4'));
+ await p.stop();
+});
+test('T6: a message match opens the preview on the matched item and highlights the matched text',async()=>{
+ const p=await picker({rows:14,color:true,match:true});
+ await p.send('needle-xyz','needle-xyz');
+ const text=await p.send('\r','Enter choose target');await p.stop();
+ assert.match(text,/⏺ tool output · 1 line/);assert.match(text,/\x1b\[[0-9;]*mneedle-xyz\x1b\[0m/);
+ assert.doesNotMatch(text.replace(sgr,''),/Match |Session ID/);
+});
+test('T7: an empty history explains that only metadata is readable',async()=>{
+ const p=await picker({items:[]});const rows=plainRows(await open(p));await p.stop();
+ assert.ok(rows.includes('No readable conversation in this session (metadata only).'));
+});
+test('T8: PgDn and PgUp scroll by one body height',async()=>{
+ const tall=await picker();const all=plainRows(await tall.send('t\r'.slice(1),'Enter choose target'));await tall.stop();
+ const body=all.slice(2,all.indexOf('',all.length-3));
+ const p=await picker({rows:12});const first=plainRows(await open(p));
+ const bodyRows=12-4;assert.deepEqual(first.slice(2,2+bodyRows),body.slice(0,bodyRows));
+ const next=plainRows(await p.send('\x1b[6~',text=>plainRows(text)[2]!==first[2],'PgDn'));assert.deepEqual(next.slice(2,2+bodyRows),body.slice(bodyRows,2*bodyRows));
+ const back=plainRows(await p.send('\x1b[5~',text=>plainRows(text)[2]===first[2],'PgUp'));assert.deepEqual(back.slice(2,2+bodyRows),first.slice(2,2+bodyRows));
+ await p.stop();
+});
+test('T9: with NO_COLOR the preview has the same rows and no colour sequences',async()=>{
+ const plain=await picker();const off=await open(plain);await plain.stop();
+ const colored=await picker({color:true});const on=await open(colored);await colored.stop();
+ assert.doesNotMatch(off,/\x1b\[/);assert.match(on,sgr);assert.equal(on.replace(sgr,''),off);
+});
+
+for(const [columns,color] of [[80,true],[130,true],[80,false]]) test(`PTY: a real-looking transcript fits ${columns} columns${color?'':' with NO_COLOR'}`,()=>{
+ const r=run([{resize:[32,columns],wait:'Alpha task'},key('\r','Enter choose target'),key('\x03','DONE')],'transcript',color?{TERM:'xterm-256color'}:{NO_COLOR:'1'});
+ const frame=r.frames[2];const rows=frame.replace(sgr,'').split(/\r?\n/);
+ if(color)assert.match(frame,sgr);else assert.doesNotMatch(frame,sgr);
+ for(const row of rows)assert.ok(Array.from(row.replace(/\x1b\[[0-9;?]*[A-Za-z]/g,'')).length<columns,JSON.stringify(row));
+ for(const expected of ['Alpha task','Agent: codex','5 items · 1 user · 2 assistant · 2 tool','● You','  Please fix the flaky upload test.','  It fails about once in ten runs on CI.','● codex','⏺ tool output · 12 lines','  $ npm test -- --grep upload','  > agentswitch@0.1.0 test','  … 8 more lines','T show tool output'])
+  assert.ok(rows.some(row=>row.includes(expected)),expected);
+ assert.ok(rows.some(row=>/^  ok 1 - upload retries attempt 1 \.+…$/.test(row)),'long tool line is clipped to one row');
+ if(columns===80)assert.ok(rows.includes('  the retry logic in the upload worker.'),'prose wraps between words');
 });

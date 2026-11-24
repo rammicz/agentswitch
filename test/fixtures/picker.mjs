@@ -34,6 +34,13 @@ try {
     preview: async (source) => {
       if (scenario === 'preview-error' && reads++ === 0) throw Error('offline preview failed');
       if (scenario === 'late-preview' || scenario === 'obsolete-preview') { await new Promise(r => setTimeout(r, scenario === 'obsolete-preview' ? 900 : 250)); console.log('LATE PREVIEW'); }
+      if (scenario === 'transcript') return [
+        {id:'u1',role:'user',status:'complete',text:'Please fix the flaky upload test.\nIt fails about once in ten runs on CI.'},
+        {id:'a1',role:'assistant',status:'complete',text:'I will run the test in a loop first to reproduce the failure, then look at the retry logic in the upload worker.'},
+        {id:'t1',role:'tool',status:'complete',text:['$ npm test -- --grep upload','','> agentswitch@0.1.0 test',...Array.from({length:8},(_,i)=>`ok ${i+1} - upload retries attempt ${i+1} ${'.'.repeat(120)}`),'# pass 8'].join('\n')},
+        {id:'a2',role:'assistant',status:'interrupted',text:'The retry delay is computed from the wrong clock.'},
+        {id:'t2',role:'tool',status:'failed',text:'Error: command exited with code 1'},
+      ];
       return [{id:source.id === 'two' ? 'b7':'a1',role:'assistant',text:'Public transcript needle',status:'complete'}];
     },
     prepare: async (request) => {

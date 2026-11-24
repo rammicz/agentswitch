@@ -66,7 +66,9 @@ The CI release gate tests the actual package on Linux, macOS, and Windows with N
 | ← / → | Open the highlighted session’s subagents with →, return with ← | Cycle target agent in target selection |
 | Shift+← / Shift+→ | Cycle source agents | — |
 | Tab | Toggle folder / global scope | — |
-| Enter | Preview matches and transcript | Choose target, prepare summary, then confirm |
+| Enter | Preview the transcript, opened at the first match | Choose target, prepare summary, then confirm |
+| PgUp / PgDn | — | Scroll the transcript by one screen |
+| T | — | Show or hide full tool output in the transcript |
 | F2 | Show source warnings | — |
 | F3 | Show or hide subagents in results | — |
 | W | Search text | Explicit workspace override in target selection |
