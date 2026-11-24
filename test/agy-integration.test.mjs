@@ -26,8 +26,8 @@ async function setup(t) {
 }
 function pty(f,actions,args=[],all=false) {const r=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,rows:60,columns:210}),timeout:40000,maxBuffer:8*1024*1024});assert.equal(r.status,0,r.stderr);return all?JSON.parse(r.stdout):JSON.parse(r.stdout)[0];}
 const select=(source,publicText=false)=>[{wait:'Enter preview'},{send:source==='agy'?(publicText?'Agy public fixture':id):source==='codex'?'Codex fixture':'Claude fixture'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
-const target=[{send:'\x1b[D'},{wait:'Target: grok'},{send:'\x1b[D'},{wait:'Target: agy'}];
-const clear=[{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request: '}];
+const target=[{send:'\x1b[D'},{wait:'[grok]'},{send:'\x1b[D'},{wait:'[agy]'}];
+const clear=[{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request  '}];
 const finish=[{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'hello\n'},{wait:'INPUT "hello\\n"'},{send:'quit\n'},{wait:'uncertain — process exited'}];
 const launches=async f=>(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse);
 async function records(f){const j=await TransferJournal.open(join(f.state,'transfers'));try{return j.list();}finally{j.close();}}
@@ -37,7 +37,7 @@ async function publicSource(f,options={}) {
 }
 for(const destination of ['codex','claude'])test(`default CLI agy→${destination} transfers reviewed public text and keeps excluded native content private`,async t=>{
  const f=await setup(t);const native=await publicSource(f,{kind:'tool'});f.env.RUNTIME_TARGET=destination;
- const r=pty(f,[...select('agy',true),...(destination==='claude'?[{send:'\x1b[C'},{wait:'Target: claude'}]:[]),{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions: 1'},{send:'\r'},{wait:'tool and system steps: 2 (indexes 1–2)'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'hello\n'},{wait:'INPUT "hello\\n"'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ const r=pty(f,[...select('agy',true),...(destination==='claude'?[{send:'\x1b[C'},{wait:'[claude]'}]:[]),{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions  1'},{send:'\r'},{wait:'tool and system steps: 2 (indexes 1–2)'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'hello\n'},{wait:'INPUT "hello\\n"'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
  assert.equal(r.restored,true);const [launch]=await launches(f);assert.equal(launch.cwd,f.cwd);assert.deepEqual(launch.tty,[true,true,true]);const wire=launch.args.at(-1),payload=JSON.parse(wire);
  assert.equal(payload.history.length,2);assert.ok(parseHandoffPrompt(wire).history.every(x=>x.origin.agent==='agy'));assert.match(wire,/\[REDACTED\]/);assert.doesNotMatch(wire,/PRIVATE_|NEEDLE_SECRET|GENERIC|EXCLUDED_TOOL/);
  const [record]=await records(f);assert.equal(record.state,'uncertain');assert.equal(record.completeness,'complete');const {readArchiveSnapshot}=await import('../dist/archive.js');const archive=await readArchiveSnapshot(record.archive);assert.equal(archive.items.length,2);assert.doesNotMatch(JSON.stringify(archive),/PRIVATE_|NEEDLE_SECRET/);assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
@@ -45,12 +45,12 @@ for(const destination of ['codex','claude'])test(`default CLI agy→${destinatio
 });
 test('agy public outgoing cancellation, omission retrieval and explicit workspace override use shared consent flow',async t=>{
  const f=await setup(t);await publicSource(f,{user:'Agy public fixture '+'large '.repeat(5000)});f.env.RUNTIME_TARGET='claude';
- pty(f,[...select('agy',true),{send:'\x1b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Exact initial user prompt'},{send:'\x03'}]);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
- pty(f,[...select('agy',true),{send:'\x1b[C'},{wait:'Target: claude'},{send:'w'},{wait:'Explicit workspace override'},{send:f.other+'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ pty(f,[...select('agy',true),{send:'\x1b[C'},{wait:'[claude]'},{send:'\r'},{wait:'Exact initial user prompt'},{send:'\x03'}]);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
+ pty(f,[...select('agy',true),{send:'\x1b[C'},{wait:'[claude]'},{send:'w'},{wait:'Explicit workspace override'},{send:f.other+'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
  const [launch]=await launches(f);assert.equal(launch.cwd,f.other);const payload=JSON.parse(launch.args.at(-1));assert.ok(Buffer.byteLength(launch.args.at(-1))<=16384);assert.equal(payload.omissions.count,1);const [record]=await records(f);const {readArchiveSnapshot}=await import('../dist/archive.js');const archive=await readArchiveSnapshot(record.archive);assert.ok(archive.items.some(x=>x.text.includes('large '.repeat(100))));assert.equal(record.omittedItemIds.length,1);
 });
 test('agy public source revalidation blocks changed native bytes before publishing or launch',async t=>{
- const f=await setup(t);const native=await publicSource(f);f.env.RUNTIME_TARGET='claude';const r=pty(f,[...select('agy',true),{send:'\x1b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Exact initial user prompt'},{append:{path:native.history,text:'{}\n'}},{send:'\r'},{wait:'Source changed after preview'}]);assert.equal(r.code,1);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
+ const f=await setup(t);const native=await publicSource(f);f.env.RUNTIME_TARGET='claude';const r=pty(f,[...select('agy',true),{send:'\x1b[C'},{wait:'[claude]'},{send:'\r'},{wait:'Exact initial user prompt'},{append:{path:native.history,text:'{}\n'}},{send:'\r'},{wait:'Source changed after preview'}]);assert.equal(r.code,1);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
 });
 test('agy complete local public source preserves exact empty-request native open',async t=>{
  const f=await setup(t);await publicSource(f);pty(f,[...select('agy',true),...target,...clear,{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
@@ -58,10 +58,10 @@ test('agy complete local public source preserves exact empty-request native open
 });
 test('agy outgoing missing target refuses preparation without archive, journal or launch',async t=>{
  const f=await setup(t);await publicSource(f);await unlink(join(f.bin,'claude'));f.env.PATH=f.bin+':'+dirname(process.execPath)+':/usr/bin:/bin';
- pty(f,[...select('agy',true),{send:'\x1b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'not found or is not executable'},{send:'\x03'}]);await assert.rejects(access(f.env.RUNTIME_LOG));await assert.rejects(access(join(f.state,'archives')));assert.equal((await records(f)).length,0);
+ pty(f,[...select('agy',true),{send:'\x1b[C'},{wait:'[claude]'},{send:'\r'},{wait:'not found or is not executable'},{send:'\x03'}]);await assert.rejects(access(f.env.RUNTIME_LOG));await assert.rejects(access(join(f.state,'archives')));assert.equal((await records(f)).length,0);
 });
 for(const source of ['codex','claude'])test(`default CLI ${source}→agy uses reviewed bounded redacted context and inherited terminal`,async t=>{
- const f=await setup(t);const r=pty(f,[...select(source),...target,{send:'c'},{wait:'Current request (sent separately'},{send:'\x15--literal $(touch sentinel); `echo no` NEEDLE_SECRET\r'},{wait:'Current request: --literal'},{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions: 1'},...finish]);
+ const f=await setup(t);const r=pty(f,[...select(source),...target,{send:'c'},{wait:'Current request (sent separately'},{send:'\x15--literal $(touch sentinel); `echo no` NEEDLE_SECRET\r'},{wait:'Current request  --literal'},{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions  1'},...finish]);
  assert.equal(r.code,0);assert.equal(r.restored,true);assert.equal(r.sampledWhileAlive,true);const [launch]=await launches(f);assert.equal(launch.cwd,f.cwd);assert.deepEqual(launch.tty,[true,true,true]);assert.equal(launch.args.length,2);assert.equal(launch.args[0],'--prompt-interactive');
  const wire=launch.args[1],prompt=JSON.parse(wire);assert.equal(prompt.currentRequest,'--literal $(touch sentinel); `echo no` [REDACTED]');assert.equal(prompt.history.length,2);assert.ok(parseHandoffPrompt(wire).history.every(item=>item.origin.agent===source));assert.ok(Buffer.byteLength(wire)<=16384);assert.doesNotMatch(wire,/NEEDLE_SECRET|PRIVATE_/);await assert.rejects(access(join(f.cwd,'sentinel')));assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
  const [record]=await records(f);assert.equal(record.state,'uncertain');assert.equal(record.targetNativeId,null);assert.equal(record.continuity.targetRef,null);assert.equal(record.observation,undefined);assert.equal(record.writer,'stopped');
@@ -74,7 +74,7 @@ test('agy metadata discovery/filter/global search does no provider probes or lau
  const f=await setup(t);const r=pty(f,[{wait:'Enter preview'},{send:'\x1b[D'},{wait:'Agent: grok'},{send:'\x1b[D'},{wait:'Agent: agy'},{send:'\t'},{wait:'Scope: global'},{send:'22345678'},{wait:'Last cached conversation 22345678'},{send:'\x03'}]);assert.equal(r.restored,true);await assert.rejects(access(f.env.AGY_PROBE_LOG));await assert.rejects(access(f.env.RUNTIME_LOG));assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
 });
 for(const destination of ['codex','claude'])test(`agy→${destination} cache-only source refuses outgoing history instead of fabricating empty transcript`,async t=>{
- const f=await setup(t);pty(f,[...select('agy'),...(destination==='claude'?[{send:'\x1b[C'},{wait:'Target: claude'}]:[]),{send:'\r'},{wait:'Public history is unavailable'},{send:'\x03'}]);await assert.rejects(access(f.env.AGY_PROBE_LOG));await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
+ const f=await setup(t);pty(f,[...select('agy'),...(destination==='claude'?[{send:'\x1b[C'},{wait:'[claude]'}]:[]),{send:'\r'},{wait:'Public history is unavailable'},{send:'\x03'}]);await assert.rejects(access(f.env.AGY_PROBE_LOG));await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
 });
 test('agy cancelled target confirmation publishes no archive or journal and no launch',async t=>{
  const f=await setup(t);const r=pty(f,[...select('claude'),...target,{send:'\r'},{wait:'Exact initial user prompt'},{send:'\x03'}]);assert.equal(r.restored,true);await assert.rejects(access(f.env.RUNTIME_LOG));await assert.rejects(access(join(f.state,'archives')));assert.equal((await records(f)).length,0);

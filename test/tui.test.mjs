@@ -12,11 +12,11 @@ const run=(actions,scenario='',extra={})=>{
  const done=result.output.match(/DONE (.*)\r?\n/);if(done){const state=JSON.parse(done[1]);assert.deepEqual(state.listeners,state.before);}assert.match(result.output,/\x1b\[\?25h\x1b\[\?1049l/);return result;
 };
 const key=(send,wait)=>({send,wait});
-// The picker clips an input wider than the terminal, so wait for the start of a typed path; a deep temp root makes it that wide.
-const typePath=path=>key(path,path.slice(0,40));
+// An input wider than the terminal shows its end, so wait for the end of a typed path; a deep temp root makes it that wide.
+const typePath=path=>key(path,path.slice(-40));
 test('production picker confirms exact prepared plan after terminal cleanup',()=>{
- const r=run([key('\r','Public transcript'),key('\r','Target:'),key('\x1b[C','Target: claude'),key('\r','Mode: fresh-handoff'),key('\r','DONE')]);
- assert.match(r.output,/Included: b7/);assert.match(r.output,/Omitted: old1, old2/);
+ const r=run([key('\r','Public transcript'),key('\r','change target'),key('\x1b[C','[claude]'),key('\r','Mode  fresh handoff'),key('\r','DONE')]);
+ assert.match(r.output,/Included IDs  b7/);assert.match(r.output,/Omitted IDs  old1, old2/);
  const dispatched=JSON.parse(r.output.match(/DISPATCH (.*)\r?\n/)[1]);
  assert.equal(dispatched.exact,true);assert.equal(dispatched.raw,false);assert.equal(dispatched.calls,1);
  assert.equal(dispatched.plan.request.target,'claude');assert.deepEqual(dispatched.plan.request.workspace,{kind:'source',path:root});
@@ -24,19 +24,19 @@ test('production picker confirms exact prepared plan after terminal cleanup',()=
 test('search shows a message excerpt in the list and the matched item in the preview',()=>{
  const r=run([key('needle','Beta task · the hidden needle'),key('\r','Enter choose target'),key('\x1b','Enter preview'),key('\x1b','DONE')]);
  const preview=r.frames[2].replace(/\x1b\[[0-9;]*m/g,'');
- assert.match(preview,/● claude\r?\n  Public transcript needle/);assert.doesNotMatch(preview,/Match |b7/);assert.doesNotMatch(r.output,/DISPATCH/);
+ assert.match(preview,/● claude\r?\n {3}Public transcript needle/);assert.doesNotMatch(preview,/Match |b7/);assert.doesNotMatch(r.output,/DISPATCH/);
 });
 test('up from the first result focuses search and down selects the first filtered result',()=>{
  const r=run([key('\x1b[A','› Search:'),key('needle','Beta task · the hidden needle'),
-  key('\x1b[B','› claude Beta task'),key('\r','Enter choose target'),key('\r','Target:'),key('\x03','DONE')]);
- assert.match(r.frames[1],/› Search:[^\r\n]*\r?\n[^\r\n]*Alpha task/);
+  key('\x1b[B','› claude Beta task'),key('\r','Enter choose target'),key('\r','change target'),key('\x03','DONE')]);
+ assert.match(r.frames[1].replace(sgr,''),/› Search:[^\r\n]*\r?\n *\r?\n[^\r\n]*Alpha task/);
  assert.doesNotMatch(r.frames[2],/› claude/);
  assert.match(r.frames[5],/Choose target/);
- assert.doesNotMatch(r.frames[5],/Search:|Tab Scope:/);
+ assert.doesNotMatch(r.frames[5].replace(sgr,''),/Search:|Tab Scope:/);
 });
 test('source warnings stay off the session list and open with F2',()=>{
  const r=run([key('\x1bOQ','untested-producer'),key('\x1b','Alpha task'),key('\x03','DONE')],'source-status');
- assert.match(r.frames[0],/F2 source status/);
+ assert.match(r.frames[0].replace(sgr,''),/F2 source status/);
  assert.doesNotMatch(r.frames[0],/untested-producer/);
  assert.match(r.frames[1],/Source status/);
 });
@@ -45,12 +45,12 @@ test('last-used times and selection details remain visible after resizing',()=>{
  assert.match(r.frames[0],/Alpha task[^\n]*18m ago/);
  assert.match(r.frames[1],/Beta task[^\n]*2h ago/);
  assert.match(r.frames[2],/Details/);
- assert.match(r.frames[2],/Last used: .* UTC/);
- assert.match(r.frames[2],/Folder: /);
+ assert.match(r.frames[2].replace(sgr,''),/Last used  .* UTC/);
+ assert.match(r.frames[2].replace(sgr,''),/Folder  /);
  assert.doesNotMatch(r.output,/First opening request/);
 });
 
-const openTarget=[key('\r','Enter choose target'),key('\r','Target:')];
+const openTarget=[key('\r','Enter choose target'),key('\r','change target')];
 const noDispatch=r=>assert.doesNotMatch(r.output,/DISPATCH/);
 test('keyboard selection, source filter, scope, empty results and backspace stay independent',()=>{
  const r=run([key('\x1b[B','› claude Beta'),key('\x1b[A','› codex'),key('\x1b[C','Agent: codex'),
@@ -59,18 +59,18 @@ test('keyboard selection, source filter, scope, empty results and backspace stay
  assert.doesNotMatch(r.frames[0],/Elsewhere task|Public transcript/);noDispatch(r);
 });
 test('global selection defaults to recorded source workspace',()=>{
- const r=run([key('\x1b[B\x1b[B','› claude Elsewhere'),...openTarget,key('\r','Mode:'),key('\r','DONE')],'global');
+ const r=run([key('\x1b[B\x1b[B','› claude Elsewhere'),...openTarget,key('\r','Mode  '),key('\r','DONE')],'global');
  const p=JSON.parse(r.output.match(/DISPATCH (.*)\r?\n/)[1]);
  assert.deepEqual(p.plan.request.workspace,{kind:'source',path:other});
 });
 test('explicit workspace override is included in final summary and exact request',()=>{
- const r=run([...openTarget,key('w','Explicit workspace override'),typePath(other),key('\r','Mode:'),key('\r','DONE')]);
+ const r=run([...openTarget,key('w','Explicit workspace override'),typePath(other),key('\r','Mode  '),key('\r','DONE')]);
  const p=JSON.parse(r.output.match(/DISPATCH (.*)\r?\n/)[1]);
  assert.deepEqual(p.plan.request.workspace,{kind:'override',path:other});
 });
 test('missing source directory requires recovery or cancellation',()=>{
  const r=run([key('\x1b[B\x1b[B','Elsewhere task'),...openTarget,key('\r','Workspace unavailable'),
- key('w','Explicit workspace override'),typePath(root),key('\r','Mode:'),key('\x03','DONE')],
+ key('w','Explicit workspace override'),typePath(root),key('\r','Mode  '),key('\x03','DONE')],
  'missing',{PICKER_OTHER:join(root,'deleted')});noDispatch(r);
 });
 for(const signal of ['SIGTERM','SIGINT']) test(`${signal} cleans up without dispatch`,()=>noDispatch(run([{signal,wait:'DONE'}])));
@@ -84,14 +84,14 @@ for(const [scenario,steps,error] of [
  ['preview-error',[key('\r','offline preview failed')],'preview'],
  ['prepare-error',[...openTarget,key('\r','offline preparation failed')],'preparation'],
 ]) test(`${error} read retry does not dispatch`,()=>{
- const r=run([...steps,key('r',scenario === 'preview-error'?'Enter choose target':'Mode:'),key('\x03','DONE')],scenario);noDispatch(r);
+ const r=run([...steps,key('r',scenario === 'preview-error'?'Enter choose target':'Mode  '),key('\x03','DONE')],scenario);noDispatch(r);
 });
 test('callback failure occurs after terminal cleanup',()=>{
- const r=run([...openTarget,key('\r','Mode:'),key('\r','ERROR offline callback failed')],'callback-error');
+ const r=run([...openTarget,key('\r','Mode  '),key('\r','ERROR offline callback failed')],'callback-error');
  assert.match(r.output,/"raw":false/);assert.equal((r.output.match(/DISPATCH/g)||[]).length,1);
 });
 test('native resume mode is supplied by service even for a different target',()=>{
- const r=run([...openTarget,key('\x1b[C','Target: claude'),key('\r','Mode: native-resume'),key('\x03','DONE')],'native');noDispatch(r);
+ const r=run([...openTarget,key('\x1b[C','[claude]'),key('\r','Mode  native resume'),key('\x03','DONE')],'native');noDispatch(r);
 });
 test('stale query results do not replace a newer search',()=>{
  const r=run([key('slow','Search: slow'),key('\x7f\x7f\x7f\x7fneedle','Beta task'),{wait:'LATE QUERY'},key('\x03','DONE')]);
@@ -158,23 +158,24 @@ const transcript=[
 ];
 const sessionHit={id:'codex:sess',nativeId:'sess-native-1',agent:'codex',title:'Fix the flaky upload test',workspace:root,updatedAt:new Date(Date.now()-18*60_000).toISOString()};
 const sgr=/\x1b\[[0-9;]*m/g,hasSgr=/\x1b\[[0-9;]*m/;
-async function picker({items=transcript,rows=60,columns=100,color=false,match=false}={}) {
+async function picker({items=transcript,rows=60,columns=100,color=false,match=false,dumb=false,hits=[sessionHit],...services}={}) {
  const t=terminal();t.output.rows=rows;t.output.columns=columns;
  let written='';t.output.on('data',chunk=>{written+=chunk;});
  const saved={NO_COLOR:process.env.NO_COLOR,TERM:process.env.TERM};
- if(color){delete process.env.NO_COLOR;process.env.TERM='xterm-256color';}else process.env.NO_COLOR='1';
+ if(color){delete process.env.NO_COLOR;process.env.TERM='xterm-256color';}else if(dumb){delete process.env.NO_COLOR;process.env.TERM='dumb';}else process.env.NO_COLOR='1';
  const running=runPicker({terminal:t,workspace:root,
-  query:async q=>[{...sessionHit,matches:match&&q.text==='needle-xyz'?[{field:'message',itemId:'item-t2-c3d4',role:'tool',text:'command failed: needle-xyz'}]:[]}],
-  preview:async()=>items,prepare:async()=>{throw Error('unused');},continue:async()=>{throw Error('unexpected dispatch');}});
+  query:async q=>hits.map(hit=>({...hit,matches:match&&q.text==='needle-xyz'?[{field:'message',itemId:'item-t2-c3d4',role:'tool',text:'command failed: needle-xyz'}]:[]})),
+  preview:async()=>items,prepare:async()=>{throw Error('unused');},continue:async()=>{throw Error('unexpected dispatch');},...services});
  const frames=()=>written.split('\x1b[2J\x1b[H').slice(1);
  const frame=()=>frames().at(-1)??'';
  const until=async(test,label)=>{for(let i=0;i<200;i++){if(test(frame()))return frame();await new Promise(r=>setTimeout(r,10));}throw Error(`Missing ${label} in ${JSON.stringify(frame())}`);};
- const send=async(data,expect,label=expect)=>{const before=frames().length;t.input.write(data);return until(text=>frames().length>before&&(typeof expect==='function'?expect(text):text.includes(expect)),label);};
- await until(text=>text.includes('Details'),'list');
+ const send=async(data,expect,label=expect)=>{const before=frames().length;t.input.write(data);return until(text=>frames().length>before&&(typeof expect==='function'?expect(text):text.replace(sgr,'').includes(expect)),label);};
+ await until(text=>text.replace(sgr,'').includes('Details'),'list');
  return {t,frame,until,send,written:()=>written,stop:async()=>{t.input.write('\x03');await running;for(const [k,v] of Object.entries(saved))if(v===undefined)delete process.env[k];else process.env[k]=v;}};
 }
 const open=p=>p.send('\r','Enter choose target');
-const plainRows=text=>text.replace(sgr,'').split('\n');
+// Rows without colour and without the one-cell left margin.
+const plainRows=text=>text.replace(sgr,'').split('\n').map(row=>row.slice(1));
 // A frame is the 2-row heading, the body, a blank row and the footer.
 const bodyOf=(rows,height)=>rows.slice(2,height-2);
 
@@ -243,11 +244,93 @@ test('T9: with NO_COLOR the preview has the same rows and no colour sequences',a
 
 for(const [columns,color] of [[80,true],[130,true],[80,false]]) test(`PTY: a real-looking transcript fits ${columns} columns${color?'':' with NO_COLOR'}`,()=>{
  const r=run([{resize:[32,columns],wait:'Alpha task'},key('\r','Enter choose target'),key('\x03','DONE')],'transcript',color?{TERM:'xterm-256color'}:{NO_COLOR:'1'});
- const frame=r.frames[2];const rows=frame.replace(sgr,'').split(/\r?\n/);
+ const frame=r.frames[2];const rows=frame.replace(sgr,'').split(/\r?\n/).map(row=>row.slice(1));
  if(color)assert.match(frame,hasSgr);else assert.doesNotMatch(frame,hasSgr);
  for(const row of rows)assert.ok(Array.from(row.replace(/\x1b\[[0-9;?]*[A-Za-z]/g,'')).length<columns,JSON.stringify(row));
  for(const expected of ['Alpha task','Agent: codex','5 items · 1 user · 2 assistant · 2 tool','● You','  Please fix the flaky upload test.','  It fails about once in ten runs on CI.','● codex','⏺ tool output · 12 lines','  $ npm test -- --grep upload','  > agentswitch@0.1.0 test','  … 8 more lines','T show tool output'])
   assert.ok(rows.some(row=>row.includes(expected)),expected);
  assert.ok(rows.some(row=>/^  ok 1 - upload retries attempt 1 \.+…$/.test(row)),'long tool line is clipped to one row');
  if(columns===80)assert.ok(rows.includes('  the retry logic in the upload worker.'),'prose wraps between words');
+});
+
+// Shared palette, spacing and readable list, target and summary screens (#17).
+const codexHit={id:'codex:019a0000-0000-7000-8000-000000000001',nativeId:'019a0000-0000-7000-8000-000000000001',agent:'codex',title:'Fix the flaky upload test',workspace:root,updatedAt:new Date(Date.now()-3*60_000).toISOString()};
+const claudeHit={id:'claude:10000000-0000-4000-8000-000000000001',nativeId:'10000000-0000-4000-8000-000000000001',agent:'claude',title:'Review the retry logic',workspace:root,updatedAt:new Date(Date.now()-2*3_600_000).toISOString()};
+const exactLines=['Exact initial user prompt (7 UTF-8 bytes):','BEGIN EXACT PROMPT JSON STRING','"hello"','END EXACT PROMPT JSON STRING'];
+const screens={hits:[codexHit,claudeHit],compose:true,
+ details:async()=>[{id:'d1',role:'user',status:'complete',text:'<command-message>x</command-message> <command-name>/x</command-name> <command-args>do it</command-args>'}],
+ prepare:async request=>({plan:request,summary:{source:request.source,target:request.target,mode:request.target===request.source.agent&&!request.fresh?'native-resume':'fresh-handoff',
+  workspace:request.workspace.path,includedItemIds:['item-a','item-b'],omittedItemIds:['item-c'],previewLines:exactLines}})};
+const cells=row=>Array.from(row).length;
+const sgrOf=(text,word)=>new RegExp(`(\\x1b\\[[0-9;]*m)${word}`).exec(text)?.[1];
+
+test('#17 T1/T3: one palette colours the heading, each agent and the keycap footer',async()=>{
+ const p=await picker({...screens,color:true,rows:24,columns:80});const list=p.frame();await p.stop();
+ const heading=sgrOf(list,'agentswitch'),codex=sgrOf(list,'codex '),claude=sgrOf(list,'claude');
+ assert.ok(heading&&codex&&claude);assert.notEqual(codex,claude);assert.notEqual(codex,heading);assert.notEqual(claude,heading);
+ const footer=plainRows(list).find(row=>row.includes('Enter preview'));assert.equal(footer,'↑↓ select  Enter preview  Esc quit');
+ assert.match(list,/\x1b\[1;[0-9;]*mEnter\x1b\[0m/);
+});
+test('#17 T2/T4: the list keeps 80x24 rows, blank rows around results and a labelled details pane',async()=>{
+ const p=await picker({...screens,rows:24,columns:80});const rows=plainRows(await p.until(text=>text.includes('Opening request'),'excerpt'));await p.stop();
+ assert.ok(rows.every(row=>cells(row)<=78),JSON.stringify(rows));
+ const search=rows.findIndex(row=>row.includes('Search:'));assert.equal(rows[search+1],'');assert.match(rows[search+2],/codex +Fix the flaky upload test +3m ago$/);
+ const footer=rows.findIndex(row=>row.startsWith('↑↓ select'));assert.equal(rows[footer-1],'');
+ for(const row of ['Last used  ','Folder  ','Session ID  019a0000-0000-7000-8000-000000000001','Opening request: /x do it'])assert.ok(rows.some(line=>line.startsWith(row)),row);
+ assert.doesNotMatch(rows.join('\n'),/<command-/);
+ const wide=await picker({...screens,rows:32,columns:130});const side=plainRows(await wide.until(text=>text.includes('Opening request'),'excerpt'));await wide.stop();
+ assert.ok(side.some(row=>/3m ago │ Details$/.test(row)));assert.ok(side.some(row=>row.endsWith('│ Opening request: /x do it')));
+ assert.ok(side.every(row=>cells(row)<=128));
+});
+test('#17 T5: the target screen names the five targets and what happens, updating with ← → and F',async()=>{
+ const p=await picker({...screens,rows:30,columns:80});await open(p);let rows=plainRows(await p.send('\r','change target'));
+ assert.ok(rows.includes('  [codex]  claude  opencode  agy  grok'));assert.ok(rows.includes('  Resumes the original codex session natively.'));
+ for(const heading of ['To','Workspace','Handoff'])assert.equal(rows[rows.indexOf(heading)-1],'',heading);
+ assert.ok(rows.every(row=>cells(row)<=78));
+ for(const row of ['  Current request  Review the historical context','  Redactions  none','  Fresh context  off (automatic)','Enter review  Esc back  C edit request  X redact  F toggle fresh'])assert.ok(rows.some(line=>line.startsWith(row)),row);
+ rows=plainRows(await p.send('\x1b[C','[claude]'));assert.ok(rows.includes('  Starts claude with a handoff of this conversation.'));
+ rows=plainRows(await p.send('\x1b[D','[codex]'));assert.ok(rows.includes('  Resumes the original codex session natively.'));
+ rows=plainRows(await p.send('f','Fresh context  on'));assert.ok(rows.includes('  Starts codex with a handoff of this conversation.'));
+ rows=plainRows(await p.send('x','Literal redaction'));await p.send('secret-word','secret-word');rows=plainRows(await p.send('\r','Redactions  1'));
+ assert.ok(rows.includes('  Redactions  1 (•••)'));assert.doesNotMatch(rows.join('\n'),/secret-word/);
+ await p.stop();
+});
+test('#17 T6: the summary states mode and counts before IDs and keeps the exact payload rows unchanged',async()=>{
+ const p=await picker({...screens,color:true,rows:40,columns:100});await open(p);await p.send('\r','change target');await p.send('\x1b[C','[claude]');
+ const text=await p.send('\r','Enter confirm continuation');await p.stop();const rows=plainRows(text);
+ for(const row of ['Continuation','  Mode  fresh handoff','  To  claude','History','  Included 2 of 3 items','  Omitted 1','  Included IDs  item-a, item-b','  Omitted IDs  item-c','Exact payload'])assert.ok(rows.includes(row),row);
+ assert.ok(rows.indexOf('  Included 2 of 3 items')<rows.indexOf('  Included IDs  item-a, item-b'));
+ const raw=text.split('\n').map(row=>row.slice(1));const start=raw.indexOf(exactLines[0]);
+ assert.deepEqual(raw.slice(start,start+exactLines.length),exactLines,'payload rows are byte-identical and unstyled');
+});
+test('#17 T7: NO_COLOR and TERM=dumb render the coloured rows without any SGR sequence',async()=>{
+ const render=async options=>{const p=await picker({...screens,rows:30,columns:100,...options});const list=await p.until(text=>text.includes('Opening request'),'excerpt');
+  await open(p);const target=await p.send('\r','change target');const summary=await p.send('\r','Enter confirm continuation');await p.stop();return [list,target,summary];};
+ const colored=await render({color:true});
+ for(const plain of [await render({}),await render({dumb:true})]) {
+  for(const [index,frame] of plain.entries()) {assert.doesNotMatch(frame,/\x1b\[/);assert.equal(frame,colored[index].replace(sgr,'').replace(/(Last used  ).*UTC/,'$1'+frame.match(/Last used  (.*UTC)/)?.[1]));}
+ }
+});
+test('#17 input rows that do not fit show their end at 80 columns',async()=>{
+ const p=await picker({...screens,rows:24,columns:80});await open(p);await p.send('\r','change target');
+ const long='/'+'segment/'.repeat(20)+'typing-end';
+ await p.send('w','Explicit workspace override');let rows=plainRows(await p.send(long,'typing-end'));
+ const row=rows.find(line=>line.endsWith('typing-end'));assert.ok(row.startsWith('…')&&cells(row)===78,row);
+ await p.send('\x1b','change target');await p.send('c','Current request (sent separately');rows=plainRows(await p.send('\x15'+'word '.repeat(30)+'request-end','request-end'));
+ assert.ok(rows.some(line=>line.startsWith('…')&&line.endsWith('request-end')&&cells(line)<=78));
+ await p.send('\r','change target');await p.send('x','Literal redaction');rows=plainRows(await p.send('r'.repeat(100)+'redaction-end','redaction-end'));
+ assert.ok(rows.some(line=>line.startsWith('…')&&line.endsWith('redaction-end')&&cells(line)<=78));
+ await p.stop();
+});
+for(const [rows,columns,color] of [[24,80,true],[32,130,true],[24,80,false]]) test(`#17 PTY: list, target and summary fit ${columns}x${rows}${color?'':' with NO_COLOR'}`,()=>{
+ const r=run([{resize:[rows,columns],wait:'Alpha task'},key('\r','Enter choose target'),key('\r','change target'),key('\r','Enter confirm continuation'),key('\x03','DONE')],'',color?{TERM:'xterm-256color'}:{NO_COLOR:'1'});
+ const last=chunk=>chunk.split('\x1b[2J\x1b[H').at(-1);
+ const [list,,target,summary]=[r.frames[1],r.frames[2],r.frames[3],r.frames[4]].map(last);
+ for(const frame of [list,target,summary]) {
+  if(color)assert.match(frame,hasSgr);else assert.doesNotMatch(frame,hasSgr);
+  for(const row of frame.replace(sgr,'').split(/\r?\n/))assert.ok(Array.from(row.replace(/\x1b\[[0-9;?]*[A-Za-z]/g,'')).length<columns,JSON.stringify(row));
+ }
+ assert.match(list.replace(sgr,''),/↑↓ select  Enter preview  Esc quit/);
+ assert.match(target.replace(sgr,''),/ To\r?\n   \[codex\]  claude  opencode  agy  grok\r?\n   Resumes the original codex session natively\./);
+ assert.match(summary.replace(sgr,''),/ {3}Mode  fresh handoff/);assert.match(summary.replace(sgr,''),/ {3}Included 1 of 3 items/);
 });

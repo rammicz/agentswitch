@@ -27,9 +27,9 @@ async function setup(target='opencode') {
 function pty(f,actions,args=[],size={rows:60,columns:210}) {const result=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,...size}),timeout:40000,maxBuffer:8*1024*1024});assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout)[0];}
 const needle={opencode:'OpenCode public',codex:'Codex fixture',claude:'Claude fixture'};
 const select=source=>[{wait:'Enter preview'},{send:needle[source]},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
-const target=agent=>Array.from({length:['codex','claude','opencode'].indexOf(agent)},(_,i)=>[{send:'\x1b[C'},{wait:'Target: '+['claude','opencode'][i]}]).flat();
-const request=[{send:'c'},{wait:'Current request (sent separately'},{send:'\x15--literal $(touch sentinel); `echo no` NEEDLE_SECRET\r'},{wait:'Current request: --literal'}];
-const redact=[{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions: 1'}];
+const target=agent=>Array.from({length:['codex','claude','opencode'].indexOf(agent)},(_,i)=>[{send:'\x1b[C'},{wait:'['+['claude','opencode'][i]+']'}]).flat();
+const request=[{send:'c'},{wait:'Current request (sent separately'},{send:'\x15--literal $(touch sentinel); `echo no` NEEDLE_SECRET\r'},{wait:'Current request  --literal'}];
+const redact=[{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions  1'}];
 const finish=[{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'hello\n'},{wait:'INPUT "hello\\n"'},{send:'quit\n'},{wait:'uncertain — process exited'}];
 const launches=async f=>(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse);
 async function records(f){const journal=await TransferJournal.open(join(f.state,'transfers'));try{return journal.list();}finally{journal.close();}}
@@ -39,15 +39,15 @@ for(const [source,destination]of [['opencode','codex'],['codex','opencode'],['op
  const wire=destination==='opencode'?launch.args[1].slice('--prompt='.length):launch.args.at(-1);const prompt=JSON.parse(wire);assert.equal(prompt.currentRequest,'--literal $(touch sentinel); `echo no` [REDACTED]');assert.ok(Buffer.byteLength(wire)<=16384);assert.ok(parseHandoffPrompt(wire).history.some(item=>item.origin.agent===source));assert.doesNotMatch(wire,/PRIVATE_|NEEDLE_SECRET/);
  if(destination==='opencode')assert.deepEqual(launch.args,[await realpath(f.cwd),'--prompt='+wire]);
  assert.ok(!launch.args.some(arg=>/skip-permissions|yolo|--session|--continue|--fork/.test(arg)));
- assert.ok(result.output.replace(/\r?\n/g,'').includes(JSON.stringify(wire)));assert.match(result.output,/No supported native receipt transport|conditional on native hook/);assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
+ assert.ok(result.output.replace(/\r?\n /g,'').includes(JSON.stringify(wire)));assert.match(result.output,/No supported native receipt transport|conditional on native hook/);assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
  const [record]=await records(f);assert.equal(record.target,destination);assert.equal(record.state,'uncertain');assert.equal(record.targetNativeId,null);assert.equal(record.writer,'stopped');assert.equal(record.source.agent,source);await assert.rejects(access(join(f.cwd,'sentinel')));
 });
 test('OpenCode native requires an explicitly empty draft, keeps nonempty draft, and opens exact ses_ without a prompt',async()=>{
- const f=await setup();const result=pty(f,[...select('opencode'),...target('opencode'),...request,{send:'\r'},{wait:'Clear the request explicitly'},{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request: '},{send:'\r'},{wait:'without an initial request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);assert.equal(result.restored,true);
+ const f=await setup();const result=pty(f,[...select('opencode'),...target('opencode'),...request,{send:'\r'},{wait:'Clear the request explicitly'},{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request  '},{send:'\r'},{wait:'without an initial request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);assert.equal(result.restored,true);
  assert.deepEqual((await launches(f))[0].args,[await realpath(f.cwd),'--session='+id]);const [record]=await records(f);assert.equal(record.mode,'native-resume');assert.equal(record.prompt,'');assert.equal(record.archive,null);assert.equal(record.targetNativeId,null);assert.match(result.output,/--literal \$\(touch sentinel\)/);assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
 });
 test('OpenCode nonempty native draft recovers via explicit F and is transported intact in reviewed fresh JSON',async()=>{
- const f=await setup();pty(f,[...select('opencode'),...target('opencode'),...request,{send:'\r'},{wait:'Clear the request explicitly'},{send:'f'},{wait:'Fresh context: explicitly selected'},...finish]);const [launch]=await launches(f);assert.equal(JSON.parse(launch.args[1].slice(9)).currentRequest,'--literal $(touch sentinel); `echo no` NEEDLE_SECRET');assert.ok(!launch.args.some(a=>a.startsWith('--session=')));
+ const f=await setup();pty(f,[...select('opencode'),...target('opencode'),...request,{send:'\r'},{wait:'Clear the request explicitly'},{send:'f'},{wait:'Fresh context  on'},...finish]);const [launch]=await launches(f);assert.equal(JSON.parse(launch.args[1].slice(9)).currentRequest,'--literal $(touch sentinel); `echo no` NEEDLE_SECRET');assert.ok(!launch.args.some(a=>a.startsWith('--session=')));
 });
 test('OpenCode recorded workspace override is an explicit fresh context in the selected canonical cwd',async()=>{
  const f=await setup();pty(f,[...select('opencode'),...target('opencode'),{send:'w'},{wait:'Explicit workspace override'},{send:f.other+'\r'},{wait:'(override)'},...finish]);const [launch]=await launches(f);assert.equal(launch.cwd,await realpath(f.other));assert.equal(launch.args[0],await realpath(f.other));assert.ok(launch.args[1].startsWith('--prompt='));
@@ -69,7 +69,7 @@ test('OpenCode unknown delivery survives restart without replay and fresh recove
  const f=await setup();pty(f,[...select('codex'),...target('opencode'),...finish]);const [record]=await records(f);assert.equal(record.state,'uncertain');pty(f,[{wait:'EXPLICIT FRESH RECOVERY'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},...target('opencode'),...finish],['transfers','retry',record.id]);const all=await records(f);assert.equal(all.length,2);assert.equal((await launches(f)).length,2);assert.equal(all.find(x=>x.id!==record.id).retryOf,record.id);
 });
 test('fake 1.19.6 deletion after native validation returns home without creating a replacement or auto request',async()=>{
- const f=await setup();f.env.OPENCODE_FAKE_DELETE_AFTER_VALIDATE='1';const result=pty(f,[...select('opencode'),...target('opencode'),{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request: '},{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'SYNTHETIC NATIVE SESSION DELETED'},{wait:'uncertain — process exited'}]);assert.equal(result.restored,true);const [launch]=await launches(f);assert.deepEqual(launch.args,[await realpath(f.cwd),'--session='+id]);assert.equal(launch.created,false);assert.equal(launch.autoRequest,false);assert.equal((await records(f))[0].state,'uncertain');
+ const f=await setup();f.env.OPENCODE_FAKE_DELETE_AFTER_VALIDATE='1';const result=pty(f,[...select('opencode'),...target('opencode'),{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request  '},{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'SYNTHETIC NATIVE SESSION DELETED'},{wait:'uncertain — process exited'}]);assert.equal(result.restored,true);const [launch]=await launches(f);assert.deepEqual(launch.args,[await realpath(f.cwd),'--session='+id]);assert.equal(launch.created,false);assert.equal(launch.autoRequest,false);assert.equal((await records(f))[0].state,'uncertain');
 });
 
 test('OpenCode source filters combine with exact folder/global public-content search',async()=>{
@@ -81,12 +81,12 @@ test('OpenCode source filters combine with exact folder/global public-content se
 });
 test('OpenCode omissions retain a usable redacted archive while transport stays within the full byte budget',async()=>{
  const f=await setup('claude');const db=new DatabaseSync(f.path);db.prepare('UPDATE part SET data=? WHERE id=?').run(JSON.stringify({type:'text',text:'OpenCode public NEEDLE_SECRET '+'huge '.repeat(5000)}),'prt_b');db.close();
- const result=pty(f,[...select('opencode'),...target('claude'),...redact,...finish]);assert.match(result.output,/Omitted: [a-f0-9]{64}/);const wire=(await launches(f))[0].args.at(-1);const prompt=JSON.parse(wire);assert.ok(Buffer.byteLength(wire)<=16384);assert.equal(prompt.omissions.count,1);
+ const result=pty(f,[...select('opencode'),...target('claude'),...redact,...finish]);assert.match(result.output,/Omitted IDs  [a-f0-9]{64}/);const wire=(await launches(f))[0].args.at(-1);const prompt=JSON.parse(wire);assert.ok(Buffer.byteLength(wire)<=16384);assert.equal(prompt.omissions.count,1);
  const [record]=await records(f);const {readArchiveSnapshot}=await import('../dist/archive.js');const snapshot=await readArchiveSnapshot(record.archive);assert.equal(snapshot.items.length,5);assert.ok(snapshot.items.some(item=>item.text.includes('huge ')));assert.doesNotMatch(JSON.stringify(snapshot),/NEEDLE_SECRET|PRIVATE_/);assert.ok(record.omittedItemIds.length===1);
  const archived=spawnSync(process.execPath,[join(repo,'dist/cli.js'),'archive','read','--directory',record.archive.directory,'--archive',record.archive.id,'--item','1'],{encoding:'utf8',env:{...process.env,...f.env}});assert.equal(archived.status,0,archived.stderr);assert.match(JSON.parse(archived.stdout).text,/OpenCode public \[REDACTED\]/);
 });
 test('selected OpenCode ID removed during capability preparation is refused at dispatch without a journal or model turn',async()=>{
- const f=await setup();f.env.OPENCODE_FAKE_DELETE_DURING_HELP='1';const result=pty(f,[...select('opencode'),...target('opencode'),{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request: '},{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'Selected source is unavailable'}]);assert.equal(result.code,1);assert.equal(result.restored,true);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
+ const f=await setup();f.env.OPENCODE_FAKE_DELETE_DURING_HELP='1';const result=pty(f,[...select('opencode'),...target('opencode'),{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request  '},{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'Selected source is unavailable'}]);assert.equal(result.code,1);assert.equal(result.restored,true);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
 });
 for(const scenario of ['auth','exit7','self-signal'])test(`OpenCode default CLI ${scenario} preserves native status and restores terminal`,async()=>{
  const f=await setup();f.env.RUNTIME_SCENARIO=scenario;const result=pty(f,[...select('codex'),...target('opencode'),{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'uncertain — process exited'}]);assert.equal(result.restored,true);assert.equal(result.code,scenario==='exit7'?7:1);const [record]=await records(f);assert.equal(record.state,'uncertain');assert.equal(record.writer,'stopped');if(scenario==='self-signal')assert.equal(record.exit.signal,'SIGTERM');if(scenario==='auth')assert.match(result.output,/SYNTHETIC AUTH REFUSAL/);
@@ -95,7 +95,7 @@ for(const name of ['SIGINT','SIGTERM'])test(`OpenCode raw terminal receives ${na
  const f=await setup();f.env.RUNTIME_SCENARIO='raw';const result=pty(f,[...select('codex'),...target('opencode'),{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{signal:name},{wait:'uncertain — process exited'}]);assert.equal(result.restored,true);assert.equal(result.code,1);const [record]=await records(f);assert.equal(record.exit.signal,name);assert.equal(record.writer,'stopped');
 });
 test('OpenCode native resume with help lacking --session fails before publication or launch',async()=>{
- const f=await setup();f.env.OPENCODE_FAKE_HELP='opencode [project]\n--prompt only';pty(f,[...select('opencode'),...target('opencode'),{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request: '},{send:'\r'},{wait:'does not advertise --session'},{send:'\x03'}]);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
+ const f=await setup();f.env.OPENCODE_FAKE_HELP='opencode [project]\n--prompt only';pty(f,[...select('opencode'),...target('opencode'),{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request  '},{send:'\r'},{wait:'does not advertise --session'},{send:'\x03'}]);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
 });
 test('default CLI accepts an external OpenCode DB with a shared ancestor and separate application state',async()=>{
  const f=await setup();f.env.OPENCODE_DB=await fixture(join(f.root,'opencode.db'),f.cwd);const result=pty(f,[...select('codex'),...target('opencode'),...finish]);assert.equal(result.code,0);assert.equal((await launches(f)).length,1);
@@ -107,7 +107,7 @@ test('default CLI transfers readable OpenCode history with an unknown part as di
  const result=pty(f,[...select('opencode'),{send:'\r'},{wait:'Partial history:'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}],[],{rows:14,columns:58});
  assert.equal(result.restored,true);assert.equal(result.code,0);
  // The review screen hard-wraps at 58 columns.
- assert.match(result.output.replace(/\r\n/g,''),/Partial history: at least 1 source record could not be read \(unsupported-shape\) and is not included\./);
+ assert.match(result.output.replace(/\r\n /g,''),/Partial history: at least 1 source record could not be read \(unsupported-shape\) and is not included\./);
  assert.doesNotMatch(result.output,/UNCLASSIFIED_PUBLIC_TEXT/);
  const [launch]=await launches(f),wire=launch.args.at(-1),prompt=parseHandoffPrompt(wire);
  assert.equal(JSON.parse(wire).completeness,'partial');assert.ok(prompt.history.length>0);assert.ok(prompt.history.some(item=>/OpenCode public/.test(item.text)));assert.doesNotMatch(wire,/UNCLASSIFIED_PUBLIC_TEXT/);
@@ -140,7 +140,7 @@ test('OpenCode source with only unreadable parts refuses before archive, journal
 });
 test('a 2.x OpenCode session is offered only a fresh handoff, even to OpenCode',async()=>{
  const f=await setup('opencode');f.env.OPENCODE_DB=await fixtureV2(join(f.root,'opencode2','opencode.db'),f.cwd);
- const result=pty(f,[{wait:'Enter preview'},{send:'V2 public'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},...target('opencode'),{send:'\r'},{wait:'Mode: fresh-handoff'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ const result=pty(f,[{wait:'Enter preview'},{send:'V2 public'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},...target('opencode'),{send:'\r'},{wait:'Mode  fresh handoff'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
  assert.equal(result.restored,true);assert.doesNotMatch(result.output,/PRIVATE_/);
  const [launch]=await launches(f);assert.ok(launch.args[1].startsWith('--prompt='));assert.ok(!launch.args.some(arg=>arg.startsWith('--session')));
  const prompt=parseHandoffPrompt(launch.args[1].slice('--prompt='.length));assert.deepEqual(prompt.history.map(item=>item.text).slice(0,3),['V2 public question','Part one','Tool output']);

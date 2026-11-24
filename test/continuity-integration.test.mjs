@@ -27,7 +27,7 @@ const select=(text)=>[{wait:'Enter preview'},{send:text},{wait:'Enter preview'},
 const confirm=[{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'}];
 async function record(f) {const journal=await TransferJournal.open(join(f.state,'transfers'));try{return journal.list();}finally{journal.close();}}
 async function switchToB(f) {
- const before=await hash(f.aFile);const result=pty(f,[...select('A original'),{send:'\u001b[C'},{wait:'Target: claude'},...confirm,{wait:'uncertain — process exited'}]);
+ const before=await hash(f.aFile);const result=pty(f,[...select('A original'),{send:'\u001b[C'},{wait:'[claude]'},...confirm,{wait:'uncertain — process exited'}]);
  assert.equal(result.restored,true);assert.equal(await hash(f.aFile),before);
  const [launch]= (await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(launch.locator,false);
  return launch;
@@ -37,7 +37,7 @@ test('default CLI A→B→A resumes actual A, aliases echo, sends missing IDs on
  const [first]=await record(f);const originalIds=first.includedItemIds;
  const result=pty(f,[...select('B response'),{send:'\r'},{wait:'Actual resumed target: codex '+ids[0]},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'accepted — correlated native turn'}]);
  assert.equal(result.code,0);assert.equal(result.restored,true);assert.equal(await hash(bLaunch.path),bBefore);
- assert.ok(result.output.includes('Current request: '+DEFAULT_CURRENT_REQUEST.slice(0,100)),'unedited target screen shows the shared default request');
+ assert.ok(result.output.includes('Current request  '+DEFAULT_CURRENT_REQUEST.slice(0,100)),'unedited target screen shows the shared default request');
  assert.equal(await hash(f.config),f.configHash);
  const launches=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse),aLaunch=launches[1];
  assert.equal(aLaunch.args[0],'resume');assert.equal(aLaunch.args.at(-2),ids[0]);assert.deepEqual(aLaunch.tty,[true,true,true]);
@@ -89,7 +89,7 @@ for(const change of ['growth','replacement','root'])test(`default CLI ${change} 
 test('explicit F recovers active source after direct archive deletion without importing unavailable ancestry',async()=>{
  const f=await setup();await switchToB(f);const [first]=await record(f);
  await rm(join(first.archive.directory,first.archive.id+'.json'));
- const result=pty(f,[...select('B response'),{send:'f'},{wait:'Fresh context: explicitly selected'},...confirm,{wait:'accepted — correlated native turn'}]);
+ const result=pty(f,[...select('B response'),{send:'f'},{wait:'Fresh context  on'},...confirm,{wait:'accepted — correlated native turn'}]);
  assert.equal(result.code,0);const launch=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse).at(-1);assert.ok(!launch.args.includes('resume'));
  assert.deepEqual(JSON.parse(launch.args.at(-1)).history.map(item=>item.text),['A original request','A original answer',DEFAULT_CURRENT_REQUEST,'B response']);
  // Recovered ancestry keeps its attribution: the first attempt's stored v2 prompt is decoded, not just its texts.
@@ -108,7 +108,7 @@ test('explicit F recovery decodes a journaled v1 envelope with its status and or
  const echo=(await readFile(bLaunch.path,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(echo[0].message.content,first.prompt);echo[0].message.content=v1;
  await writeFile(bLaunch.path,echo.map(JSON.stringify).join('\n')+'\n');
  await rm(join(first.archive.directory,first.archive.id+'.json'));
- pty(f,[...select('B response'),{send:'f'},{wait:'Fresh context: explicitly selected'},...confirm,{wait:'accepted — correlated native turn'}]);
+ pty(f,[...select('B response'),{send:'f'},{wait:'Fresh context  on'},...confirm,{wait:'accepted — correlated native turn'}]);
  const launch=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse).at(-1);assert.ok(!launch.args.includes('resume'));
  const recovered=parseHandoffPrompt(launch.args.at(-1)).history;
  assert.deepEqual(recovered.map(item=>item.text),['A original request','A original answer',DEFAULT_CURRENT_REQUEST,'B response']);
@@ -117,7 +117,7 @@ test('explicit F recovery decodes a journaled v1 envelope with its status and or
 });
 test('partial paginated Codex source goes fresh to Claude and its context is never reused on return',async()=>{
  const f=await setup();await appendFile(f.aFile,JSON.stringify(completed('FutureItem','a3','PRIVATE_FUTURE',3))+'\n');
- const first=pty(f,[...select(ids[0]),{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Partial history: at least 1 source record'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ const first=pty(f,[...select(ids[0]),{send:'\u001b[C'},{wait:'[claude]'},{send:'\r'},{wait:'Partial history: at least 1 source record'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
  assert.equal(first.code,0);const [partial]=await record(f);assert.equal(partial.completeness,'partial');
  pty(f,[...select('B response'),...confirm,{wait:'accepted — correlated native turn'}]);
  const launches=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse),last=launches.at(-1);
@@ -155,10 +155,10 @@ for(const mode of ['disabled','submit-only','wrong-hash','wrong-turn','backgroun
 });
 test('retrying an uncertain Codex reuse attempt prefills its current request, not the whole envelope',async()=>{
  const f=await setup('disabled');await switchToB(f);
- pty(f,[...select('B response'),{send:'c'},{wait:'Current request (sent separately'},{send:'\u0015Reuse request\r'},{wait:'Current request: Reuse request'},...confirm,{wait:'uncertain — process exited'}]);
+ pty(f,[...select('B response'),{send:'c'},{wait:'Current request (sent separately'},{send:'\u0015Reuse request\r'},{wait:'Current request  Reuse request'},...confirm,{wait:'uncertain — process exited'}]);
  const [reuse]=await record(f);assert.equal(reuse.mode,'native-resume');assert.ok(reuse.archive);assert.equal(JSON.parse(reuse.prompt).currentRequest,'Reuse request');
  const result=pty(f,[{wait:'EXPLICIT FRESH RECOVERY'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\x03'}],['transfers','retry',reuse.id]);
- assert.match(result.output,/Current request: Reuse request/);assert.doesNotMatch(result.output,/Current request: \{/);
+ assert.match(result.output,/Current request  Reuse request/);assert.doesNotMatch(result.output,/Current request  \{/);
 });
 
 test('T4: an expired A→B archive changes neither the B→A native return nor a retry of the handoff, only archive retrieval',async()=>{

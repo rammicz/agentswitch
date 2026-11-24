@@ -81,20 +81,64 @@ function clipPanel(text: string, width: number): string {
   const lines = panelWrap(text, width);
   return lines.length === 1 ? lines[0]! : `${panelWrap(lines[0]!, width - 1)[0]!.trimEnd()}…`;
 }
+/** The picker's one semantic palette (truecolor SGR). NO_COLOR or TERM=dumb renders the same rows without it. */
 const palette = {
-  heading: '1;38;2;221;210;252;48;2;47;40;65',
-  selected: '1;38;2;202;239;222;48;2;37;61;57',
-  time: '38;2;203;220;248;48;2;41;51;70',
+  accent: '38;2;215;119;87',
+  heading: '1;38;2;215;119;87',
+  key: '1;38;2;215;119;87',
   title: '1',
-  muted: '38;2;147;153;178',
-  user: '1;38;2;203;220;248',
-  assistant: '1;38;2;202;239;222',
-  warning: '38;2;249;226;175',
-  danger: '38;2;243;139;168',
-  highlight: '1;38;2;30;30;46;48;2;249;226;175',
-};
+  text: '39',
+  muted: '38;2;150;150;162',
+  selectedBg: '48;2;52;52;66',
+  success: '38;2;135;200;130',
+  warning: '38;2;235;200;110',
+  error: '38;2;240;110;120',
+  highlight: '1;38;2;30;30;46;48;2;235;200;110',
+  codex: '38;2;125;174;250',
+  claude: '38;2;232;160;113',
+  opencode: '38;2;158;206;106',
+  agy: '38;2;187;154;247',
+  grok: '38;2;115;218;202',
+} satisfies Record<string, string>;
 type Tone = keyof typeof palette;
-const styled = (text: string, tone: Tone, color: boolean) => color ? `\x1b[${palette[tone]}m${text}\x1b[0m` : text;
+const styled = (text: string, tone: Tone | readonly Tone[], color: boolean): string => color && text
+  ? `\x1b[${(typeof tone === 'string' ? [tone] : tone).map(name => palette[name]).join(';')}m${text}\x1b[0m` : text;
+type Hint = readonly [key: string, action: string];
+/** Key hints as keycaps: the key in bold accent and its action muted, two spaces apart. Hints that do not fit are dropped from the end. */
+function keycaps(hints: readonly Hint[], width: number, color: boolean): string {
+  const plain = (count: number) => hints.slice(0, count).map(([key, action]) => key ? `${key} ${action}` : action).join('  ');
+  let count = hints.length;
+  while (count > 1 && cellCount(plain(count)) > width) count--;
+  if (cellCount(plain(count)) > width) return clipPanel(plain(count), width);
+  return hints.slice(0, count).map(([key, action]) => key
+    ? styled(key, 'key', color) + styled(` ${action}`, 'muted', color) : styled(action, 'muted', color)).join('  ');
+}
+/** A muted label and its plain value two spaces apart, wrapped to at most `limit` rows. */
+function pair(label: string, value: string, width: number, color: boolean, limit = Infinity): string[] {
+  return panelWrap(`${label}  ${value}`, width).slice(0, limit)
+    .map((row, index) => index === 0 && row.startsWith(label) ? styled(label, 'muted', color) + row.slice(label.length) : row);
+}
+/** One input row. Text that does not fit shows its end after `…`, so the typing position stays visible. */
+function inputRow(text: string, width: number): string {
+  const rows = panelWrap(text, width);
+  if (rows.length === 1) return rows[0]!;
+  const segments = Array.from(graphemes.segment(clean(text)), ({ segment }) => segment);
+  let row = '', cells = 0;
+  for (let index = segments.length - 1; index >= 0; index--) {
+    const size = terminalWidth(segments[index]!);
+    if (cells + size > width - 1) break;
+    row = segments[index] + row; cells += size;
+  }
+  return `…${row}`;
+}
+const indent = (rows: readonly string[]): string[] => rows.map(row => `  ${row}`);
+/** Claude Code wraps slash commands in markup; show them as typed (`/name args`). Other text is unchanged. */
+function readableRequest(text: string): string {
+  const name = /<command-name>\s*([^<]*?)\s*<\/command-name>/.exec(text)?.[1];
+  if (!name) return text;
+  const args = /<command-args>\s*([\s\S]*?)\s*<\/command-args>/.exec(text)?.[1] ?? '';
+  return `${name.startsWith('/') ? name : `/${name}`}${args ? ` ${args}` : ''}`;
+}
 
 const exactTime = (timestamp: string): string => Number.isFinite(Date.parse(timestamp))
   ? new Date(timestamp).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'Unknown';
@@ -145,10 +189,10 @@ function transcriptBlocks(source: SessionHit, items: readonly HistoryItem[], wid
     if (lines.length > 1 && lines.at(-1) === '') lines.pop();
     const tool = item.role === 'tool';
     const label = tool ? `⏺ tool output · ${plural(lines.length, 'line')}` : item.role === 'user' ? '● You' : `● ${source.agent}`;
-    const tone = item.role === 'tool' ? 'muted' : item.role;
+    const tone: Tone | Tone[] = item.role === 'tool' ? 'muted' : item.role === 'user' ? 'title' : ['title', source.agent];
     const tag = item.status === 'complete' ? '' : `  ${item.status}`;
     // The status tag keeps at least one label cell beside it; a row too narrow for both clips them together.
-    rows.push(width > tag.length ? styled(clipPanel(label, width - tag.length), tone, color) + (tag && styled(tag, item.status === 'failed' ? 'danger' : 'warning', color))
+    rows.push(width > tag.length ? styled(clipPanel(label, width - tag.length), tone, color) + (tag && styled(tag, item.status === 'failed' ? 'error' : 'warning', color))
       : styled(clipPanel(label + tag, width), tone, color));
     if (!tool || expandTools) { for (const text of lines) for (const row of wordWrap(text, textWidth)) indent(row, tool ? 'muted' : undefined); continue; }
     // Collapsed tool output: the first three non-empty lines, one row each.
@@ -175,37 +219,41 @@ function sessionList(hits: readonly SessionHit[], selected: number, text: string
   details: readonly string[], color: boolean): string[] {
   const sideBySide = selected >= 0 && width >= 96 && height >= 4;
   const detailRows = selected < 0 ? 0 : sideBySide ? height : height >= 8 ? Math.max(5, Math.floor(height * 0.47)) : 0;
-  const listRows = Math.max(1, sideBySide ? height : height - detailRows);
+  const listRows = Math.max(1, sideBySide ? height : height - detailRows - (detailRows ? 1 : 0));
   const listWidth = sideBySide ? Math.floor(width * 0.43) : width;
   const detailWidth = sideBySide ? width - listWidth - 3 : width;
   const now = Date.now();
   const start = Math.max(0, selected - listRows + 1);
+  // Each row fills listWidth: marker, agent, title, then the age right-aligned.
   const list = hits.slice(start, start + listRows).map((hit, i) => {
     const chosen = start + i === selected;
-    const age = lastUsed(hit.lastUsedAt ?? hit.updatedAt, now);
-    const time = listWidth >= 25 ? `  ${age}` : '';
+    const paint = (part: string, ...tones: Tone[]) => styled(part, chosen ? ['selectedBg', ...tones] : tones, color && (chosen || tones.length > 0));
+    const age = listWidth >= 25 ? lastUsed(hit.lastUsedAt ?? hit.updatedAt, now) : '';
     const marker = chosen ? '›' : hit.subagent ? '↳' : ' ';
     const children = hit.subagentCount ? '  →' : '';
-    const label = clipPanel(`${marker} ${hit.agent.padEnd(6)} ${searchResultLabel(hit, text)}`, Math.max(1, listWidth - time.length - cellCount(children))) + children;
-    return {plain:label + time, painted:(chosen ? styled(label, 'selected', color) : label) + (time ? `  ${styled(age, 'time', color)}` : '')};
+    const prefix = `${marker} ${hit.agent.padEnd(6)} `;
+    const label = clipPanel(prefix + searchResultLabel(hit, text), Math.max(1, listWidth - (age ? cellCount(age) + 2 : 0) - cellCount(children)));
+    const pad = ' '.repeat(Math.max(0, listWidth - cellCount(label + children) - cellCount(age)));
+    const title = label.startsWith(prefix)
+      ? paint(marker, chosen ? 'accent' : 'muted') + paint(' ') + paint(hit.agent.padEnd(6), hit.agent) + paint(' ') + paint(label.slice(prefix.length))
+      : paint(label);
+    return title + paint(children, 'muted') + paint(pad) + paint(age, 'muted');
   });
-  if (!detailRows) return list.map(row => row.painted);
+  if (!detailRows) return list;
   const hit = hits[selected]!;
-  const timestamp = hit.lastUsedAt ?? hit.updatedAt;
-  const exact = exactTime(timestamp);
   const match = hit.matches.find(item => item.field === 'message');
-  const notes = [...panelWrap(hit.title, detailWidth).slice(0, 2), ...panelWrap(`Last used: ${exact}`, detailWidth),
-    ...panelWrap(`Folder: ${hit.workspace}`, detailWidth).slice(0, 3),
-    ...(hit.subagentCount ? panelWrap(`Subagents: ${hit.subagentCount} · → open`, detailWidth) : []),
-    ...(match ? [`Match (${match.role}): ${match.text.replace(/\s+/gu, ' ')}`] : details).flatMap(line => panelWrap(line, detailWidth)).slice(0, 7),
-    ...panelWrap(`Session ID: ${hit.nativeId}`, detailWidth)];
-  const pane = [styled('Details', 'heading', color), ...notes].slice(0, detailRows);
-  if (!sideBySide) return [...list.map(row => row.painted), ...pane];
-  return Array.from({ length: Math.max(list.length, pane.length) }, (_, i) => {
-    const row = list[i];
-    const padding = ' '.repeat(Math.max(0, listWidth - cellCount(row?.plain ?? '')));
-    return `${row?.painted ?? ''}${padding} | ${pane[i] ?? ''}`;
-  });
+  const excerpts = (match ? [`Match (${match.role}): ${match.text.replace(/\s+/gu, ' ')}`] : details).flatMap(line => panelWrap(line, detailWidth)).slice(0, 7);
+  const full = [styled('Details', 'heading', color), ...panelWrap(hit.title, detailWidth).slice(0, 2).map(row => styled(row, 'title', color)), '',
+    ...pair('Last used', exactTime(hit.lastUsedAt ?? hit.updatedAt), detailWidth, color),
+    ...pair('Folder', hit.workspace, detailWidth, color, 3),
+    ...pair('Session ID', hit.nativeId, detailWidth, color, 2),
+    ...(hit.subagentCount ? pair('Subagents', `${hit.subagentCount}  → open`, detailWidth, color) : []),
+    ...(excerpts.length ? ['', ...excerpts] : [])];
+  // A short pane gives up its spacing before its content.
+  const pane = (full.length > detailRows ? full.filter(Boolean) : full).slice(0, detailRows);
+  if (!sideBySide) return [...list, '', ...pane];
+  const blank = ' '.repeat(listWidth);
+  return Array.from({ length: Math.max(list.length, pane.length) }, (_, i) => `${list[i] ?? blank} ${styled('│', 'muted', color)} ${pane[i] ?? ''}`);
 }
 
 function searchResultLabel(hit: SessionHit, query: string): string {
@@ -310,44 +358,52 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
   };
   const draw = (): void => {
     if (!active) return;
-    const width = Math.max(1, (output.columns || 80) - 1);
+    // One cell of left margin, and the last column stays free so a full row never wraps.
+    const width = Math.max(1, (output.columns || 80) - 2);
     const height = Math.max(1, output.rows || 24);
     const color = process.env.NO_COLOR === undefined && process.env.TERM !== 'dumb';
     const inList = stage === 'list' && !showingSources;
     const sourceNotices = options.notices?.() ?? [];
     const parent = parents.at(-1);
     const searchFocused = selected < 0 || !hits.length;
-    const searchLabel = clipPanel(`${searchFocused ? '›' : ' '} Search: ${query.text || 'type to search history…'}`, width);
-    const heading = showingSources ? 'Source status' : stage === 'target' ? 'Choose target'
-      : inList && parent ? `Subagents of ${parent.title}` : options.label ?? 'agentswitch';
-    const header = inList ? [heading, parent ? '← Back to parent' : `Shift+←/→ Agent: ${query.agent}     Tab Scope: ${query.scope}`,
-      '', searchFocused ? styled(searchLabel, 'selected', color) : searchLabel] : [heading, ''];
-    const retryHint = retry && !showingSources ? (inList ? ' · Ctrl+R retry' : ' · R retry') : '';
-    const hints = inList ? [
-      parent ? '' : `F3 ${query.includeSubagents ? 'hide' : 'show'} subagents`,
-      sourceNotices.length ? 'F2 source status' : '',
-    ].filter(Boolean).join(' · ') : '';
+    const heading = styled(clipPanel(showingSources ? 'Source status' : stage === 'target' ? 'Choose target'
+      : inList && parent ? `Subagents of ${parent.title}` : options.label ?? 'agentswitch', width), 'heading', color);
+    // Every row below is built to fit `width` and escaped by its stage; the frame only adds the margin.
+    let header = [heading, ''];
+    if (inList) {
+      const prompt = `${searchFocused ? '›' : ' '} Search: `;
+      const search = prompt + (query.text ? inputRow(query.text, Math.max(1, width - prompt.length)) : 'type to search history…');
+      header = [heading, keycaps(parent ? [['←', 'Back to parent']] : [['Shift+←/→', `Agent: ${query.agent}`], ['Tab', `Scope: ${query.scope}`]], width, color),
+        '', searchFocused ? styled(clipPanel(search, width), 'selectedBg', color) : clipPanel(search, width), ''];
+    }
+    const hints: Hint[] = inList ? [
+      ...(parent ? [] : [['F3', `${query.includeSubagents ? 'hide' : 'show'} subagents`] as const]),
+      ...(sourceNotices.length ? [['F2', 'source status'] as const] : []),
+    ] : [];
+    if (retry && !showingSources) hints.push(inList ? ['Ctrl+R', 'retry'] : ['R', 'retry']);
     const status = [
-      ...(inList && updateNotice ? [updateNotice] : []),
-      ...(notice && !showingSources ? (notice + retryHint).split('\n') : []),
-      ...(hints ? [hints] : []),
-    ].flatMap(line => panelWrap(line, width)).slice(0, Math.max(0, height - header.length - 3));
+      ...(inList && updateNotice ? panelWrap(updateNotice, width) : []),
+      ...(notice && !showingSources ? notice.split('\n').flatMap(line => panelWrap(line, width)) : []),
+      ...(hints.length ? [keycaps(hints, width, color)] : []),
+    ].slice(0, Math.max(0, height - header.length - 3));
     const bodyRows = Math.max(1, height - header.length - status.length - 2);
     pageRows = bodyRows;
+    const inner = Math.max(1, width - 2);
+    const section = (title: string) => styled(title, 'title', color);
     let body: string[];
-    let footer: string;
+    let footer: Hint[];
     if (showingSources) {
       const lines = wrap(sourceNotices.length ? sourceNotices : ['No source warnings.'], width);
       sourceOffset = Math.max(0, Math.min(sourceOffset, lines.length - bodyRows));
       body = lines.slice(sourceOffset, sourceOffset + bodyRows);
-      footer = '↑ ↓ Scroll · Esc back';
+      footer = [['↑↓', 'scroll'], ['Esc', 'back']];
     } else if (stage === 'list') {
       const progress = query.text.trim() ? 'Searching history…' : 'Finding local sessions…';
       body = hits.length ? sessionList(hits, selected, query.text, width, bodyRows, detailLines, color)
-        : [clipPanel(busy ? progress : 'No matching sessions. Clear the search or change scope.', width)];
-      const back = parents.length ? '← Back' : 'Esc quit';
-      footer = selected < 0 && hits.length ? `↓ Results · ${back}` : `↑ ↓ Select · Enter preview · ${back}`;
-      if (busy) footer = hits.length ? `↑ ↓ Select · Enter open session · ${back} · ${progress}` : back;
+        : [styled(clipPanel(busy ? progress : 'No matching sessions. Clear the search or change scope.', width), 'muted', color)];
+      const back: Hint = parents.length ? ['←', 'back'] : ['Esc', 'quit'];
+      footer = selected < 0 && hits.length ? [['↓', 'results'], back] : [['↑↓', 'select'], ['Enter', 'preview'], back];
+      if (busy) footer = hits.length ? [['↑↓', 'select'], ['Enter', 'open session'], back, ['', progress]] : [back];
     } else if (stage === 'preview') {
       const inputs = [picked, items, width, color, expandTools, query.text];
       if (!blocks || inputs.some((input, index) => input !== blocks!.inputs[index])) blocks = { inputs, value: transcriptBlocks(picked!, items, width, color, expandTools, query.text) };
@@ -359,51 +415,70 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       }
       offset = Math.max(0, Math.min(offset, Math.max(0, rows.length - bodyRows)));
       body = rows.slice(offset, offset + bodyRows);
-      const tools = items.some(item => item.role === 'tool') ? ` · T ${expandTools ? 'hide' : 'show'} tool output` : '';
-      footer = `Enter choose target · Esc back · ↑ ↓ PgUp PgDn scroll${tools}`;
+      footer = [['Enter', 'choose target'], ['Esc', 'back'], ['↑↓ PgUp PgDn', 'scroll'],
+        ...(items.some(item => item.role === 'tool') ? [['T', `${expandTools ? 'hide' : 'show'} tool output`] as const] : [])];
     } else if (stage === 'request' || stage === 'redaction') {
-      body = [stage === 'request' ? 'Current request (sent separately from historical data):' : 'Literal redaction (replace every match before transfer retention):', stage === 'request' ? currentRequest : redactionInput, 'Enter save · Esc cancel'].map(line => clipPanel(line, width));
-      footer = 'Backspace edit · Ctrl+U clear';
+      const value = stage === 'request' ? currentRequest : redactionInput;
+      body = [clipPanel(stage === 'request' ? 'Current request (sent separately from historical data):' : 'Literal redaction (replace every match before transfer retention):', width),
+        '', inputRow(value, width), '', keycaps([['Enter', 'save'], ['Esc', 'cancel']], width, color)];
+      footer = [['Backspace', 'edit'], ['Ctrl+U', 'clear']];
     } else if (stage === 'workspace') {
-      body = ['Explicit workspace override:', pathInput || 'Type an absolute or relative directory path'].map(line => clipPanel(line, width));
-      footer = 'Enter use this folder and prepare · Esc cancel override';
+      body = [clipPanel('Explicit workspace override:', width), '',
+        pathInput ? inputRow(pathInput, width) : styled(clipPanel('Type an absolute or relative directory path', width), 'muted', color)];
+      footer = [['Enter', 'use this folder and prepare'], ['Esc', 'cancel override']];
     } else if (stage === 'summary') {
       const summary = prepared!.summary;
-      body = wrap([...(summary.partialHistory ? [summary.partialHistory] : []), `Source: ${summary.source.agent}/${summary.source.id} (${summary.source.nativeId})`,
-        `Target: ${summary.target}`, `Mode: ${summary.mode}`, `Workspace: ${summary.workspace}`,
-        `Included: ${summary.includedItemIds.join(', ') || '(none)'}`, `Omitted: ${summary.omittedItemIds.join(', ') || '(none)'}`, ...(summary.previewLines ?? [])], width);
+      const included = summary.includedItemIds, omitted = summary.omittedItemIds;
+      const ids = (label: string, list: readonly string[]) => list.length ? indent(panelWrap(`${label}  ${list.join(', ')}`, inner)).map(row => styled(row, 'muted', color)) : [];
+      const rows = [
+        ...(summary.partialHistory ? [...panelWrap(summary.partialHistory, width).map(row => styled(row, 'warning', color)), ''] : []),
+        section('Continuation'),
+        ...indent([...pair('Mode', summary.mode === 'native-resume' ? 'native resume' : 'fresh handoff', inner, color),
+          ...pair('From', `${summary.source.agent}/${summary.source.id} (${summary.source.nativeId})`, inner, color),
+          ...pair('To', summary.target, inner, color), ...pair('Workspace', summary.workspace, inner, color)]),
+        '', section('History'),
+        ...indent([`Included ${included.length} of ${included.length + omitted.length} items`, `Omitted ${omitted.length}`]),
+        ...ids('Included IDs', included), ...ids('Omitted IDs', omitted),
+        // The exact payload keeps its escaping and stays unstyled: it is the consented wire value.
+        ...(summary.previewLines?.length ? ['', styled('Exact payload', 'muted', color), ...wrap(summary.previewLines, width)] : []),
+      ];
       // A long summary must remain inspectable before confirming.
-      offset = Math.max(0, Math.min(offset, Math.max(0, body.length - bodyRows)));
-      body = body.slice(offset, offset + bodyRows);
-      footer = '↑ ↓ Scroll · Enter confirm continuation · Esc back';
+      offset = Math.max(0, Math.min(offset, Math.max(0, rows.length - bodyRows)));
+      body = rows.slice(offset, offset + bodyRows);
+      footer = [['Enter', 'confirm continuation'], ['Esc', 'back'], ['↑↓', 'scroll']];
     } else {
       const source = picked!;
       const title = source.title.endsWith(` ${source.nativeId}`) ? `Session …${source.nativeId.slice(-8)}` : source.title;
+      const chosen = targets[target]!;
+      // The same rule as runtime preparation: the source's own agent resumes natively unless fresh is chosen.
+      const outcome = chosen === source.agent && !fresh ? `Resumes the original ${chosen} session natively.` : `Starts ${chosen} with a handoff of this conversation.`;
+      const selector = targets.map(agent => agent === chosen ? `[${agent}]` : agent).join('  ');
       const lines = [
-        `Target: ${targets[target]}  ← → change`,
-        `Source: ${source.agent} · ${title}`,
-        ...panelWrap(`Workspace: ${choice!.path}${choice!.kind === 'override' ? ' (override)' : ''}`, width),
-        'W change workspace',
+        section('From'),
+        `  ${styled(source.agent, source.agent, color)}  ${clipPanel(title, Math.max(1, inner - source.agent.length - 2))}`,
+        '', section('To'),
+        `  ${cellCount(selector) > inner ? clipPanel(selector, inner)
+          : targets.map(agent => agent === chosen ? styled(`[${agent}]`, ['title', agent], color) : styled(agent, 'muted', color)).join('  ')}`,
+        ...indent(panelWrap(outcome, inner).map(row => chosen === source.agent && !fresh ? styled(row, 'success', color) : row)),
+        `  ${keycaps([['← →', 'change target']], inner, color)}`,
+        '', section('Workspace'),
+        ...indent(panelWrap(`${choice!.path}${choice!.kind === 'override' ? ' (override)' : ''}`, inner)),
         ...(options.compose ? [
-          '', 'C edit request · X redact · F toggle fresh',
-          ...panelWrap(`Current request: ${currentRequest}`, width),
-          `Redactions: ${redactions.length}`,
-          `Fresh context: ${fresh ? 'explicitly selected' : 'automatic'}`,
+          '', section('Handoff'),
+          ...indent([...pair('Current request', currentRequest, inner, color),
+            ...pair('Redactions', redactions.length ? `${redactions.length} (${redactions.map(() => '•••').join(', ')})` : 'none', inner, color),
+            ...pair('Fresh context', fresh ? 'on' : 'off (automatic)', inner, color)]),
         ] : []),
       ];
       offset = Math.max(0, Math.min(offset, lines.length - bodyRows));
-      body = lines.slice(offset, offset + bodyRows).map(line => clipPanel(line, width));
-      footer = lines.length > bodyRows ? 'Enter review · Esc back · ↑ ↓ Scroll' : 'Enter review · Esc back';
+      body = lines.slice(offset, offset + bodyRows);
+      // Actions live in the footer so they stay visible on short terminals; hints that do not fit drop from the end.
+      footer = [['Enter', 'review'], ['Esc', 'back'], ...(options.compose ? [['C', 'edit request'], ['X', 'redact'], ['F', 'toggle fresh']] as const : []),
+        ['W', 'change workspace'], ...(lines.length > bodyRows ? [['↑↓', 'scroll'] as const] : [])];
     }
-    const lines = [...header, ...body, '', busy && !inList && !showingSources ? 'Loading… · Esc back' : footer, ...status];
-    // Every stage returns its body rows already fitted and escaped; only the frame's own lines are clipped here.
-    const fitted = (index: number) => (inList && index === header.length - 1) || (index >= header.length && index < header.length + body.length);
-    const frame = lines.slice(0, height).map((line, index) => {
-      if (fitted(index)) return line;
-      const clipped = clipPanel(line, width);
-      return index === 0 ? styled(clipped, 'heading', color) : clipped;
-    });
-    output.write('\x1b[2J\x1b[H' + frame.join('\n'));
+    if (busy && !inList && !showingSources) footer = [['', 'Loading…'], ['Esc', 'back']];
+    const frame = [...header, ...body, '', keycaps(footer, width, color), ...status].slice(0, height);
+    output.write('\x1b[2J\x1b[H' + frame.map(line => line && ` ${line}`).join('\n'));
   };
   const redraw = (): void => {
     try {
@@ -417,7 +492,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
           void delay(150, undefined, { signal: controller.signal }).then(() => load(sourceOf(hit), controller.signal)).then(found => {
             if (controller.signal.aborted) return;
             detailLines = found.filter(item => item.status === 'complete' && item.role !== 'tool' && item.text.trim()).slice(0, 2).map(item => {
-              const text = Array.from(item.text.replace(/\s+/gu, ' ').trim());
+              const text = Array.from(readableRequest(item.text).replace(/\s+/gu, ' ').trim());
               return `${item.role === 'user' ? 'Opening request' : 'Reply'}: ${text.slice(0, 240).join('')}${text.length > 240 ? '…' : ''}`;
             });
             redraw();

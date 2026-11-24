@@ -1,15 +1,19 @@
 import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess
+import re
+# Markers match visible text; frames and output keep their colour (SGR) sequences for colour assertions.
+SGR=re.compile(r'\x1b\[[0-9;]*m')
 output='';matched_until=0
 def begin_action():
  global matched_until
  # A key/signal/resize must wait for fresh output, not the previous frame's tail.
- matched_until=len(output)
+ matched_until=len(SGR.sub('',output))
 
 def read_until(needle=None,timeout=4):
  global output,matched_until
  chunk='';end=time.monotonic()+timeout
  while time.monotonic()<end:
-  match=output.find(needle,matched_until) if needle else -1
+  visible=SGR.sub('',output)
+  match=visible.find(needle,matched_until) if needle else -1
   if match>=0:
    # Consume only the expected marker; coalesced later markers remain matchable.
    matched_until=match+len(needle)

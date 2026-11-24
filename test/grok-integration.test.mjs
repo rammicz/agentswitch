@@ -25,10 +25,10 @@ async function setup(t,destination='grok') {
 }
 function pty(f,actions,args=[],all=false) {const r=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,rows:60,columns:210}),timeout:40000,maxBuffer:8*1024*1024});assert.equal(r.status,0,r.stderr);return all?JSON.parse(r.stdout):JSON.parse(r.stdout)[0];}
 const select=source=>[{wait:'Enter preview'},{send:{grok:'Grok public',codex:'Codex fixture',claude:'Claude fixture'}[source]},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
-const target=agent=>agent==='grok'?[{send:'\x1b[D'},{wait:'Target: grok'}]:agent==='claude'?[{send:'\x1b[C'},{wait:'Target: claude'}]:[];
-const clear=[{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request: '}];
-const request=[{send:'c'},{wait:'Current request (sent separately'},{send:'\x15--literal $(touch sentinel); `echo no` NEEDLE_SECRET\r'},{wait:'Current request: --literal'}];
-const redact=[{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions: 1'}];
+const target=agent=>agent==='grok'?[{send:'\x1b[D'},{wait:'[grok]'}]:agent==='claude'?[{send:'\x1b[C'},{wait:'[claude]'}]:[];
+const clear=[{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request  '}];
+const request=[{send:'c'},{wait:'Current request (sent separately'},{send:'\x15--literal $(touch sentinel); `echo no` NEEDLE_SECRET\r'},{wait:'Current request  --literal'}];
+const redact=[{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions  1'}];
 const finish=[{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'hello\n'},{wait:'INPUT "hello\\n"'},{send:'quit\n'},{wait:'uncertain — process exited'}];
 const launches=async f=>(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse);
 async function records(f){const j=await TransferJournal.open(join(f.state,'transfers'));try{return j.list();}finally{j.close();}}
@@ -41,7 +41,7 @@ test('Grok native requires explicit empty draft and sends exact UUID in recorded
  const f=await setup(t);const r=pty(f,[...select('grok'),...target('grok'),{send:'\r'},{wait:'Clear the request explicitly'},...clear,{send:'\r'},{wait:'without an initial request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);assert.equal(r.restored,true);assert.deepEqual((await launches(f))[0].args,['--cwd='+f.cwd,'--resume='+id]);const [record]=await records(f);assert.equal(record.mode,'native-resume');assert.equal(record.archive,null);assert.equal(record.prompt,'');assert.equal(record.targetNativeId,null);assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
 });
 test('Grok nonempty draft recovers through explicit fresh choice; workspace override forces fresh',async t=>{
- const f=await setup(t);pty(f,[...select('grok'),...target('grok'),...request,{send:'\r'},{wait:'Clear the request explicitly'},{send:'f'},{wait:'Fresh context: explicitly selected'},...finish]);assert.equal(JSON.parse((await launches(f))[0].args.at(-1)).currentRequest,'--literal $(touch sentinel); `echo no` NEEDLE_SECRET');
+ const f=await setup(t);pty(f,[...select('grok'),...target('grok'),...request,{send:'\r'},{wait:'Clear the request explicitly'},{send:'f'},{wait:'Fresh context  on'},...finish]);assert.equal(JSON.parse((await launches(f))[0].args.at(-1)).currentRequest,'--literal $(touch sentinel); `echo no` NEEDLE_SECRET');
  pty(f,[...select('grok'),...target('grok'),{send:'w'},{wait:'Explicit workspace override'},{send:f.other+'\r'},{wait:'(override)'},...finish]);const second=(await launches(f))[1];assert.equal(second.cwd,f.other);assert.equal(second.args[0],'--cwd='+f.other);assert.equal(second.args[1],'--');
 });
 test('Grok source/global filters use public body and exact canonical folder including root aliases',async t=>{

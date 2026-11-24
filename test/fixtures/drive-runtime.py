@@ -1,5 +1,7 @@
 """Controlled foreground process group; never signals the caller's terminal group."""
-import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess
+import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess,re
+# Markers read visible text: colour (SGR) sequences are dropped as output arrives.
+SGR=re.compile(r'\x1b\[[0-9;]*m')
 
 def main():
  # An interrupted test run sends SIGTERM; exiting through finally still kills the session this driver created.
@@ -28,12 +30,12 @@ def main():
     try:data=os.read(master,65536)
     except OSError:break
     if not data:break
-    output+=data.decode('utf8',errors='replace')
+    output=SGR.sub('',output+data.decode('utf8',errors='replace'))
    elif child.poll() is not None:break
   raise Exception('Missing '+repr(marker)+'; output='+repr(output))
  try:
   until('Enter preview')
-  for marker in ['Enter choose target','Target:','Mode:','DISPATCH']:
+  for marker in ['Enter choose target','change target','Mode  ','DISPATCH']:
    os.write(master,b'\r');until(marker)
   for action in config['actions']:
    if 'wait' in action:until(action['wait'])

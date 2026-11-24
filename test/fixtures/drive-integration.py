@@ -1,5 +1,8 @@
 """Real CLI entry in isolated foreground PTYs, with only synthetic providers."""
 import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess,codecs
+import re
+# Markers and assertions read visible text: colour (SGR) sequences are dropped as output arrives.
+SGR=re.compile(r'\x1b\[[0-9;]*m')
 
 def until(state,marker,timeout=15,retained=False):
  deadline=time.monotonic()+timeout
@@ -10,7 +13,7 @@ def until(state,marker,timeout=15,retained=False):
    try:data=os.read(state['master'],65536)
    except OSError:break
    if not data:break
-   state['output']+=state['decoder'].decode(data)
+   state['output']=SGR.sub('',state['output']+state['decoder'].decode(data))
   elif state['child'].poll() is not None:break
  raise Exception('Missing '+repr(marker)+'; output='+repr(state['output']))
 
@@ -72,7 +75,7 @@ def main():
     def body():
      rows=state['output'].rsplit('\x1b[2J\x1b[H',1)[-1].split('\r\n')
      footer=next(i for i,row in enumerate(rows) if 'Enter confirm continuation' in row)
-     return rows[2:footer-1] # Skip the heading and the blank lines around the body.
+     return [row[1:] for row in rows[2:footer-1]] # Skip the heading, the blank lines around the body and the left margin.
     state['preview']=body()
     for step in range(1000):
      if any('END EXACT PROMPT JSON STRING' in row for row in body()):break
