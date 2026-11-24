@@ -72,6 +72,8 @@ function stored({ id, nativeId, agent, title, workspace, updatedAt, messages }: 
   return { updated: Number.isFinite(time) ? time : null, bytes: items.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0),
     data: JSON.stringify({ id, nativeId, agent, title, workspace, updatedAt, messages: items }) };
 }
+/** The stored form of an evicted session: its data without message text. */
+const emptied = (data: string): string => `json_set(${data}, '$.messages', json('[]'))`;
 // `updated` and `bytes` precede `data` so totals and eviction order never read the large text column.
 const table = (name: string): string => `CREATE TABLE ${name} (source TEXT NOT NULL, native_id TEXT NOT NULL, updated INTEGER, bytes INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source, native_id));`;
 const ageIndex = 'CREATE INDEX sessions_age ON sessions(updated, bytes);';
@@ -126,7 +128,7 @@ export class SearchIndex {
   private rows: IndexedSession[] = [];
   private closed = false;
   private dataVersion: SQLOutputValue | undefined;
-  private upsert: StatementSync | undefined;
+  private readonly statements = new Map<string, StatementSync>();
   private operations: Promise<void> = Promise.resolve();
   private constructor(private readonly directory: string, private readonly sources: readonly SearchSource[], private readonly database: DatabaseSync, private readonly owner: string, private readonly identity: Stats, private readonly maxBytes: number) {}
 
@@ -175,7 +177,7 @@ export class SearchIndex {
         }, false);
       }
       // A lowered cap applies at once rather than at the next write.
-      else if (index.total() > maxBytes) index.transaction(() => {}, false);
+      else if (index.total() > maxBytes) index.transaction(() => index.store([], false), false);
       // Enables incremental vacuuming on a new file, and shrinks a discarded cache from before automatic limits.
       if (database.prepare('PRAGMA auto_vacuum').get()?.auto_vacuum !== 2) {
         try { database.exec('PRAGMA auto_vacuum=INCREMENTAL; VACUUM;'); } catch { /* Retried at the next open. */ }
@@ -217,76 +219,61 @@ export class SearchIndex {
     return next;
   }
   /**
-   * Writes, then evicts over the cap in the same transaction and returns freed pages to the file system. A write that
-   * reports it changed nothing skips the reclaim and the reload.
+   * Runs a write in one transaction and returns freed pages to the file system. A write that reports it changed nothing
+   * skips the reclaim and the reload.
    */
   private transaction(write: () => boolean | void, reload = true): void {
     this.database.exec('BEGIN IMMEDIATE');
     let changed;
-    try { changed = write() !== false; if (changed) this.evict(); this.database.exec('COMMIT'); } catch (error) { this.database.exec('ROLLBACK'); throw error; }
+    try { changed = write() !== false; this.database.exec('COMMIT'); } catch (error) { this.database.exec('ROLLBACK'); throw error; }
     if (!changed) return;
     try { this.database.exec('PRAGMA incremental_vacuum;'); } catch { /* Freed pages are reused or reclaimed by a later write. */ }
     if (reload) this.reload();
     else this.dataVersion = undefined;
   }
-  /** Over the cap, the least recently updated sessions (undated first) keep only their title, workspace and identity. */
   private total(): number { return Number(this.database.prepare('SELECT total(bytes) AS total FROM sessions').get()!.total); }
-  private evict(): void {
-    let total = this.total();
-    if (total <= this.maxBytes) return;
-    const clear = this.database.prepare(`UPDATE sessions SET bytes=0, data=json_set(data, '$.messages', json('[]')) WHERE source=? AND native_id=?`);
-    for (const row of this.database.prepare('SELECT source, native_id, bytes FROM sessions WHERE bytes>0 ORDER BY updated, source, native_id').all()) {
-      if (total <= this.maxBytes) break;
-      clear.run(row.source as string, row.native_id as string);
-      total -= Number(row.bytes);
-    }
-  }
-  private insert(source: string, session: Session): void {
-    const { updated, bytes, data } = stored(session);
-    this.upsert ??= this.database.prepare('INSERT OR REPLACE INTO sessions(source, native_id, updated, bytes, data) VALUES (?, ?, ?, ?, ?)');
-    this.upsert.run(source, session.nativeId, updated, bytes, data);
-  }
+  private statement(sql: string): StatementSync { return this.statements.get(sql) ?? this.statements.set(sql, this.database.prepare(sql)).get(sql)!; }
   /**
-   * Stores generations as writing every session and then evicting over the cap would leave them, but writes only rows
-   * whose stored state differs. Returns whether anything was written.
+   * Stores generations as writing every session and then evicting over the cap would leave them, writing only rows whose
+   * stored state differs, and returns whether anything was written. Over the cap, the least recently updated sessions
+   * (undated first) keep only their title, workspace and identity. Without generations it only evicts.
    */
   private store(generations: readonly { source: string; sessions: readonly Session[] }[], removeMissing: boolean): boolean {
     const key = (source: string, nativeId: string) => `${source}\0${nativeId}`;
-    const incoming = new Map(generations.flatMap(({ source, sessions }) => sessions.map((session) => [key(source, session.nativeId), { source, session, ...stored(session) }] as const)));
+    const incoming = new Map(generations.flatMap(({ source, sessions }) => sessions.map((session) => [key(source, session.nativeId), { source, nativeId: session.nativeId, ...stored(session) }] as const)));
     const sources = new Set(generations.map((generation) => generation.source));
-    const missing: [string, string][] = [];
-    // The rows as they will be before eviction: kept rows at their stored size, incoming rows with their full text.
-    const planned = new Map<string, { source: string; nativeId: string; updated: number | null; bytes: number }>();
-    for (const row of this.database.prepare('SELECT source, native_id, updated, bytes FROM sessions').all()) {
-      const source = row.source as string, nativeId = row.native_id as string, id = key(source, nativeId);
-      if (incoming.has(id)) continue;
-      if (removeMissing && sources.has(source)) { missing.push([source, nativeId]); continue; }
-      planned.set(id, { source, nativeId, updated: row.updated as number | null, bytes: Number(row.bytes) });
+    let changed = false;
+    // Without removals, the existing sizes of the incoming rows tell whether anything must be evicted at all.
+    let total = this.total();
+    if (!removeMissing) for (const row of incoming.values()) {
+      total += row.bytes - Number(this.statement('SELECT bytes FROM sessions WHERE source=? AND native_id=?').get(row.source, row.nativeId)?.bytes ?? 0);
     }
-    for (const [id, { source, session, updated, bytes }] of incoming) planned.set(id, { source, nativeId: session.nativeId, updated, bytes });
-    // The same order as evict(): undated first, then oldest, then source and native ID in SQLite's binary text order.
-    let total = [...planned.values()].reduce((sum, row) => sum + row.bytes, 0);
     const cleared = new Set<string>();
-    if (total > this.maxBytes) {
-      const text = (a: string, b: string) => Buffer.compare(Buffer.from(a), Buffer.from(b));
-      const order = [...planned].filter(([, row]) => row.bytes > 0).sort(([, a], [, b]) =>
-        (a.updated === null ? (b.updated === null ? 0 : -1) : b.updated === null ? 1 : a.updated - b.updated) || text(a.source, b.source) || text(a.nativeId, b.nativeId));
-      for (const [id, row] of order) { if (total <= this.maxBytes) break; cleared.add(id); total -= row.bytes; }
+    if (removeMissing || total > this.maxBytes) {
+      // The rows as they will be before eviction: kept rows at their stored size, incoming rows with their full text.
+      const planned: { id: string; source: string; nativeId: string; updated: number | null; bytes: number }[] = [];
+      for (const row of this.statement('SELECT source, native_id, updated, bytes FROM sessions').all()) {
+        const source = row.source as string, nativeId = row.native_id as string, id = key(source, nativeId);
+        if (incoming.has(id)) continue;
+        if (removeMissing && sources.has(source)) { this.statement('DELETE FROM sessions WHERE source=? AND native_id=?').run(source, nativeId); changed = true; continue; }
+        planned.push({ id, source, nativeId, updated: row.updated as number | null, bytes: Number(row.bytes) });
+      }
+      for (const [id, row] of incoming) planned.push({ id, ...row });
+      total = planned.reduce((sum, row) => sum + row.bytes, 0);
+      // Undated first, then oldest, then source and native ID in SQLite's binary text order.
+      const order = planned.filter((row) => row.bytes > 0).map((row) => ({ row, text: Buffer.from(`${row.source}\0${row.nativeId}`) }))
+        .sort((a, b) => ((a.row.updated ?? -Infinity) - (b.row.updated ?? -Infinity)) || Buffer.compare(a.text, b.text));
+      for (const { row } of order) {
+        if (total <= this.maxBytes) break;
+        total -= row.bytes; cleared.add(row.id);
+        if (!incoming.has(row.id)) { this.statement(`UPDATE sessions SET bytes=0, data=${emptied('data')} WHERE source=? AND native_id=?`).run(row.source, row.nativeId); changed = true; }
+      }
     }
-    let changed = missing.length > 0;
-    const remove = this.database.prepare('DELETE FROM sessions WHERE source=? AND native_id=?');
-    for (const [source, nativeId] of missing) remove.run(source, nativeId);
-    const same = this.database.prepare('SELECT 1 FROM sessions WHERE source=? AND native_id=? AND updated IS ? AND bytes=? AND data=?');
-    const sameCleared = this.database.prepare(`SELECT 1 FROM sessions WHERE source=? AND native_id=? AND updated IS ? AND bytes=0 AND data=json_set(?, '$.messages', json('[]'))`);
-    const clear = this.database.prepare(`UPDATE sessions SET bytes=0, data=json_set(data, '$.messages', json('[]')) WHERE source=? AND native_id=?`);
-    for (const [id, { source, session, updated, bytes, data }] of incoming) {
-      if (cleared.has(id) ? sameCleared.get(source, session.nativeId, updated, data) : same.get(source, session.nativeId, updated, bytes, data)) continue;
-      this.insert(source, session); changed = true;
-      if (cleared.has(id)) clear.run(source, session.nativeId);
-    }
-    for (const id of cleared) {
-      const row = planned.get(id)!;
-      if (!incoming.has(id)) { clear.run(row.source, row.nativeId); changed = true; }
+    for (const [id, { source, nativeId, updated, bytes, data }] of incoming) {
+      const evicted = cleared.has(id), size = evicted ? 0 : bytes, text = evicted ? emptied('?') : '?';
+      if (this.statement(`SELECT 1 FROM sessions WHERE source=? AND native_id=? AND updated IS ? AND bytes=? AND data=${text}`).get(source, nativeId, updated, size, data)) continue;
+      this.statement(`INSERT OR REPLACE INTO sessions(source, native_id, updated, bytes, data) VALUES (?, ?, ?, ?, ${text})`).run(source, nativeId, updated, size, data);
+      changed = true;
     }
     return changed;
   }

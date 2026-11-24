@@ -356,7 +356,7 @@ test('T4: an unchanged refresh or remembered transcript writes nothing; a change
   const results = async () => [ids(await f.index.query(query('text'))), ids(await f.index.query(query('b-text')))];
   const before = { version: db.version(), rows: db.rows(), results: await results() };
   await f.index.refresh();
-  await f.index.remember({ ...f.rows.get('codex/a'), messages: f.rows.get('codex/a').messages });
+  await f.index.remember(structuredClone(f.rows.get('codex/a')));
   assert.deepEqual({ version: db.version(), rows: db.rows(), results: await results() }, before);
   f.rows.get('codex/b').messages = [said('m1', 'assistant', 'b-text changed')];
   await f.index.refresh();
