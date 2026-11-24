@@ -40,9 +40,9 @@ export class AgySessionAdapter implements SessionAdapter {
     this.limits={...defaults,...options.limits};
     for(const [name,value] of Object.entries(this.limits))if(!Number.isSafeInteger(value)||value<1||value>defaults[name as keyof typeof defaults])throw new RangeError(`Invalid agy limit: ${name}`);
   }
-  private diagnostic(list:CodexDiagnostic[],code:CodexDiagnostic['code']):void {
+  private diagnostic(list:CodexDiagnostic[],code:CodexDiagnostic['code'],source:CodexDiagnostic['source']='metadata'):void {
     if(list.length>=this.limits.maxDiagnostics)return;
-    const value:CodexDiagnostic={code,source:'metadata'};list.push(value);this.options.onDiagnostic?.(value);
+    const value:CodexDiagnostic={code,source};list.push(value);this.options.onDiagnostic?.(value);
   }
   private async cached():Promise<{sessions:readonly AgySession[];ambiguous:ReadonlySet<string>}> {
     const diagnostics:CodexDiagnostic[]=[];
@@ -225,6 +225,7 @@ export class AgySessionAdapter implements SessionAdapter {
       if(before.signature!==after.signature||!before.bytes.equals(after.bytes)||await this.physical(catalog.root,catalog)!==catalog.signature)throw Error('metadata-unstable');
       await this.noSidecars(join(catalog.root,'conversations',id+'.db'),catalog);
       if(catalog.cacheSignature&&identity(await lstat(join(catalog.root,'cache','last_conversations.json')))!==catalog.cacheSignature)throw Error('metadata-unstable');
+      if(parsed.lagging&&!forTitle)this.diagnostic(diagnostics,'step-count-lag','history');
       return {
         items:parsed.items,complete:true,retained:false,diagnostics,excludedSteps:parsed.excludedSteps,
         incarnation:createHash('sha256').update(JSON.stringify([catalog.root,id,JSON.parse(before.signature).slice(0,2)])).digest('hex'),

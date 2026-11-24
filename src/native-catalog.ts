@@ -15,8 +15,8 @@ import type { ContextRef } from './continuity.js';
 const agents: readonly AgentId[] = ['codex','claude','opencode','agy','grok'];
 const canonical = async (path: string): Promise<string> => realpath(resolve(path)).catch(()=>resolve(path));
 const harmless = new Set(['workspace-unavailable','metadata-unavailable','metadata-schema','metadata-unstable','untested-producer']);
-// grok and agy metadata is the whole source, so any diagnostic degrades it; OpenCode tolerates only an untested producer.
-const harmlessFor: Record<AgentId, ReadonlySet<string>> = {codex:new Set([...harmless,'superseded-record','abandoned-record']),claude:harmless,opencode:new Set(['untested-producer']),agy:new Set(),grok:new Set()};
+// grok and agy metadata is the whole source, so any other diagnostic degrades it; OpenCode tolerates only an untested producer.
+const harmlessFor: Record<AgentId, ReadonlySet<string>> = {codex:new Set([...harmless,'superseded-record','abandoned-record']),claude:harmless,opencode:new Set(['untested-producer']),agy:new Set(['step-count-lag']),grok:new Set()};
 const wellFormedVersion=/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/;
 const listCodes=(codes:readonly string[]):string=>{const unique=[...new Set(codes)];return unique.length?` (${unique.slice(0,5).join(', ')}${unique.length>5?', …':''})`:'';};
 // Every reader caps its diagnostics at this default, some without a marker, so a full list may hide more.

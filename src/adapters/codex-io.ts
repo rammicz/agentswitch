@@ -11,8 +11,11 @@ export type DiagnosticCode = 'root-unavailable' | 'unsafe-path' | 'read-failed' 
   'metadata-schema' | 'metadata-unstable' | 'selected-rollout-unavailable' |
   'ambiguous-rollout' | 'ancestry-unavailable' | 'ancestry-cycle' | 'invalid-boundary' |
   'invalid-owner' | 'invalid-ordinal' | 'compressed-invalid' | 'diagnostic-limit' |
-  /** Non-blocking notes: a torn line its re-emitted record replaced, and a torn final line of a long-idle file. */
-  'superseded-record' | 'abandoned-record';
+  /**
+   * Non-blocking notes: a torn line its re-emitted record replaced, a torn final line of a long-idle file, and an
+   * Antigravity summary counting one step its writer has not appended yet.
+   */
+  'superseded-record' | 'abandoned-record' | 'step-count-lag';
 export interface CodexDiagnostic { code: DiagnosticCode; source: 'history' | 'metadata' | 'workspace' | 'root'; line?: number }
 /** `maxLineBytes` bounds discovery, header and metadata lines; `maxHistoryLineBytes` bounds lines in a history read. */
 export interface CodexLimits {

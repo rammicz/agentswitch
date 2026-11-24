@@ -126,3 +126,70 @@ for(const kind of ['print','tool'])test('agy transcript rows with unknown top-le
  for(const row of f.records)row.future_metadata={value:'PRIVATE_FUTURE_METADATA'};await writeFile(f.history,f.records.map(JSON.stringify).join('\n')+'\n');
  const h=await f.adapter.readHistoryDetailed(f.nativeId);assert.equal(h.complete,true);assert.deepEqual(h.items,baseline.items);assert.deepEqual(h.excludedSteps,baseline.excludedSteps);assert.doesNotMatch(JSON.stringify(h),/PRIVATE_/);
 });
+
+// Shapes observed in real agy transcripts (type, source, status and key names only).
+const step=(index,type,source,extra={})=>({step_index:index,source,type,status:'DONE',created_at:`2026-11-21T10:00:${String(index).padStart(2,'0')}Z`,...extra});
+const call=(name,args)=>({name,args});
+function toolSession() {
+  const rows=[
+    step(0,'USER_INPUT','USER_EXPLICIT',{content:user('Run the checks')}),
+    step(1,'PLANNER_RESPONSE','MODEL',{content:'I will run them',thinking:'PRIVATE_THINKING',model:'m',input_tokens:1,cache_read_tokens:0,output_tokens:1,
+      tool_calls:[call('run_command',{CommandLine:'PRIVATE_COMMAND',WaitMsBeforeAsync:0,toolSummary:'PRIVATE_SUMMARY'}),call('read_file',{Path:'/PRIVATE_PATH',StartLine:1,EndLine:2})]}),
+    step(2,'GENERIC','MODEL',{content:'PRIVATE_OUTPUT_DONE'}),
+    step(3,'GENERIC','MODEL',{content:'PRIVATE_OUTPUT_RUNNING',status:'RUNNING',truncated_fields:['content']}),
+    step(4,'SYSTEM_MESSAGE','SYSTEM',{content:'PRIVATE_SYSTEM_MESSAGE'}),
+    step(5,'PLANNER_RESPONSE','MODEL',{model:'m',input_tokens:1,cache_read_tokens:0,output_tokens:1,tool_calls:[
+      call('write_file',{Path:'/PRIVATE_W',Content:'PRIVATE_CONTENT',Overwrite:true}),call('edit_file',{Path:'/PRIVATE_E',Target:'PRIVATE_T',Replacement:'PRIVATE_R'}),
+      call('invoke_subagent',{Prompt:'PRIVATE_PROMPT',Role:'PRIVATE_ROLE',TypeName:'PRIVATE_TYPE'}),call('define_subagent',{Name:'PRIVATE_NAME',Description:'PRIVATE_D',SystemPrompt:'PRIVATE_SP',EnableWriteTools:false}),
+      call('send_message',{Recipient:'PRIVATE_TO',Message:'PRIVATE_MESSAGE'}),call('manage_task',{Action:'PRIVATE_ACTION',TaskId:'PRIVATE_TASK'}),call('schedule',{Prompt:'PRIVATE_SP2',DurationSeconds:1,TimerCondition:'PRIVATE_TC'})]}),
+    ...['DONE','ERROR','INVALID','DONE','DONE','DONE','DONE'].map((status,i)=>step(6+i,'GENERIC','MODEL',{content:'PRIVATE_RESULT',status,...(status==='ERROR'?{error:'PRIVATE_ERROR'}:{})})),
+    step(13,'PLANNER_RESPONSE','MODEL',{content:'Checks pass',model:'m',input_tokens:1,cache_read_tokens:0,output_tokens:1}),
+    step(14,'USER_INPUT','USER_EXPLICIT',{content:user('Thanks')}),
+    step(15,'PLANNER_RESPONSE','MODEL',{content:'You are welcome'}),
+  ];
+  return rows;
+}
+const writeSession=async(f,rows,stepCount=rows.length)=>{
+  await writeFile(f.history,rows.map(r=>JSON.stringify(r)).join('\n')+'\n');
+  const db=new DatabaseSync(f.path);db.prepare('UPDATE conversation_summaries SET step_count=? WHERE conversation_id=?').run(stepCount,f.nativeId);db.close();
+  return f.adapter.readHistoryDetailed(f.nativeId);
+};
+test('agy known tool and system steps are excluded while surrounding public text stays complete',async t=>{
+  const f=await setup(t),h=await writeSession(f,toolSession());
+  assert.equal(h.complete,true);assert.deepEqual(h.diagnostics,[]);
+  assert.deepEqual(h.items.map(x=>[x.role,x.text]),[['user','Run the checks'],['assistant','I will run them'],['assistant','Checks pass'],['user','Thanks'],['assistant','You are welcome']]);
+  assert.deepEqual(h.excludedSteps,[1,2,3,4,5,6,7,8,9,10,11,12]);
+  assert.doesNotMatch(JSON.stringify(h),/PRIVATE_|run_command|CommandLine/);
+});
+for(const [name,mutate] of [
+  ['unknown step type',rows=>{rows[4].type='PRIVATE_FUTURE_STEP';}],
+  ['system message from the model',rows=>{rows[4].source='MODEL';}],
+  ['result without a call',rows=>{rows.splice(13,0,step(13,'GENERIC','MODEL',{content:'PRIVATE_ORPHAN'}));rows.forEach((r,i)=>{r.step_index=i;r.created_at=step(i).created_at;});}],
+  ['missing result',rows=>{rows.splice(12,1);rows.forEach((r,i)=>{r.step_index=i;r.created_at=step(i).created_at;});}],
+  ['unknown result status',rows=>{rows[2].status='PRIVATE_STATUS';}],
+  ['active public step',rows=>{rows[13].status='RUNNING';}],
+  ['extra call field',rows=>{rows[1].tool_calls[0].PRIVATE_FIELD=1;}],
+  ['non-object call arguments',rows=>{rows[1].tool_calls[0].args='PRIVATE_ARGS';}],
+])test('agy tool step strictness stays for '+name,async t=>{
+  const f=await setup(t),rows=toolSession();mutate(rows);const h=await writeSession(f,rows);
+  assert.equal(h.complete,false);assert.deepEqual(h.items,[]);assert.doesNotMatch(JSON.stringify(h),/PRIVATE_/);
+});
+test('agy writer lag of exactly one step reads complete with a harmless note; other mismatches stay strict',async t=>{
+  const f=await setup(t),rows=toolSession();
+  const lag=await writeSession(f,rows,rows.length+1);
+  assert.equal(lag.complete,true);assert.deepEqual(lag.diagnostics.map(d=>d.code),['step-count-lag']);assert.equal(lag.items.length,5);
+  assert.equal((await writeSession(f,rows,rows.length+2)).complete,false);
+  assert.equal((await writeSession(f,rows,rows.length-1)).complete,false);
+  const gap=rows.map((r,i)=>i>=10?{...r,step_index:i+1}:r);const gapped=await writeSession(f,gap,rows.length+1);
+  assert.equal(gapped.complete,false);assert.deepEqual(gapped.diagnostics.map(d=>d.code),['invalid-ordinal']);
+  // The note keeps the source healthy, so a removed sibling leaves the index.
+  const {NativeCatalog}=await import('../dist/native-catalog.js'),{SearchIndex}=await import('../dist/search-index.js');
+  await writeSession(f,rows,rows.length+1);const other=await fixture(f.root,f.cwd,{nativeId:'22345678-1234-4234-8234-123456789abc',user:'Removed sibling needle'});
+  const env={AGENTSWITCH_AGY_ROOT:f.root,GROK_HOME:join(f.base,'grok'),CODEX_HOME:join(f.base,'codex'),CLAUDE_CONFIG_DIR:join(f.base,'claude'),OPENCODE_DB:join(f.base,'missing.db'),XDG_DATA_HOME:join(f.base,'xdg')};
+  const catalog=await NativeCatalog.create(env),index=await SearchIndex.open({directory:join(f.base,'index'),sources:catalog.sources()});t.after(()=>index.close());
+  const q={text:'Removed sibling',agent:'agy',scope:'global',workspace:f.cwd};
+  await catalog.refresh(index);assert.equal((await index.query(q)).length,1);assert.equal((await index.query({...q,text:'Checks pass'})).length,1);
+  const db=new DatabaseSync(f.path);db.prepare('DELETE FROM conversation_summaries WHERE conversation_id=?').run(other.nativeId);db.close();
+  await rm(join(f.root,'brain',other.nativeId),{recursive:true});await writeFile(f.cache,JSON.stringify({[f.cwd]:f.nativeId}));
+  await catalog.refresh(index);assert.equal((await index.query(q)).length,0);assert.equal((await index.query({...q,text:'Checks pass'})).length,1);
+});
