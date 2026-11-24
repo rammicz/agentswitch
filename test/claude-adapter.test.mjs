@@ -131,12 +131,15 @@ test('discovery reads bounded metadata and each selected history gets its own by
   // The tail window (64 KiB) opens exactly where the title line starts.
   const sized=(record,length)=>{const raw=JSON.stringify({...record,pad:''});return JSON.stringify({...record,pad:'p'.repeat(length-1-raw.length)});};
   await write(root,ids[6],[...long(ids[6],'Boundary prompt',130,'').slice(0,-1),sized({type:'custom-title',customTitle:'Boundary title'},1536),...Array(8).fill(sized({type:'queue-operation'},8000))],'b-tail');
+  // A medium file whose title line straddles the first chunk: the tail resumes where the head stopped.
+  const medium=long(ids[7],'Medium prompt',18,'').slice(0,-1);medium.splice(13,0,{type:'custom-title',customTitle:'Medium title',pad:'p'.repeat(3000)});
+  await write(root,ids[7],medium,'b-medium');
   const diagnostics=[],a=reader({root,limits:{maxScanBytes:1_200_000,maxFileBytes:1_000_000,maxLineBytes:10_000},onDiagnostic:d=>diagnostics.push(d)}),sessions=await a.discover();
-  assert.deepEqual(sessions.map(s=>s.nativeId).sort(),ids.slice(0,7).sort());
+  assert.deepEqual(sessions.map(s=>s.nativeId).sort(),ids.slice(0,8).sort());
   assert.deepEqual(diagnostics.filter(d=>['input-limit','malformed-record','partial-record'].includes(d.code)),[]);
   const title=id=>sessions.find(s=>s.nativeId===id)?.title;
   assert.equal(title(ids[3]),'Late title');assert.equal(title(ids[0]),'Title 0');assert.equal(title(ids[4]),'Big title');
-  assert.equal(title(ids[5]),'Prompt after snapshots');assert.equal(title(ids[6]),'Boundary title');
+  assert.equal(title(ids[5]),'Prompt after snapshots');assert.equal(title(ids[6]),'Boundary title');assert.equal(title(ids[7]),'Medium title');
   const late=await a.readHistoryDetailed(ids[3]);assert.deepEqual(texts(late),['Late prompt','Late answer']);assert.equal(late.complete,true);assert.ok(!late.diagnostics.some(d=>d.code==='input-limit'));
   const sibling=await a.readHistoryDetailed(ids[2]);assert.equal(sibling.complete,true);assert.equal(sibling.items.length,131);
   const big=await a.readHistoryDetailed(ids[4]);assert.equal(texts(big)[0],'Big prefix');assert.equal(big.complete,false);assert.ok(big.diagnostics.some(d=>d.code==='input-limit'));
