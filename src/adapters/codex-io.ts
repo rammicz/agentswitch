@@ -12,15 +12,21 @@ export type DiagnosticCode = 'root-unavailable' | 'unsafe-path' | 'read-failed' 
   'ambiguous-rollout' | 'ancestry-unavailable' | 'ancestry-cycle' | 'invalid-boundary' |
   'invalid-owner' | 'invalid-ordinal' | 'compressed-invalid' | 'diagnostic-limit';
 export interface CodexDiagnostic { code: DiagnosticCode; source: 'history' | 'metadata' | 'workspace' | 'root'; line?: number }
+/** `maxLineBytes` bounds discovery, header and metadata lines; `maxHistoryLineBytes` bounds lines in a history read. */
 export interface CodexLimits {
-  maxFiles: number; maxFileBytes: number; maxDecodedBytes: number; maxLineBytes: number;
+  maxFiles: number; maxFileBytes: number; maxDecodedBytes: number; maxLineBytes: number; maxHistoryLineBytes: number;
   maxDepth: number; maxDiagnostics: number; maxMetadataBytes: number; maxScanBytes: number;
 }
 export const defaultLimits: CodexLimits = {
   maxFiles: 10_000, maxFileBytes: 32 * 1024 * 1024, maxDecodedBytes: 64 * 1024 * 1024,
-  maxLineBytes: 1024 * 1024, maxDepth: 32, maxDiagnostics: 100,
+  // Image tool results are single lines over 1 MiB; a history line never extends past the file cap anyway.
+  maxLineBytes: 1024 * 1024, maxHistoryLineBytes: 32 * 1024 * 1024, maxDepth: 32, maxDiagnostics: 100,
   maxMetadataBytes: 64 * 1024 * 1024, maxScanBytes: 256 * 1024 * 1024,
 };
+/** The limits of a history read: its lines may be as long as `maxHistoryLineBytes`. */
+export function historyLimits(limits: CodexLimits): CodexLimits { return { ...limits, maxLineBytes: limits.maxHistoryLineBytes }; }
+/** The complete lines of a prefix. */
+function completeLines(bytes: Buffer): Buffer { return bytes.subarray(0, bytes.lastIndexOf(10) + 1); }
 export class ReadContext {
   readonly diagnostics: CodexDiagnostic[] = [];
   complete = true;
@@ -53,9 +59,9 @@ export function contains(root: string, path: string): boolean {
 }
 /** Resolve symlinks before opening; final-component swaps fail through O_NOFOLLOW. */
 export async function boundedRead(path: string, root: string, limit: number, ctx: ReadContext, prefixOnly = false): Promise<Buffer> {
-  return (await readBounded(path, root, limit, ctx, prefixOnly)).data;
+  return (await boundedReadWithStat(path, root, limit, ctx, prefixOnly)).data;
 }
-async function readBounded(path: string, root: string, limit: number, ctx: ReadContext, prefixOnly: boolean):
+async function boundedReadWithStat(path: string, root: string, limit: number, ctx: ReadContext, prefixOnly: boolean):
   Promise<{ data: Buffer; size: number; modified: number }> {
   const canonical = await realpath(path);
   if (!contains(root, canonical)) throw new Error('unsafe-path');
@@ -83,7 +89,7 @@ export async function historyTitlePrefix(path: string, root: string, ctx: ReadCo
   const limit = Math.min(512 * 1024, ctx.limits.maxFileBytes, ctx.remainingDecoded);
   const compressed = path.endsWith('.zst');
   const input = await boundedRead(path, root, limit, ctx, !compressed);
-  if (!compressed) return input.subarray(0, input.lastIndexOf(10) + 1);
+  if (!compressed) return completeLines(input);
   const stream = Readable.from([input]).pipe(createZstdDecompress());
   const chunks: Buffer[] = [];
   let size = 0;
@@ -94,8 +100,7 @@ export async function historyTitlePrefix(path: string, root: string, ctx: ReadCo
       size += chunk.length;
       if (size === limit) break;
     }
-    const bytes = Buffer.concat(chunks, size);
-    return bytes.subarray(0, bytes.lastIndexOf(10) + 1);
+    return completeLines(Buffer.concat(chunks, size));
   } finally { stream.destroy(); }
 }
 /** Discovery consumes only the first record, leaving transcript validation to lazy reads. */
@@ -148,24 +153,26 @@ export async function historyHeader(path: string, root: string, ctx: ReadContext
 }
 /**
  * Bytes of one rollout and its modification time. Only the first `wanted` bytes are read when given (a parent cutoff).
- * A plain file that does not fit keeps its complete lines with `input-limit`; a compressed one is still all or nothing.
+ * A plain leaf that does not fit keeps its complete lines with `input-limit`; a parent cutoff or a compressed file that
+ * does not fit is all or nothing.
  */
 export async function historyBytes(path: string, root: string, ctx: ReadContext, wanted = Infinity):
   Promise<{ bytes: Buffer; modified: number } | undefined> {
   try {
     if (ctx.remainingDecoded < 1) throw new Error('input-limit');
     if (!path.endsWith('.zst')) {
-      const { data, size, modified } = await readBounded(path, root, Math.min(ctx.limits.maxFileBytes, ctx.remainingDecoded, wanted), ctx, true);
+      const { data, size, modified } = await boundedReadWithStat(path, root, Math.min(ctx.limits.maxFileBytes, ctx.remainingDecoded, wanted), ctx, true);
       let bytes = data;
       if (data.length < Math.min(size, wanted)) {
+        if (wanted !== Infinity) throw new Error('input-limit');
         ctx.add('input-limit');
-        bytes = data.subarray(0, data.lastIndexOf(10) + 1);
+        bytes = completeLines(data);
         if (!bytes.length) return undefined;
       }
       ctx.consumeDecoded(bytes.length);
       return { bytes, modified };
     }
-    const { data: input, modified } = await readBounded(path, root, ctx.limits.maxFileBytes, ctx, false);
+    const { data: input, modified } = await boundedReadWithStat(path, root, ctx.limits.maxFileBytes, ctx, false);
     const stream = Readable.from([input]).pipe(createZstdDecompress());
     const chunks: Buffer[] = [];
     let size = 0;

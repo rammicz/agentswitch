@@ -333,6 +333,9 @@ test('a rollout over the file cap returns its readable prefix; a parent cut insi
   assert.ok(!result.diagnostics.some(d=>['partial-record','malformed-record'].includes(d.code)));
   const child = await adapter.readHistoryDetailed(ids[1]);
   assert.deepEqual(texts(child),['Prefix','Answer','Child']); assert.equal(child.complete,true);
+  // A parent whose cutoff does not fit is not read as a prefix.
+  const orphan = await new CodexSessionAdapter({root,limits:{maxFileBytes:prefix - 1}}).readHistoryDetailed(ids[1]);
+  assert.deepEqual(texts(orphan),['Child']); assert.deepEqual(orphan.diagnostics.map(d=>d.code).sort(),['ancestry-unavailable','input-limit']);
 });
 
 test('a torn interior line re-emitted on the next line does not reject later paginated records', async t => {

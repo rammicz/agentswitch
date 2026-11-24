@@ -4,14 +4,13 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { HistoryItem, Session } from '../domain.js';
 import type { SessionAdapter } from './index.js';
-import { contains, defaultLimits, ReadContext } from './codex-io.js';
+import { contains, defaultLimits, historyLimits, ReadContext } from './codex-io.js';
 import type { CodexDiagnostic, CodexLimits } from './codex-io.js';
 import { metadataRecords, object, records, text } from './claude-io.js';
 import type { Entry, NativeRecord } from './claude-io.js';
 import { conversation, graphEntry, metadataTypes, project, visible } from './claude-projection.js';
 export type ClaudeDiagnostic = CodexDiagnostic;
-/** `maxLineBytes` bounds discovery lines; `maxHistoryLineBytes` bounds lines in a selected history read. */
-export type ClaudeLimits = Pick<CodexLimits, 'maxFiles' | 'maxFileBytes' | 'maxLineBytes' | 'maxDiagnostics' | 'maxScanBytes'> & { maxHistoryLineBytes: number };
+export type ClaudeLimits = Pick<CodexLimits, 'maxFiles' | 'maxFileBytes' | 'maxLineBytes' | 'maxHistoryLineBytes' | 'maxDiagnostics' | 'maxScanBytes'>;
 export interface ClaudeAdapterOptions {
   /** Claude config directory, containing projects/, rather than projects/ itself. */
   root?: string; home?: string; env?: NodeJS.ProcessEnv;
@@ -21,8 +20,6 @@ export interface ClaudeSession extends Session { createdAt: string; producerVers
 export interface ClaudeHistory { items: readonly HistoryItem[]; complete: boolean; diagnostics: readonly ClaudeDiagnostic[]; incarnation?:string; retained?:boolean }
 interface File { path: string; id: string; mtime: number }
 interface Metadata { cwd: string; created: string; prompt: string; customTitle: string; aiTitle: string; lastPrompt: string; summary: string; producer: string; sidechain: boolean; valid: boolean }
-// History lines hold whole image tool results; see the limits section of docs/claude-reader.md.
-const claudeDefaults = { ...defaultLimits, maxHistoryLineBytes: defaultLimits.maxFileBytes };
 const filePattern = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 function date(value: unknown): string {
   const parsed = typeof value === 'string' ? Date.parse(value) : NaN;
@@ -40,14 +37,14 @@ function firstPrompt(value: NativeRecord): string {
 /** Read-only source-derived Claude Code 2.1.330 transcript reader. No CLI/provider invocation. */
 export class ClaudeSessionAdapter implements SessionAdapter {
   readonly id = 'claude' as const;
-  private readonly limits: typeof claudeDefaults;
+  private readonly limits: CodexLimits;
   private root = '';
   private selected = new Map<string, File>();
   private pending: Promise<void> = Promise.resolve();
   constructor(private readonly options: ClaudeAdapterOptions = {}) {
-    this.limits = { ...claudeDefaults, ...options.limits };
+    this.limits = { ...defaultLimits, ...options.limits };
     for (const [key, value] of Object.entries(this.limits)) {
-      if (!Number.isSafeInteger(value) || value < 1 || value > claudeDefaults[key as keyof typeof claudeDefaults]) throw new RangeError(`Invalid Claude limit: ${key}`);
+      if (!Number.isSafeInteger(value) || value < 1 || value > defaultLimits[key as keyof CodexLimits]) throw new RangeError(`Invalid Claude limit: ${key}`);
     }
   }
   /** One notification cap per public operation, shared by its discovery and history phases. */
@@ -164,7 +161,7 @@ export class ClaudeSessionAdapter implements SessionAdapter {
       const notify = excerptSignal ? undefined : this.notifier();
       if (rediscover) await this.catalog(new ReadContext(this.limits, notify));
       // The selected history gets its own byte budget, so the size of sibling sessions never truncates it.
-      const ctx = new ReadContext({ ...this.limits, maxLineBytes: this.limits.maxHistoryLineBytes }, notify);
+      const ctx = new ReadContext(historyLimits(this.limits), notify);
       const file = this.selected.get(nativeId.toLowerCase());
       if (!file) { ctx.add('selected-rollout-unavailable'); return { items: [], complete: false, diagnostics: ctx.diagnostics }; }
       const entries: Entry[] = [];

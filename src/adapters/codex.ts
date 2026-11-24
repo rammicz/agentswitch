@@ -4,16 +4,14 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, isAbsolute } from 'node:path';
 import type { HistoryItem, Session } from '../domain.js';
 import type { SessionAdapter } from './index.js';
-import { boundedRead, contains, defaultLimits, historyBytes, historyHeader, historyTitlePrefix, metadataSnapshot, ReadContext } from './codex-io.js';
+import { boundedRead, contains, defaultLimits, historyBytes, historyLimits, historyHeader, historyTitlePrefix, metadataSnapshot, ReadContext } from './codex-io.js';
 import type { CodexDiagnostic, CodexLimits, MetadataRow } from './codex-io.js';
 import { object, project, text } from './codex-projection.js';
 import type { ObjectRecord, SourceRecord } from './codex-projection.js';
 export type { CodexDiagnostic, CodexLimits } from './codex-io.js';
-/** `maxLineBytes` bounds header and metadata lines; `maxHistoryLineBytes` bounds lines in a hydrated history. */
-export type CodexAdapterLimits = CodexLimits & { maxHistoryLineBytes: number };
 export interface CodexAdapterOptions {
   root?: string; sqliteRoot?: string; home?: string; env?: NodeJS.ProcessEnv;
-  limits?: Partial<CodexAdapterLimits>; onDiagnostic?: (diagnostic: CodexDiagnostic) => void;
+  limits?: Partial<CodexLimits>; onDiagnostic?: (diagnostic: CodexDiagnostic) => void;
 }
 export interface CodexSession extends Session {
   createdAt: string; historyMode: 'legacy' | 'paginated'; producerVersion: string;
@@ -22,8 +20,6 @@ export interface CodexSession extends Session {
 export interface CodexHistory { items: readonly HistoryItem[]; complete: boolean; diagnostics: readonly CodexDiagnostic[]; incarnation?:string; retained?:boolean; itemTurns?:readonly NativeItemTurn[] }
 interface RolloutFile { path: string; owner: string; rolloutId: string }
 interface ParsedRollout { file: RolloutFile; meta: ObjectRecord; records: SourceRecord[] }
-// Image tool outputs are single lines over 1 MiB; a history line never extends past the file cap anyway.
-const codexDefaults: CodexAdapterLimits = { ...defaultLimits, maxHistoryLineBytes: defaultLimits.maxFileBytes };
 // Codex can leave a torn final line that is never completed; after this long it no longer blocks the history.
 const abandonedAfterMs = 10 * 60 * 1000;
 const uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
@@ -76,8 +72,7 @@ function parseRecords(bytes: Buffer, source: string, ctx: ReadContext, malformed
   }
   return records;
 }
-async function parseFile(file: RolloutFile, root: string, ctx: ReadContext, cutoff?: number, headerOnly = false): Promise<ParsedRollout | undefined> {
-  if (headerOnly) { const header = await historyHeader(file.path, root, ctx); return header && parseRollout(file, header, ctx); }
+async function parseFile(file: RolloutFile, root: string, ctx: ReadContext, cutoff?: number): Promise<ParsedRollout | undefined> {
   const read = await historyBytes(file.path, root, ctx, cutoff);
   if (!read) return;
   const input = read.bytes;
@@ -120,16 +115,16 @@ function parseRollout(file: RolloutFile, bytes: Buffer, ctx: ReadContext, abando
 export class CodexSessionAdapter implements SessionAdapter {
   readonly id = 'codex' as const;
   private readonly options: CodexAdapterOptions;
-  private readonly limits: CodexAdapterLimits;
+  private readonly limits: CodexLimits;
   private root = '';
   private readonly selected = new Map<string, RolloutFile>();
   private files: RolloutFile[] = [];
   private pending: Promise<void> = Promise.resolve();
   constructor(options: CodexAdapterOptions = {}) {
     this.options = options;
-    this.limits = { ...codexDefaults, ...options.limits };
+    this.limits = { ...defaultLimits, ...options.limits };
     for (const [key, value] of Object.entries(this.limits)) {
-      if (!Number.isSafeInteger(value) || value < 1 || value > codexDefaults[key as keyof CodexAdapterLimits]) throw new RangeError(`Invalid Codex limit: ${key}`);
+      if (!Number.isSafeInteger(value) || value < 1 || value > defaultLimits[key as keyof CodexLimits]) throw new RangeError(`Invalid Codex limit: ${key}`);
     }
   }
   private context(): ReadContext { return new ReadContext(this.limits, this.options.onDiagnostic); }
@@ -207,7 +202,8 @@ export class CodexSessionAdapter implements SessionAdapter {
     for (const file of this.files) {
       signal?.throwIfAborted();
       if (ctx.bytes > ctx.limits.maxScanBytes) break;
-      const parsed = await parseFile(file, this.root, ctx, undefined, true);
+      const header = await historyHeader(file.path, this.root, ctx);
+      const parsed = header && parseRollout(file, header, ctx);
       if (parsed) candidates.set(file.owner, [...(candidates.get(file.owner) ?? []), parsed]);
     }
     const sessions: CodexSession[] = [];
@@ -279,7 +275,7 @@ export class CodexSessionAdapter implements SessionAdapter {
     // Public selected-session reads refresh authoritative selection; catalog batches use their explicit generation.
     const discovery = this.context();
     if (rediscover) await this.discoverCatalog(discovery);
-    const ctx = discovery.fork({ ...this.limits, maxLineBytes: this.limits.maxHistoryLineBytes }), file = this.selected.get(nativeId);
+    const ctx = discovery.fork(historyLimits(this.limits)), file = this.selected.get(nativeId);
     if (!file) { ctx.add('selected-rollout-unavailable'); return { items: [], complete: false, diagnostics: ctx.diagnostics }; }
     const leaf = await parseFile(file, this.root, ctx);
     const records = leaf ? await this.lineage(leaf, ctx, new Set(), 0) : [];
