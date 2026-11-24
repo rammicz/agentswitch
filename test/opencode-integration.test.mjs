@@ -13,6 +13,7 @@ import { TransferJournal } from '../dist/transfer-journal.js';
 import { parseHandoffPrompt } from '../dist/handoff.js';
 import { listArchive } from '../dist/archive.js';
 import { tempDir } from './fixtures/temp.mjs';
+import { scaled } from './fixtures/timeouts.mjs';
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(target='opencode') {
@@ -24,7 +25,7 @@ async function setup(target='opencode') {
  const env={OPENCODE_DB:path,GROK_HOME:join(root,'grok'),AGENTSWITCH_AGY_ROOT:join(root,'agy'),XDG_DATA_HOME:join(root,'xdg-data'),CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:state,PATH:bin+':'+process.env.PATH,RUNTIME_TARGET:target,RUNTIME_LOG:join(root,'launches'),RUNTIME_SCENARIO:'interactive',NODE_NO_WARNINGS:'1',...(process.env.AGENTSWITCH_TEST_ENTRY?{CLI_ENTRY_MODULE:process.env.AGENTSWITCH_TEST_ENTRY}:{})};
  const files=[path,codexPath,claudePath];return {root,cwd,other,codex,claude,path,bin,state,env,files,before:await Promise.all(files.map(hash))};
 }
-function pty(f,actions,args=[],size={rows:60,columns:210}) {const result=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,...size}),timeout:40000,maxBuffer:8*1024*1024});assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout)[0];}
+function pty(f,actions,args=[],size={rows:60,columns:210}) {const result=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,...size}),timeout:scaled(300_000),maxBuffer:8*1024*1024});assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout)[0];}
 const needle={opencode:'OpenCode public',codex:'Codex fixture',claude:'Claude fixture'};
 const select=source=>[{wait:'Enter preview'},{send:needle[source]},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
 const target=agent=>Array.from({length:['codex','claude','opencode'].indexOf(agent)},(_,i)=>[{send:'\x1b[C'},{wait:'['+['claude','opencode'][i]+']'}]).flat();

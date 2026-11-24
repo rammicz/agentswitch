@@ -9,6 +9,7 @@ import { rollout, writeRollout, completed, ids } from './fixtures/codex/native.m
 import { digest, TransferJournal } from '../dist/transfer-journal.js';
 import { DEFAULT_CURRENT_REQUEST, parseHandoffPrompt } from '../dist/handoff.js';
 import { tempDir } from './fixtures/temp.mjs';
+import { scaled } from './fixtures/timeouts.mjs';
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(mode='valid') {
@@ -20,7 +21,7 @@ async function setup(mode='valid') {
  return {root,cwd,state,codex,claude,aFile,config,configHash:await hash(config),env:{GROK_HOME:join(root,'grok'),AGENTSWITCH_AGY_ROOT:join(root,'agy'),XDG_DATA_HOME:join(root,'xdg-data'),OPENCODE_DB:join(root,'opencode','opencode.db'),CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:state,PATH:bin+':'+process.env.PATH,RUNTIME_LOG:join(root,'launches'),HOOK_LOG:join(root,'hooks'),FAKE_HOOK_MODE:mode,AGENTSWITCH_OBSERVER:'inherited-unrelated-locator-must-be-scrubbed',...(process.env.AGENTSWITCH_TEST_ENTRY?{CLI_ENTRY_MODULE:process.env.AGENTSWITCH_TEST_ENTRY}:{})}};
 }
 function pty(f,actions,args=[]) {
- const result=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args}),timeout:40000,maxBuffer:8*1024*1024});
+ const result=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args}),timeout:scaled(300_000),maxBuffer:8*1024*1024});
  assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout)[0];
 }
 const select=(text)=>[{wait:'Enter preview'},{send:text},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];

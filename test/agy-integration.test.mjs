@@ -11,6 +11,7 @@ import { parseHandoffPrompt } from '../dist/handoff.js';
 import { fixture as agyFixture } from './fixtures/agy/native.mjs';
 import { tempDir } from './fixtures/temp.mjs';
 import { stopHeartbeatChild } from './fixtures/heartbeat.mjs';
+import { scaled } from './fixtures/timeouts.mjs';
 const repo=resolve('.'),id='12345678-1234-1234-1234-123456789abc';
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(t) {
@@ -24,7 +25,7 @@ async function setup(t) {
  const env={GROK_HOME:join(root,'grok'),AGENTSWITCH_AGY_ROOT:agy,OPENCODE_DB:join(root,'absent.db'),XDG_DATA_HOME:join(root,'xdg'),CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:state,PATH:bin+':'+process.env.PATH,RUNTIME_TARGET:'agy',RUNTIME_LOG:join(root,'launches'),RUNTIME_SCENARIO:'interactive',AGY_PROBE_LOG:join(root,'probes'),NODE_NO_WARNINGS:'1',...(process.env.AGENTSWITCH_TEST_ENTRY?{CLI_ENTRY_MODULE:process.env.AGENTSWITCH_TEST_ENTRY}:{})};
  const files=[cache,codexPath,claudePath];return {root,cwd,other,cache,bin,state,env,files,before:await Promise.all(files.map(hash))};
 }
-function pty(f,actions,args=[],all=false) {const r=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,rows:60,columns:210}),timeout:40000,maxBuffer:8*1024*1024});assert.equal(r.status,0,r.stderr);return all?JSON.parse(r.stdout):JSON.parse(r.stdout)[0];}
+function pty(f,actions,args=[],all=false) {const r=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,rows:60,columns:210}),timeout:scaled(300_000),maxBuffer:8*1024*1024});assert.equal(r.status,0,r.stderr);return all?JSON.parse(r.stdout):JSON.parse(r.stdout)[0];}
 const select=(source,publicText=false)=>[{wait:'Enter preview'},{send:source==='agy'?(publicText?'Agy public fixture':id):source==='codex'?'Codex fixture':'Claude fixture'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
 const target=[{send:'\x1b[D'},{wait:'[grok]'},{send:'\x1b[D'},{wait:'[agy]'}];
 const clear=[{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request  '}];

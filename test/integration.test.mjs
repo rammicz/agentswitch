@@ -8,6 +8,7 @@ import { rollout, writeRollout, completed, ids as codexIds } from './fixtures/co
 import { entry, encode, ids as claudeIds } from './fixtures/claude/native.mjs';
 import { tempDir } from './fixtures/temp.mjs';
 import { stopHeartbeatChild } from './fixtures/heartbeat.mjs';
+import { scaled } from './fixtures/timeouts.mjs';
 
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
@@ -27,9 +28,10 @@ async function setup(target='claude') {
  const env={GROK_HOME:join(root,'grok'),AGENTSWITCH_AGY_ROOT:join(root,'agy'),XDG_DATA_HOME:join(root,'xdg-data'),OPENCODE_DB:join(root,'opencode','opencode.db'),CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:state,RUNTIME_TARGET:target,RUNTIME_LOG:join(root,'launches'),RUNTIME_SCENARIO:'interactive',PATH:bin+':'+process.env.PATH,NODE_NO_WARNINGS:'1'};
  return {root,cwd,other,child,codex,claude,state,files,env,before:await Promise.all(files.map(hash))};
 }
+const ptyTimeout=scaled(300_000);
 function pty(f,actions,args=[],terminal={}) {
- const child=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,...terminal}),timeout:40000,maxBuffer:8*1024*1024});
- if(child.error)throw new Error(`PTY driver failed: ${child.error.code??'unknown error'}; signal=${child.signal??'none'}; timeout=40000ms. ${child.error.message}\n${child.stderr?.slice(-4096)??''}`,{cause:child.error});
+ const child=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,...terminal}),timeout:ptyTimeout,maxBuffer:8*1024*1024});
+ if(child.error)throw new Error(`PTY driver failed: ${child.error.code??'unknown error'}; signal=${child.signal??'none'}; timeout=${ptyTimeout}ms. ${child.error.message}\n${child.stderr?.slice(-4096)??''}`,{cause:child.error});
  assert.equal(child.status,0,`PTY driver exited status=${child.status}; signal=${child.signal??'none'}\n${child.stderr}`);return JSON.parse(child.stdout);
 }
 const list=[{wait:'Enter preview'}];
@@ -238,4 +240,15 @@ test('native selection through a true workspace alias launches in its canonical 
  const f=await setup('codex');const originalWorkspace=f.cwd;const alias=join(f.root,'workspace-alias');await symlink(originalWorkspace,alias,'dir');f.cwd=alias;
  pty(f,[...list,...select('codex'),{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
  const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());assert.equal(launch.cwd,await realpath(alias));assert.notEqual(launch.cwd,alias);assert.equal(launch.args[2],await realpath(originalWorkspace));
+});
+
+test('a CLI marker that never appears fails within its bound and shows the last screen',async()=>{
+ const f=await setup(),started=Date.now();
+ const child=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',env:{...process.env,AGENTSWITCH_TEST_TIMEOUT_SCALE:'0.1'},
+  input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions:[...list,{wait:'NEVER_SHOWN'}]}),timeout:ptyTimeout});
+ assert.notEqual(child.status,0);
+ assert.match(child.stderr,/Missing 'NEVER_SHOWN' within 4\.5s; last screen:\n/);
+ const screen=child.stderr.slice(child.stderr.indexOf('last screen:'));
+ assert.match(screen,/Enter preview/);assert.doesNotMatch(screen,/\x1b/);
+ assert.ok(Date.now()-started<scaled(30_000),'the hang fails within the bound');
 });

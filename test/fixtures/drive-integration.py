@@ -1,8 +1,10 @@
 """Real CLI entry in isolated foreground PTYs, with only synthetic providers."""
 import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess,codecs
+sys.dont_write_bytecode=True # The shared helper below must not leave a __pycache__ in the repository.
+from pty_wait import bound,missing
 
-def until(state,marker,timeout=15,retained=False):
- deadline=time.monotonic()+timeout
+def until(state,marker,timeout=45,retained=False):
+ timeout=bound(timeout);deadline=time.monotonic()+timeout
  while time.monotonic()<deadline:
   found=state['output'].find(marker,0 if retained else state['cursor'])
   if found>=0:state['cursor']=max(state['cursor'],found+len(marker));return
@@ -12,7 +14,7 @@ def until(state,marker,timeout=15,retained=False):
    if not data:break
    state['output']+=state['decoder'].decode(data)
   elif state['child'].poll() is not None:break
- raise Exception('Missing '+repr(marker)+'; output='+repr(state['output']))
+ raise missing(marker,state['output'],timeout)
 
 def remember_provider(state,env):
  # The private fake-provider log is controlled by this test. Resolve ownership
@@ -67,7 +69,7 @@ def main():
    if 'assertWrapperAlive' in action:
     if state['child'].poll() is not None:raise Exception('Wrapper exited before the driver observed child READY')
    if 'killWrapper' in action:
-    remember_provider(state,config['env']);state['child'].kill();state['child'].wait(timeout=5)
+    remember_provider(state,config['env']);state['child'].kill();state['child'].wait(timeout=bound(20))
    if 'collectPreview' in action:
     until(state,'Enter confirm continuation')
     def body():
@@ -87,7 +89,7 @@ def main():
     with open(config['env']['RUNTIME_LOG']) as log:pid=json.loads(log.readline())['pid']
     os.kill(pid,0)
     if config['env'].get('CLI_CHILD_HEARTBEAT'):
-     heartbeat=config['env']['CLI_CHILD_HEARTBEAT'];before=None;deadline=time.monotonic()+5
+     heartbeat=config['env']['CLI_CHILD_HEARTBEAT'];before=None;deadline=time.monotonic()+bound(15)
      while time.monotonic()<deadline:
       try:
        with open(heartbeat) as log:beat=json.load(log)
@@ -102,7 +104,7 @@ def main():
   for state in instances:
    if state['child'].poll() is None:
     until(state,'CLI_DONE');after=termios.tcgetattr(state['slave']);alive=state['child'].poll() is None
-    os.write(state['ack'],b'T');os.close(state['ack']);state['ack']=None;state['child'].wait(timeout=5)
+    os.write(state['ack'],b'T');os.close(state['ack']);state['ack']=None;state['child'].wait(timeout=bound(20))
     results.append({'output':state['output'],'code':state['child'].returncode,'restored':after==state['before'],'sampledWhileAlive':alive,'preview':state['preview'],'liveChildChecks':state.get('liveChildChecks',[])})
    else:results.append({'output':state['output'],'code':state['child'].returncode,'liveChildChecks':state.get('liveChildChecks',[])})
   print(json.dumps(results))

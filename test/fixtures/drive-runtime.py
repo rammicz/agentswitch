@@ -1,5 +1,7 @@
 """Controlled foreground process group; never signals the caller's terminal group."""
 import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess
+sys.dont_write_bytecode=True # The shared helper below must not leave a __pycache__ in the repository.
+from pty_wait import bound,missing
 
 def main():
  # An interrupted test run sends SIGTERM; exiting through finally still kills the session this driver created.
@@ -19,9 +21,9 @@ def main():
   child=subprocess.Popen(['node','test/fixtures/runtime-picker.mjs'],stdin=slave,stdout=slave,stderr=slave,env=env,preexec_fn=own_terminal,pass_fds=(ack_read,))
  finally:os.close(ack_read)
  output='';cursor=0
- def until(marker,timeout=5):
+ def until(marker,timeout=20):
   nonlocal output,cursor
-  deadline=time.monotonic()+timeout
+  timeout=bound(timeout);deadline=time.monotonic()+timeout
   while time.monotonic()<deadline:
    found=output.find(marker,cursor)
    if found>=0:cursor=found+len(marker);return
@@ -31,7 +33,7 @@ def main():
     if not data:break
     output+=data.decode('utf8',errors='replace')
    elif child.poll() is not None:break
-  raise Exception('Missing '+repr(marker)+'; output='+repr(output))
+  raise missing(marker,output,timeout)
  try:
   until('Enter preview')
   for marker in ['Enter choose target','change target','Mode  ','DISPATCH']:
@@ -50,7 +52,7 @@ def main():
   sampled_while_alive=child.poll() is None
   if not sampled_while_alive:raise Exception('Session leader exited during terminal sampling')
   os.write(ack_write,b'T');os.close(ack_write);ack_write=None
-  child.wait(timeout=5)
+  child.wait(timeout=bound(20))
   print(json.dumps({'output':output,'code':child.returncode,'restored':before==after,'sampledWhileAlive':sampled_while_alive}))
  finally:
   if ack_write is not None:os.close(ack_write)

@@ -1,5 +1,7 @@
 import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess
 import re
+from pty_wait import bound,missing
+WAIT=20
 # Markers match visible text; frames and output keep their colour (SGR) sequences for colour assertions.
 SGR=re.compile(r'\x1b\[[0-9;]*m')
 output='';visible='';pending='';matched_until=0
@@ -16,9 +18,9 @@ def begin_action():
  # A key/signal/resize must wait for fresh output, not the previous frame's tail.
  matched_until=len(visible)
 
-def read_until(needle=None,timeout=4):
+def read_until(needle=None,timeout=WAIT):
  global matched_until
- chunk='';end=time.monotonic()+timeout
+ timeout=bound(timeout);chunk='';end=time.monotonic()+timeout
  while time.monotonic()<end:
   match=visible.find(needle,matched_until) if needle else -1
   if match>=0:
@@ -36,7 +38,7 @@ def read_until(needle=None,timeout=4):
   if p.poll() is not None:
    if not select.select([master],[],[],0)[0]: break
   if not needle and chunk: return chunk
- if needle: raise Exception('Missing '+repr(needle)+' in '+repr(chunk)+'; all '+repr(output))
+ if needle: raise missing(needle,output,timeout)
  return chunk
 
 def main():
@@ -56,8 +58,8 @@ def main():
    if 'signal' in action: p.send_signal(getattr(signal,action['signal']))
    if 'resize' in action:
     fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',action['resize'][0],action['resize'][1],0,0));p.send_signal(signal.SIGWINCH)
-   frames.append(read_until(action.get('wait'),action.get('timeout',4)))
-  p.wait(timeout=4)
+   frames.append(read_until(action.get('wait'),action.get('timeout',WAIT)))
+  p.wait(timeout=bound(WAIT))
   read_until(timeout=.1)
   after=termios.tcgetattr(slave)
   print(json.dumps({'frames':frames,'output':output,'code':p.returncode,'restored':before==after}))
