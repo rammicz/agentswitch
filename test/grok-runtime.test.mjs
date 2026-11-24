@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp,mkdir,writeFile,readFile,rm,realpath } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir,writeFile,readFile,realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createRuntime,createOwnedSessionGuard } from '../dist/runtime.js';
+import { tempDir } from './fixtures/temp.mjs';
 const id='12345678-1234-1234-1234-123456789abc';
 async function fixture(t,extra={}) {
- const root=await realpath(await mkdtemp(join(tmpdir(),'agentswitch-grok-runtime-')));t.after(()=>rm(root,{recursive:true,force:true}));const cwd=join(root,'workspace'),bin=join(root,'grok.mjs');await mkdir(cwd);
+ const root=await realpath(await tempDir('agentswitch-grok-runtime-'));const cwd=join(root,'workspace'),bin=join(root,'grok.mjs');await mkdir(cwd);
  const help=JSON.parse(await readFile('test/fixtures/grok/help.json','utf8')).stdout;
  await writeFile(bin,`#!${process.execPath}\nconst args=process.argv.slice(2);if(args[0]==='--version')console.log(process.env.GROK_FAKE_VERSION||'grok 1.0.45 (c33bff361a6f)');else if(args[0]==='--help')console.error(process.env.GROK_FAKE_HELP||${JSON.stringify(help)});else throw Error('unexpected launch');\n`,{mode:0o700});
  const source={id:'grok:'+id,nativeId:id,agent:'grok'},guard=createOwnedSessionGuard();const runtime=createRuntime({executables:{grok:bin},env:{...process.env,...extra},guard,getSource:async()=>({...source,workspace:cwd,nativeResume:'compatible'})});return {root,cwd,bin,source,guard,runtime,request:{source,target:'grok',workspace:{kind:'source',path:cwd}}};

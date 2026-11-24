@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { completed, ids, rollout, writeRollout } from './fixtures/codex/native.mjs';
+import { tempDir } from './fixtures/temp.mjs';
 
 const execute = (program, args, options = {}) => {
   const result = spawnSync(program, args, { encoding: 'utf8', timeout: 75_000, ...options });
@@ -17,8 +17,7 @@ const execute = (program, args, options = {}) => {
 test('native Windows package installs, searches and hands off literal text in ConPTY', async t => {
   assert.equal(process.platform, 'win32');
   assert.ok(process.env.AGENTSWITCH_WINDOWS_TARBALL);
-  const workspaceRoot = await realpath(await mkdtemp(join(tmpdir(), 'agentswitch win ')));
-  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+  const workspaceRoot = await realpath(await tempDir('agentswitch win '));
   const prefix = join(workspaceRoot, 'npm install');
   const workspace = join(workspaceRoot, 'project with spaces');
   const codex = join(workspaceRoot, 'codex');

@@ -1,18 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, readFile, appendFile, rename, rm, utimes } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile, readFile, appendFile, rename, rm, utimes } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { rollout, writeRollout, completed, ids } from './fixtures/codex/native.mjs';
 import { digest, TransferJournal } from '../dist/transfer-journal.js';
 import { DEFAULT_CURRENT_REQUEST, parseHandoffPrompt } from '../dist/handoff.js';
+import { tempDir } from './fixtures/temp.mjs';
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(mode='valid') {
- const root=await mkdtemp(join(tmpdir(),"agentswitch continuity ' quoted ")),cwd=join(root,'workspace'),codex=join(root,'codex'),claude=join(root,'claude'),state=join(root,'state'),bin=join(root,'bin');
+ const root=await tempDir("agentswitch continuity ' quoted "),cwd=join(root,'workspace'),codex=join(root,'codex'),claude=join(root,'claude'),state=join(root,'state'),bin=join(root,'bin');
  await Promise.all([cwd,claude,bin].map(path=>mkdir(path,{recursive:true})));
  const aFile=await writeRollout(codex,rollout(cwd,ids[0],[completed('UserMessage','a1','A original request',1),completed('AgentMessage','a2','A original answer',2)]));
  const config=join(codex,'config.toml');await writeFile(config,'# Synthetic existing callbacks and native policy must stay unchanged.\n[hooks]\nStop = [{hooks=[{type="command",command="synthetic-existing-callback"}]}]\n');

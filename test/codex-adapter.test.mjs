@@ -1,17 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile, readdir, writeFile, appendFile, symlink, realpath, utimes } from 'node:fs/promises';
+import { mkdir, rm, readFile, readdir, writeFile, appendFile, symlink, realpath, utimes } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { zstdCompressSync } from 'node:zlib';
 import { CodexSessionAdapter } from '../dist/adapters/codex.js';
 import { ids, stamp, line, completed, rollout, encode, writeRollout, schema, row } from './fixtures/codex/native.mjs';
+import { tempDir } from './fixtures/temp.mjs';
 
 async function fixture(t) {
-  const root = await realpath(await mkdtemp(join(tmpdir(),'agentswitch-codex-')));
-  t.after(() => rm(root,{recursive:true,force:true}));
+  const root = await realpath(await tempDir('agentswitch-codex-'));
   const cwd = join(root,'workspace'); await mkdir(cwd);
   return {root,cwd};
 }
@@ -167,7 +166,7 @@ for (const invalid of ['missing','cycle','owner','midpoint','oversize','ordinal'
     if (invalid === 'oversize') base.end_byte_offset += 100;
     if (invalid === 'ordinal') base.end_ordinal_exclusive++;
     if (invalid === 'owner') {parent[0].payload.id = ids[8]; await writeFile(parentPath,encode(parent));}
-    if (invalid === 'escape') {const outside = await mkdtemp(join(tmpdir(),'agentswitch-external-')); t.after(()=>rm(outside,{recursive:true,force:true})); const target = join(outside,'external.jsonl'); await writeFile(target,encode(parent)); await rm(parentPath); await symlink(target,parentPath);}
+    if (invalid === 'escape') {const outside = await tempDir('agentswitch-external-'); const target = join(outside,'external.jsonl'); await writeFile(target,encode(parent)); await rm(parentPath); await symlink(target,parentPath);}
     await writeRollout(root,rollout(cwd,ids[1],[completed('AgentMessage','c','Child',base.end_ordinal_exclusive + 1)],{history_base:base}));
     const result = await new CodexSessionAdapter({root,limits:{maxDiagnostics:5}}).readHistoryDetailed(ids[1]);
     assert.equal(result.complete,false); assert.deepEqual(texts(result),['Child']);

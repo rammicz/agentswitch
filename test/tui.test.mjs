@@ -1,12 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-const root=mkdtempSync(join(tmpdir(),'agentswitch-picker-'));
+import { fileTempDir } from './fixtures/temp.mjs';
+const root=fileTempDir('agentswitch-picker-');
 const other=join(root,'other');mkdirSync(other);
-process.on('exit',()=>rmSync(root,{recursive:true,force:true}));
 const run=(actions,scenario='',extra={})=>{
  const p=spawnSync('python3',['test/fixtures/drive-terminal.py'],{input:JSON.stringify({env:{PICKER_WORKSPACE:root,PICKER_OTHER:other,PICKER_SCENARIO:scenario,...extra},actions,...(scenario==='query-error'?{initial:'offline query failed'}:{})}),encoding:'utf8',timeout:15000});
  assert.equal(p.status,0,p.stderr);const result=JSON.parse(p.stdout);assert.equal(result.restored,true,result.output);

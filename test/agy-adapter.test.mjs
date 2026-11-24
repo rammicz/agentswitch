@@ -1,15 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath, rename } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile, readFile, rm, symlink, realpath, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AgySessionAdapter, agyPaths } from '../dist/adapters/index.js';
 import { NativeCatalog } from '../dist/native-catalog.js';
 import { SearchIndex } from '../dist/search-index.js';
 import { applicationPaths } from '../dist/application.js';
+import { tempDir } from './fixtures/temp.mjs';
 const id='12345678-1234-1234-1234-123456789abc';
 async function fixture(t) {
- const root=await realpath(await mkdtemp(join(tmpdir(),'agentswitch-agy-')));t.after(()=>rm(root,{recursive:true,force:true}));
+ const root=await realpath(await tempDir('agentswitch-agy-'));
  const native=join(root,'native'),cwd=join(root,'workspace with spaces'),other=join(root,'other');
  await Promise.all([join(native,'cache'),cwd,other].map(p=>mkdir(p,{recursive:true})));
  const path=join(native,'cache','last_conversations.json');

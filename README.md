@@ -125,7 +125,7 @@ npm run dev -- --demo
 npm pack --dry-run
 ```
 
-The offline PTY tests require Python 3 with its standard library on Linux or macOS. They use temporary folders and fake services without accessing provider histories.
+The offline PTY tests require Python 3 with its standard library on Linux or macOS. They use temporary folders and fake services without accessing provider histories. `npm test` runs the suite in its own temporary folder and fails if a test leaves a temporary directory behind.
 
 There are no runtime npm dependencies. TypeScript and Node type definitions are development dependencies.
 

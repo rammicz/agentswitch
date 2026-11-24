@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,readFile,writeFile,rm,realpath,symlink,stat,readdir} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
+import {mkdir,readFile,writeFile,rm,realpath,symlink,stat,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import * as adapters from '../dist/adapters/index.js';
 import {fixture,id,user} from './fixtures/grok/native.mjs';
-async function setup(t){const base=await realpath(await mkdtemp(join(tmpdir(),'agentswitch-grok-')));t.after(()=>rm(base,{recursive:true,force:true}));const root=join(base,'native'),cwd=join(base,'workspace');await mkdir(cwd);const files=await fixture(root,cwd);assert.equal(typeof adapters.GrokSessionAdapter,'function','Grok source adapter must be registered');return {base,root,cwd,...files,adapter:new adapters.GrokSessionAdapter({root})};}
+import { tempDir } from './fixtures/temp.mjs';
+async function setup(t){const base=await realpath(await tempDir('agentswitch-grok-'));const root=join(base,'native'),cwd=join(base,'workspace');await mkdir(cwd);const files=await fixture(root,cwd);assert.equal(typeof adapters.GrokSessionAdapter,'function','Grok source adapter must be registered');return {base,root,cwd,...files,adapter:new adapters.GrokSessionAdapter({root})};}
 test('Grok v1 public projection is chronological, stable and read only; excludes hidden content',async t=>{
  const f=await setup(t);const before=await Promise.all([f.path,f.history].map(async p=>[await readFile(p),await stat(p)]));
  const [s]=await f.adapter.discover();assert.equal(s.agent,'grok');assert.equal(s.nativeId,id);assert.equal(s.workspace,f.cwd);assert.equal(s.title,'Grok public session');assert.deepEqual(s.messages,[]);

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { findUpdate, updateInstallation, updateNotice } from '../dist/update.js';
+import { tempDir } from './fixtures/temp.mjs';
 
 const repo = 'https://github.com/rammicz/agentswitch/releases/download';
 const digest = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
@@ -19,8 +19,7 @@ const release = (version, bytes = Buffer.from('test package')) => ({
 });
 
 async function fixture(t) {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), 'agentswitch-updater-test-')));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await realpath(await tempDir('agentswitch-updater-test-'));
   const windows = process.platform === 'win32';
   const root = join(directory, windows ? 'node_modules' : 'lib/node_modules', 'agentswitch');
   const metadata = join(root, 'package.json');

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, realpath } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createRuntime, RuntimeError } from '../dist/runtime.js';
+import { tempDir } from './fixtures/temp.mjs';
 
 const fake = String.raw`#!/usr/bin/env node
 import { appendFileSync } from 'node:fs';
@@ -33,8 +33,7 @@ const helpKey = (mode, target) => target === 'codex' && mode === 'native' ? 'res
 const without = (text, flag) => text.split('\n').filter(line => !new RegExp(`^[ \\t]*(?:-\\w,[ \\t]*)?${flag}(?![\\w-])`).test(line)).join('\n');
 
 async function prepare(t, target, { mode = 'fresh', version = tested[target], help = reworded[target].help, resume = reworded[target].resume } = {}) {
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'agentswitch-capabilities-')));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await realpath(await tempDir('agentswitch-capabilities-'));
   const workspace = join(root, 'workspace'), executable = join(root, target + '.mjs'), log = join(root, 'events');
   await mkdir(workspace); await writeFile(log, ''); await writeFile(executable, fake, { mode: 0o700 });
   const native = mode === 'native';

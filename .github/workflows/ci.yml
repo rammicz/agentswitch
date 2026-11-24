@@ -59,4 +59,4 @@ jobs:
           $env:AGENTSWITCH_WINDOWS_TARBALL = Join-Path $release $report.tarball
           $hash = (Get-FileHash $env:AGENTSWITCH_WINDOWS_TARBALL -Algorithm SHA256).Hash
           if ($hash -ne $report.sha256 -or $report.sourceCommit -ne $env:GITHUB_SHA) { throw 'Release artifact failed verification' }
-          node --test test/cli.test.mjs test/update.test.mjs test/windows-smoke.mjs
+          node scripts/test.mjs test/cli.test.mjs test/update.test.mjs test/windows-smoke.mjs

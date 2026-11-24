@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp,readFile,readdir,writeFile,realpath } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile,readdir,writeFile,realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fixture,id } from './fixtures/opencode/native.mjs';
+import { tempDir } from './fixtures/temp.mjs';
 
 test('1.19.6 discovers lazy metadata and ordered public projection without native changes or credential content',async()=>{
  const {OpenCodeSessionAdapter}=await import('../dist/adapters/opencode.js');
- const root=await mkdtemp(join(tmpdir(),'agentswitch-opencode-'));const path=await fixture(join(root,'opencode.db'),root);const before=await readFile(path),files=await readdir(root);
+ const root=await tempDir('agentswitch-opencode-');const path=await fixture(join(root,'opencode.db'),root);const before=await readFile(path),files=await readdir(root);
  const adapter=new OpenCodeSessionAdapter({dbPath:path});const sessions=await adapter.discover();
  assert.equal(sessions.length,1);assert.equal(sessions[0].nativeId,id);assert.equal(sessions[0].workspace,await realpath(root));assert.equal(sessions[0].producerVersion,'1.19.6');assert.deepEqual(sessions[0].messages,[]);
  const history=await adapter.readHistoryDetailed(id);assert.equal(history.complete,true);assert.deepEqual(history.items.map(x=>[x.role,x.text,x.status]),[['user','First public','complete'],['user','OpenCode public NEEDLE_SECRET','complete'],['tool','Safe output','complete'],['tool','Safe error','failed'],['assistant','OpenCode answer','complete']]);assert.equal(new Set(history.items.map(x=>x.id)).size,5);assert.doesNotMatch(JSON.stringify(history),/PRIVATE_/);
@@ -21,7 +21,7 @@ import { OpenCodeSessionAdapter,openCodePaths } from '../dist/adapters/opencode.
 import { NativeCatalog } from '../dist/native-catalog.js';
 import { SearchIndex } from '../dist/search-index.js';
 import { applicationPaths } from '../dist/application.js';
-async function setup(make=fixture,options){const root=await mkdtemp(join(tmpdir(),'agentswitch-opencode-'));const cwd=join(root,'workspace');await mkdir(cwd);const path=await make(join(root,'native','opencode.db'),cwd,options);return {root,cwd,path};}
+async function setup(make=fixture,options){const root=await tempDir('agentswitch-opencode-');const cwd=join(root,'workspace');await mkdir(cwd);const path=await make(join(root,'native','opencode.db'),cwd,options);return {root,cwd,path};}
 function mutate(path,fn){const db=new DatabaseSync(path);try{fn(db);}finally{db.close();}}
 
 test('native DB/root precedence is explicit and follows the 1.19.6 truthy XDG and OPENCODE_DB contract',()=>{
@@ -81,7 +81,7 @@ test('state overlap with OpenCode native roots, exact database or sidecars rejec
 });
 import { lstat } from 'node:fs/promises';
 test('immutable URI preserves literal encoded path characters and exact repeated stable item IDs',async()=>{
- const root=await mkdtemp(join(tmpdir(),'agentswitch-opencode-uri-'));const path=await fixture(join(root,"data %?#' space",'opencode.db'),root);const adapter=new OpenCodeSessionAdapter({dbPath:path});const first=await adapter.readHistoryDetailed(id),second=await adapter.readHistoryDetailed(id);assert.equal(first.complete,true);assert.deepEqual(first.items,second.items);assert.equal(first.incarnation,second.incarnation);
+ const root=await tempDir('agentswitch-opencode-uri-');const path=await fixture(join(root,"data %?#' space",'opencode.db'),root);const adapter=new OpenCodeSessionAdapter({dbPath:path});const first=await adapter.readHistoryDetailed(id),second=await adapter.readHistoryDetailed(id);assert.equal(first.complete,true);assert.deepEqual(first.items,second.items);assert.equal(first.incarnation,second.incarnation);
 });
 test('an incomplete or failed assistant remains distinguishable from completed public output',async()=>{
  const f=await setup();for(const [data,expected]of [[{role:'assistant',time:{created:2}},'interrupted'],[{role:'assistant',time:{created:2,completed:3},error:{name:'synthetic'}},'failed'],[{role:'assistant',time:{created:2,completed:'invalid'}},'interrupted']]){mutate(f.path,db=>db.prepare('UPDATE message SET data=? WHERE id=?').run(JSON.stringify(data),'msg_b'));const history=await new OpenCodeSessionAdapter({dbPath:f.path}).readHistoryDetailed(id);assert.equal(history.items.at(-1).status,expected);}

@@ -1,16 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, symlink, stat, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile, readFile, readdir, symlink, stat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { publishArchive, listArchive, readArchiveItem, deleteArchive } from '../dist/archive.js';
 import { prepareHandoff } from '../dist/handoff.js';
+import { tempDir } from './fixtures/temp.mjs';
 
 const source = { agent: 'claude', id: 'session', nativeId: 'native' };
 const id = '22222222-2222-4222-8222-222222222222';
 const snapshot = { source, items: [{ id: 'unicode', role: 'tool', status: 'interrupted', text: ('😀é漢\\"\n\u0001').repeat(2000) }], includedItemIds: [], completeness: 'partial' };
-async function temporary(t) { const parent = await mkdtemp(join(tmpdir(), 'agentswitch-archive-')); t.after(() => rm(parent, { recursive: true, force: true })); return { parent, directory: join(parent, 'archives with spaces $()') }; }
+async function temporary(t) { const parent = await tempDir('agentswitch-archive-'); return { parent, directory: join(parent, 'archives with spaces $()') }; }
 const cli = (...args) => spawnSync(process.execPath, ['dist/cli.js', 'archive', ...args], { encoding: 'utf8', maxBuffer: 100000 });
 const flags = ref => ['--directory', ref.directory, '--archive', ref.id];
 

@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { TransferJournal } from '../dist/transfer-journal.js';
 import { contextKey, chooseContinuation, canonicalActivity } from '../dist/continuity.js';
 import { preparedContinuity, submit, stop, ref, token, checkpointPrompt, checkpointArchive, checkpointSnapshot } from './fixtures/continuity-journal.mjs';
-const directory=async()=>join(await mkdtemp(join(tmpdir(),'agentswitch-continuity-journal-')),'journal');
+import { tempDir } from './fixtures/temp.mjs';
+const directory=async()=>join(await tempDir('agentswitch-continuity-journal-'),'journal');
 test('migration retains legacy accepted and uncertain outcomes without manufacturing lineage coverage',async()=>{
  const path=await directory(),journal=await TransferJournal.open(path);
  const input={source:{agent:'codex',id:'legacy',nativeId:'legacy'},sourceKey:'legacy',target:'claude',workspace:'/synthetic',mode:'fresh-handoff',prompt:'legacy approved content',includedItemIds:['legacy-item'],omittedItemIds:[],archive:null,completeness:'complete'};

@@ -1,16 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, realpath, writeFile, readdir, symlink, chmod } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, rm, realpath, writeFile, readdir, symlink, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AgySessionAdapter } from '../dist/adapters/index.js';
 import { fixture, user } from './fixtures/agy/native.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { spawnSync } from 'node:child_process';
+import { tempDir } from './fixtures/temp.mjs';
 
 async function setup(t, options) {
-  const base = await realpath(await mkdtemp(join(tmpdir(), 'agentswitch-agy-history-')));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  const base = await realpath(await tempDir('agentswitch-agy-history-'));
   const root = join(base, 'native'), cwd = join(base, 'workspace');
   await mkdir(cwd);
   return { base, root, cwd, ...await fixture(root, cwd, options), adapter: new AgySessionAdapter({ root }) };

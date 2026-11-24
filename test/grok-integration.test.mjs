@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {mkdtemp,mkdir,readFile,writeFile,access,realpath,rm,unlink,symlink} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
+import {mkdir,readFile,writeFile,access,realpath,unlink,symlink} from 'node:fs/promises';
 import {join,resolve,dirname} from 'node:path';
 import {createHash} from 'node:crypto';
 import {fixture,id,user} from './fixtures/grok/native.mjs';
@@ -10,10 +9,11 @@ import {rollout,writeRollout,completed,ids} from './fixtures/codex/native.mjs';
 import {entry,encode,ids as claudeIds} from './fixtures/claude/native.mjs';
 import {TransferJournal} from '../dist/transfer-journal.js';
 import {parseHandoffPrompt} from '../dist/handoff.js';
+import { tempDir } from './fixtures/temp.mjs';
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(t,destination='grok') {
- const root=await realpath(await mkdtemp(join(tmpdir(),"agentswitch Grok ' quoted ")));t.after(()=>rm(root,{recursive:true,force:true}));
+ const root=await realpath(await tempDir("agentswitch Grok ' quoted "));
  const cwd=join(root,'workspace $()'),other=join(root,'other'),codex=join(root,'codex'),claude=join(root,'claude'),bin=join(root,'bin'),state=join(root,'state'),grok=join(root,'grok');
  await Promise.all([cwd,other,bin].map(p=>mkdir(p,{recursive:true})));const native=await fixture(grok,cwd);
  const codexPath=await writeRollout(codex,rollout(cwd,ids[0],[completed('UserMessage','u','Codex fixture NEEDLE_SECRET',1),completed('AgentMessage','a','Codex answer',2)]));

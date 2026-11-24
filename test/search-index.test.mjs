@@ -1,16 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, mkdir, realpath, rm, stat, symlink, writeFile, readFile, readdir } from 'node:fs/promises';
+import { chmod, mkdir, realpath, rm, stat, symlink, writeFile, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { SearchIndex } from '../dist/search-index.js';
+import { tempDir } from './fixtures/temp.mjs';
 
 const query = (text = '', agent = 'all', scope = 'global', workspace = '/') => ({ text, agent, scope, workspace });
 const ids = (hits) => hits.map((hit) => hit.id);
 async function fixture(t, options = {}) {
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'agentswitch-index-')));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await realpath(await tempDir('agentswitch-index-'));
   for (const path of ['project', 'project/child', 'project-other', 'elsewhere']) await mkdir(join(root, path), { recursive: true });
   await symlink(join(root, 'project'), join(root, 'alias'));
   const rows = new Map();

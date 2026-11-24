@@ -1,17 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp,mkdir,writeFile,rename,access,readdir,symlink,utimes,rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir,writeFile,rename,access,readdir,symlink,utimes,rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { NativeCatalog, partialHistoryNotice } from '../dist/native-catalog.js';
 import { SearchIndex } from '../dist/search-index.js';
 import { applicationPaths, searchCacheBytes } from '../dist/application.js';
 import { rollout, writeRollout, completed, ids, encode as encodeCodex } from './fixtures/codex/native.mjs';
 import { entry,encode,ids as claudeIds } from './fixtures/claude/native.mjs';
+import { tempDir } from './fixtures/temp.mjs';
 
 const query=cwd=>({text:'',agent:'all',scope:'folder',workspace:cwd});
 async function fixture(){
- const root=await mkdtemp(join(tmpdir(),'agentswitch-catalog-')),cwd=join(root,'workspace'),codex=join(root,'codex'),claude=join(root,'claude');await mkdir(cwd);await mkdir(join(claude,'projects','bucket'),{recursive:true});
+ const root=await tempDir('agentswitch-catalog-'),cwd=join(root,'workspace'),codex=join(root,'codex'),claude=join(root,'claude');await mkdir(cwd);await mkdir(join(claude,'projects','bucket'),{recursive:true});
  const env={GROK_HOME:join(root,'grok'),AGENTSWITCH_AGY_ROOT:join(root,'agy'),XDG_DATA_HOME:join(root,'xdg-data'),OPENCODE_DB:join(root,'opencode','opencode.db'),CODEX_HOME:codex,CODEX_SQLITE_HOME:codex,CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:join(root,'state')};
  const path=await writeRollout(codex,rollout(cwd,ids[0],[completed('UserMessage','u','original public message',1)]));
  const claudePath=join(claude,'projects','bucket',claudeIds[0]+'.jsonl');await writeFile(claudePath,encode([entry(claudeIds[0],cwd,'u',null,'user','healthy sibling')]));

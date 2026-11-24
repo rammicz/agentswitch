@@ -1,16 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,readdir,rm,symlink,utimes,stat,realpath} from 'node:fs/promises';
+import {mkdir,writeFile,readFile,readdir,symlink,utimes,stat,realpath} from 'node:fs/promises';
 import {join} from 'node:path';
-import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import * as adapters from '../dist/adapters/index.js';
 import {NativeCatalog} from '../dist/native-catalog.js';
 import {SearchIndex} from '../dist/search-index.js';
 import {ids,stamp,entry,encode,parallel} from './fixtures/claude/native.mjs';
+import { tempDir } from './fixtures/temp.mjs';
 const reader = options => {assert.equal(typeof adapters.ClaudeSessionAdapter,'function','ClaudeSessionAdapter must be exported'); return new adapters.ClaudeSessionAdapter(options);};
 async function fixture(t) {
-  const base=await realpath(await mkdtemp(join(tmpdir(),'agentswitch-claude-'))); t.after(()=>rm(base,{recursive:true,force:true}));
+  const base=await realpath(await tempDir('agentswitch-claude-'));
   const root=join(base,'config'),cwd=join(base,'workspace'); await mkdir(root); await mkdir(cwd);
   return {base,root,cwd};
 }

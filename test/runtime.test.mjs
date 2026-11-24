@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdtemp, mkdir, writeFile, readFile, rm, chmod } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, mkdir, writeFile, readFile, rm, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createRuntime, RuntimeError, createOwnedSessionGuard } from '../dist/runtime.js';
+import { tempDir } from './fixtures/temp.mjs';
 const uuid='12345678-1234-1234-1234-123456789abc';
 const source={id:'source',nativeId:uuid,agent:'codex'};
 const fake=String.raw`#!/usr/bin/env node
@@ -21,7 +21,7 @@ else if(args.includes('--help')){
 }else {console.error('synthetic native diagnostic');process.exit(Number(process.env.FAKE_EXIT||0));}
 `;
 async function fixture(t,extra={}){
- const root=realpathSync(await mkdtemp(join(tmpdir(),'agentswitch-runtime-')));t.after(()=>rm(root,{recursive:true,force:true}));
+ const root=realpathSync(await tempDir('agentswitch-runtime-'));
  const workspace=join(root,'workspace $() spaces');await mkdir(workspace);const log=join(root,'events');await writeFile(log,'');
  const executables={codex:join(root,'codex.mjs'),claude:join(root,'claude.mjs')};
  for(const file of Object.values(executables))await writeFile(file,fake,{mode:0o700});

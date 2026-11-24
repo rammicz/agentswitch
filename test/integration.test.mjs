@@ -1,17 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, stat, rename, symlink, access, realpath, rm, utimes } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile, readFile, readdir, stat, rename, symlink, access, realpath, utimes } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { rollout, writeRollout, completed, ids as codexIds } from './fixtures/codex/native.mjs';
 import { entry, encode, ids as claudeIds } from './fixtures/claude/native.mjs';
+import { tempDir } from './fixtures/temp.mjs';
 
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(target='claude') {
- const root=await mkdtemp(join(tmpdir(),'agentswitch-cli-'));
+ const root=await tempDir('agentswitch-cli-');
  const cwd=join(root,'workspace'),other=join(root,'other'),child=join(cwd,'nested'),codex=join(root,'codex'),claude=join(root,'claude'),state=join(root,'state');
  await Promise.all([cwd,other,child,claude].map(path=>mkdir(path,{recursive:true})));
  const files=[];
@@ -39,7 +39,6 @@ const finish=[{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'
 
 test('cold picker shows folder and global results without building a transcript cache',async t=>{
  const f=await setup();
- t.after(()=>rm(f.root,{recursive:true,force:true}));
  const [startup]=pty(f,[{wait:'Search:'},{wait:'codex  public source NEEDLE_SECRET'},...list,{send:'\x03'}]);
  assert.equal(startup.restored,true);
  await assert.rejects(access(join(f.state,'search')),{code:'ENOENT'});
@@ -50,7 +49,6 @@ test('cold picker shows folder and global results without building a transcript 
 
 test('main sessions hide subagents until opened by parent or enabled with F3',async t=>{
  const f=await setup();
- t.after(()=>rm(f.root,{recursive:true,force:true}));
  const spawn=(parent_thread_id,agent_nickname)=>({source:{subagent:{thread_spawn:{parent_thread_id,agent_nickname,agent_role:'worker'}}}});
  await writeRollout(f.codex,rollout(f.cwd,codexIds[3],[],spawn(codexIds[0],'Cedar')));
  await writeRollout(f.codex,rollout(f.other,codexIds[4],[],spawn(codexIds[0],'Willow')));
@@ -205,7 +203,7 @@ test('fresh retry of a native-resume attempt rereads source history and never si
 
 
 test('T4: an archive expired at startup leaves the attempt in the journal, and F recovery rereads the active source',async t=>{
- const f=await setup();t.after(()=>rm(f.root,{recursive:true,force:true}));
+ const f=await setup();
  pty(f,[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},...finish]);
  const {TransferJournal}=await import('../dist/transfer-journal.js');let journal=await TransferJournal.open(join(f.state,'transfers'));const [prior]=journal.list();journal.close();
  const archive=join(prior.archive.directory,prior.archive.id+'.json');const old=new Date(Date.now()-31*86400000);await utimes(archive,old,old);

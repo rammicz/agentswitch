@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp,mkdir,readFile,writeFile,readdir,access,realpath,unlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir,readFile,writeFile,readdir,access,realpath,unlink } from 'node:fs/promises';
 import { join,resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -13,10 +12,11 @@ import { entry,encode,ids as claudeIds } from './fixtures/claude/native.mjs';
 import { TransferJournal } from '../dist/transfer-journal.js';
 import { parseHandoffPrompt } from '../dist/handoff.js';
 import { listArchive } from '../dist/archive.js';
+import { tempDir } from './fixtures/temp.mjs';
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(target='opencode') {
- const root=await mkdtemp(join(tmpdir(),"agentswitch OpenCode ' quoted "));const cwd=join(root,'workspace $()'),other=join(root,'other'),codex=join(root,'codex'),claude=join(root,'claude'),bin=join(root,'bin'),state=join(root,'state');await Promise.all([cwd,other,bin].map(p=>mkdir(p,{recursive:true})));
+ const root=await tempDir("agentswitch OpenCode ' quoted ");const cwd=join(root,'workspace $()'),other=join(root,'other'),codex=join(root,'codex'),claude=join(root,'claude'),bin=join(root,'bin'),state=join(root,'state');await Promise.all([cwd,other,bin].map(p=>mkdir(p,{recursive:true})));
  const path=await fixture(join(root,'opencode','opencode.db'),cwd);
  const codexPath=await writeRollout(codex,rollout(cwd,codexIds[0],[completed('UserMessage','u','Codex fixture NEEDLE_SECRET',1),completed('AgentMessage','a','Codex answer',2)]));
  const bucket=join(claude,'projects','synthetic');await mkdir(bucket,{recursive:true});const claudePath=join(bucket,claudeIds[0]+'.jsonl');await writeFile(claudePath,encode([entry(claudeIds[0],cwd,'u',null,'user','Claude fixture NEEDLE_SECRET',{version:'2.1.330'}),entry(claudeIds[0],cwd,'a','u','assistant','Claude answer',{version:'2.1.330'})]));

@@ -1,16 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, stat, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { buildHandoff, prepareHandoff, createHandoffPlan, publishHandoffPlan, parseHandoffPrompt, DEFAULT_CURRENT_REQUEST } from '../dist/handoff.js';
 import { listArchive, readArchiveItem, deleteArchive } from '../dist/archive.js';
+import { tempDir } from './fixtures/temp.mjs';
 
 const source = { agent: 'codex', id: 'public-session', nativeId: 'native-session' };
 const item = (id, role, text, status = 'complete') => ({ id, role, text, status });
 const archive = { directory: '/private/archive with spaces', id: '11111111-1111-4111-8111-111111111111' };
 const base = { source, archive, currentRequest: 'Continue the current task.' };
-async function temporary(t) { const directory = await mkdtemp(join(tmpdir(), 'agentswitch-handoff-')); t.after(() => rm(directory, { recursive: true, force: true })); return join(directory, 'archives'); }
+async function temporary(t) { const directory = await tempDir('agentswitch-handoff-'); return join(directory, 'archives'); }
 
 test('deterministic intact priority selection continues after oversized entries', () => {
   const items = [item('u0', 'user', 'first'), item('a0', 'assistant', 'x'.repeat(6000)), item('t0', 'tool', 'failed outcome', 'failed'), item('u1', 'user', 'y'.repeat(6000)), item('a1', 'assistant', 'interrupted result', 'interrupted'), item('u2', 'user', 'z'.repeat(20000))];

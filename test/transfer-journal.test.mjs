@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readdir, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tempDir } from './fixtures/temp.mjs';
 
 // Load inside each test so the initial missing-feature failure is retained as evidence.
 const fixture = async () => {
  const { TransferJournal } = await import('../dist/transfer-journal.js');
- const root = await mkdtemp(join(tmpdir(),'agentswitch-journal-'));
+ const root = await tempDir('agentswitch-journal-');
  return {root, journal:await TransferJournal.open(join(root,'journal'))};
 };
 const intent = () => ({ source:{agent:'codex',id:'codex:source',nativeId:'019a0000-0000-7000-8000-000000000001'}, sourceKey:'root+source',target:'claude',workspace:'/synthetic',mode:'fresh-handoff',prompt:'approved redacted prompt',includedItemIds:['u'],omittedItemIds:['a'],archive:null,completeness:'complete' });
@@ -67,7 +67,7 @@ test('foreign entries, public permissions and symlink replacements are rejected'
 });
 
 for(const point of ['prepared','pending','spawned','before-receipt','receipt-before-commit','accepted','deleting'])test(`process crash at ${point} preserves exact committed evidence and never replays`,async()=>{
- const {spawnSync}=await import('node:child_process');const root=await mkdtemp(join(tmpdir(),'agentswitch-crash-'));const directory=join(root,'journal');
+ const {spawnSync}=await import('node:child_process');const root=await tempDir('agentswitch-crash-');const directory=join(root,'journal');
  const child=spawnSync(process.execPath,['test/fixtures/journal-crash.mjs',directory,point],{encoding:'utf8'});assert.equal(child.status,73,child.stderr);
  const reopen=spawnSync(process.execPath,['test/fixtures/journal-crash.mjs',directory,'reopen'],{encoding:'utf8'});assert.equal(reopen.status,0,reopen.stderr);
  const [record]=JSON.parse(reopen.stdout);assert.equal(record.source.nativeId,'019a0000-0000-7000-8000-000000000001');assert.deepEqual(record.includedItemIds,['u']);assert.deepEqual(record.omittedItemIds,['a']);

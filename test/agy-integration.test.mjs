@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp,mkdir,readFile,writeFile,access,realpath,rm,unlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir,readFile,writeFile,access,realpath,unlink } from 'node:fs/promises';
 import { join,resolve,dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { rollout,writeRollout,completed,ids } from './fixtures/codex/native.mjs';
@@ -10,10 +9,11 @@ import { entry,encode,ids as claudeIds } from './fixtures/claude/native.mjs';
 import { TransferJournal } from '../dist/transfer-journal.js';
 import { parseHandoffPrompt } from '../dist/handoff.js';
 import { fixture as agyFixture } from './fixtures/agy/native.mjs';
+import { tempDir } from './fixtures/temp.mjs';
 const repo=resolve('.'),id='12345678-1234-1234-1234-123456789abc';
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(t) {
- const root=await realpath(await mkdtemp(join(tmpdir(),"agentswitch agy ' quoted ")));t.after(()=>rm(root,{recursive:true,force:true}));
+ const root=await realpath(await tempDir("agentswitch agy ' quoted "));
  const cwd=join(root,'workspace $()'),other=join(root,'other'),codex=join(root,'codex'),claude=join(root,'claude'),bin=join(root,'bin'),state=join(root,'state'),agy=join(root,'agy');
  await Promise.all([cwd,other,bin,join(agy,'cache')].map(p=>mkdir(p,{recursive:true})));
  const cache=join(agy,'cache','last_conversations.json');await writeFile(cache,JSON.stringify({[cwd]:id,[other]:'22345678-1234-1234-1234-123456789abc'}));
