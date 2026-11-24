@@ -75,7 +75,7 @@ export class GrokSessionAdapter implements SessionAdapter {
       const row:unknown=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(data.bytes));
       if(!object(row)||!object(row.info)||row.info.id!==child.name||!safePath(row.info.cwd)||!timestamp(row.created_at)||!timestamp(row.updated_at))throw Error('malformed-record');
       // Native subagent sessions belong to their parent and are skipped like Claude's, whatever their format version.
-      if(typeof row.session_kind==='string'&&(row.session_kind==='subagent'||row.session_kind.startsWith('subagent_')))continue;
+      if(typeof row.session_kind==='string'&&/^subagent(?:_|$)/.test(row.session_kind))continue;
       if(row.chat_format_version!==1)throw Error('unsupported-shape');
       if(row.hidden===true)continue;
       if(row.session_kind!=null||row.cwd_generation||row.previous_cwd!=null||row.pending_cwd_switch_reminder!=null||row.source_workspace_dir!=null||row.prompt_display_cwd!=null)throw Error('unsupported-shape');
