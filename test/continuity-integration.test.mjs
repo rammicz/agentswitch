@@ -170,7 +170,7 @@ test('T4: an expired A→B archive changes neither the B→A native return nor a
  assert.deepEqual(JSON.parse(aLaunch.args.at(-1)).history.map(item=>item.text),[DEFAULT_CURRENT_REQUEST,'B response']);
  const expired=(await record(f)).find(attempt=>attempt.id===first.id);assert.match(expired.archiveExpiredAt,/^\d{4}-/);assert.deepEqual(expired.archive,first.archive);
  const retry=pty(f,[{wait:'EXPLICIT FRESH RECOVERY'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\x03'}],['transfers','retry',first.id]);
- assert.match(retry.output,/Current request: Review the historical context/);assert.doesNotMatch(retry.output,/Current request: \{/);
+ assert.match(retry.output,/Current request  Review the historical context/);assert.doesNotMatch(retry.output,/Current request  \{/);
 });
 
 test('T4: a return that still needs an expired archive says it expired and offers F, never "Restore it"',async()=>{

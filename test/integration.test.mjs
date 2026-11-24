@@ -205,11 +205,11 @@ test('fresh retry of a native-resume attempt rereads source history and never si
 
 test('T4: an archive expired at startup leaves the attempt in the journal, and F recovery rereads the active source',async t=>{
  const f=await setup();
- pty(f,[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},...finish]);
+ pty(f,[...list,...select('codex'),{send:'\u001b[C'},{wait:'[claude]'},...finish]);
  const {TransferJournal}=await import('../dist/transfer-journal.js');let journal=await TransferJournal.open(join(f.state,'transfers'));const [prior]=journal.list();journal.close();
  const archive=join(prior.archive.directory,prior.archive.id+'.json');const old=new Date(Date.now()-31*86400000);await utimes(archive,old,old);
  await writeRollout(f.codex,rollout(f.cwd,codexIds[0],[completed('UserMessage','u','public source NEEDLE_SECRET',1),completed('AgentMessage','a','public answer',2),completed('UserMessage','u2','turn after the archive',3)]));
- pty(f,[...list,{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Earlier delivery: uncertain'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}],['transfers','retry',prior.id]);
+ pty(f,[...list,{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\u001b[C'},{wait:'[claude]'},{send:'\r'},{wait:'Earlier delivery: uncertain'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}],['transfers','retry',prior.id]);
  await assert.rejects(access(archive),{code:'ENOENT'});
  journal=await TransferJournal.open(join(f.state,'transfers'));const [retry,expired]=journal.list();journal.close();
  assert.equal(retry.retryOf,prior.id);assert.match(expired.archiveExpiredAt,/^\d{4}-\d\d-\d\dT/);assert.deepEqual(expired.archive,prior.archive);assert.equal(expired.prompt,prior.prompt);
