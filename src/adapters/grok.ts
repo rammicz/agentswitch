@@ -102,7 +102,9 @@ export class GrokSessionAdapter implements SessionAdapter {
   let complete=!!record&&scan.complete;
   if(record)try {
    const data=await this.read(join(record.directory,'chat_history.jsonl'),scan,this.limits.maxFileBytes);
-   const text=new TextDecoder('utf-8',{fatal:true}).decode(data.bytes);const lines=text.split('\n');if(lines.at(-1)==='')lines.pop();else{this.add(scan,'partial-record');complete=false;}
+   const text=new TextDecoder('utf-8',{fatal:true}).decode(data.bytes);const lines=text.split('\n');
+   // An unfinished final line may still be written, so even complete JSON there is never projected.
+   if(lines.pop()!==''){this.add(scan,'partial-record');complete=false;}
    let seenHuman=false,seenMarker=false;
    for(const [ordinal,line]of lines.entries()) {
     if(ordinal>=this.limits.maxItems){complete=false;this.add(scan,'input-limit');break;}
@@ -110,7 +112,8 @@ export class GrokSessionAdapter implements SessionAdapter {
     try {
      const row:unknown=JSON.parse(line);if(!object(row))throw Error('unsupported-shape');
      let role:HistoryItem['role'],value:string;
-     if(row.type==='system'||row.type==='reasoning')continue;
+     // Backend tool calls are raw tool records with no public text, like the omitted tool arguments.
+     if(row.type==='system'||row.type==='reasoning'||row.type==='backend_tool_call')continue;
      if(row.type==='user') {
       if(row.synthetic_reason!==undefined&&row.synthetic_reason!=='human') {
        const known=['primary','compaction_meta','system_reminder','length_continue','project_instructions','auto_continue','auto_recovery','interjection','agent_message','parent_agent_message','task_completed','subagent_completed','notification_drain','goal_summary','goal_classifier_nudge','scheduler_fired','stop_hook_feedback','working_directory_switch','parent_human_message','session_prefix','direct_bash','goal_setup','unknown'];
@@ -124,7 +127,8 @@ export class GrokSessionAdapter implements SessionAdapter {
       if(!Array.isArray(row.content)||!row.content.every(part=>object(part)&&part.type==='text'&&typeof part.text==='string'))throw Error('unsupported-shape');
       role='user';value=row.content.map(part=>(part as {text:string}).text).join('\n');
      }else if(row.type==='assistant'&&typeof row.content==='string'){role='assistant';value=row.content;}
-     else if(row.type==='tool_result'&&typeof row.content==='string'&&typeof row.tool_call_id==='string'&&(row.images===undefined||(Array.isArray(row.images)&&row.images.length===0))){role='tool';value=row.content;}
+     // Result images are omitted unread; the result text is kept.
+     else if(row.type==='tool_result'&&typeof row.content==='string'&&typeof row.tool_call_id==='string'&&(row.images===undefined||Array.isArray(row.images))){role='tool';value=row.content;}
      else throw Error('unsupported-shape');
      if(value)items.push({id:hash(JSON.stringify([record.incarnation,ordinal,role,value])),role,text:value,status:'complete'});
     }catch{complete=false;this.add(scan,'unsupported-shape','history',ordinal+1);}
