@@ -21,8 +21,7 @@ export interface ClaudeSession extends Session { createdAt: string; producerVers
 export interface ClaudeHistory { items: readonly HistoryItem[]; complete: boolean; diagnostics: readonly ClaudeDiagnostic[]; incarnation?:string; retained?:boolean }
 interface File { path: string; id: string; mtime: number }
 interface Metadata { cwd: string; created: string; prompt: string; customTitle: string; aiTitle: string; lastPrompt: string; summary: string; producer: string; sidechain: boolean; valid: boolean }
-// Image tool results are retained whole on one line (over 1 MiB in practice), and a dropped record cuts off every
-// earlier turn. Memory stays bounded by maxFileBytes because a line never extends past the file read.
+// History lines hold whole image tool results; see the limits section of docs/claude-reader.md.
 const claudeDefaults = { ...defaultLimits, maxHistoryLineBytes: 8 * 1024 * 1024 };
 const filePattern = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 function date(value: unknown): string {

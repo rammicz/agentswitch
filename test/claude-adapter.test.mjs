@@ -25,6 +25,7 @@ async function tree(root) {
 }
 const texts = result => result.items.map(i=>i.text);
 const e=(id,cwd,uuid,parent,type,content,extra)=>entry(id,cwd,uuid,parent,type,content,extra);
+const image=data=>({type:'image',source:{type:'base64',media_type:'image/png',data}});
 
 test('metadata preserves native IDs, canonical workspace, exact folder scope and last title precedence',async t=>{
   const {base,root,cwd}=await fixture(t),other=join(base,'other'),child=join(cwd,'child'),alias=join(base,'alias');
@@ -236,7 +237,7 @@ test('unknown record values never reach catalog search or the handoff snapshot',
 });
 
 test('image blocks and image or tool_reference result parts are omitted without making history incomplete',async t=>{
-  const {root,cwd}=await fixture(t),image=data=>({type:'image',source:{type:'base64',media_type:'image/png',data}});
+  const {root,cwd}=await fixture(t);
   const transcript=(id,rich)=>[
     e(id,cwd,'u',null,'user',[{type:'text',text:'Look at this'},...(rich?[image('PRIVATE_BASE64_USER')]:[])]),
     e(id,cwd,'a','u','assistant',[{type:'tool_use',id:'call1',name:'shot',input:{}}]),
@@ -254,13 +255,12 @@ test('image blocks and image or tool_reference result parts are omitted without 
 
 test('an image tool result above the discovery line cap keeps earlier turns; the history line cap still bounds it',async t=>{
   const {root,cwd}=await fixture(t),data='PRIVATE_BASE64'+'A'.repeat(8192);
-  const transcript=id=>[
-    e(id,cwd,'u',null,'user','First turn'),
-    e(id,cwd,'a','u','assistant',[{type:'tool_use',id:'call1',name:'shot',input:{}}]),
-    e(id,cwd,'r','a','user',[{type:'tool_result',tool_use_id:'call1',content:[{type:'text',text:'Screenshot taken'},{type:'image',source:{type:'base64',media_type:'image/png',data}}]}],{toolUseResult:{file:{base64:data}}}),
-    e(id,cwd,'z','r','assistant','Third turn'),
-  ];
-  await write(root,ids[0],transcript(ids[0]));
+  await write(root,ids[0],[
+    e(ids[0],cwd,'u',null,'user','First turn'),
+    e(ids[0],cwd,'a','u','assistant',[{type:'tool_use',id:'call1',name:'shot',input:{}}]),
+    e(ids[0],cwd,'r','a','user',[{type:'tool_result',tool_use_id:'call1',content:[{type:'text',text:'Screenshot taken'},image(data)]}],{toolUseResult:{file:{base64:data}}}),
+    e(ids[0],cwd,'z','r','assistant','Third turn'),
+  ]);
   const discovery=[],a=reader({root,limits:{maxLineBytes:4096},onDiagnostic:d=>discovery.push(d)});
   const r=await a.readHistoryDetailed(ids[0]);
   assert.deepEqual(texts(r),['First turn','Screenshot taken','Third turn']);assert.equal(r.complete,true);
