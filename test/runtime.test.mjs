@@ -8,7 +8,8 @@ const uuid='12345678-1234-1234-1234-123456789abc';
 const source={id:'source',nativeId:uuid,agent:'codex'};
 const fake=String.raw`#!/usr/bin/env node
 import { appendFileSync } from 'node:fs';
-const args=process.argv.slice(2);const provider=process.argv[1].includes('claude')?'claude':'codex';
+import { basename } from 'node:path';
+const args=process.argv.slice(2);const provider=basename(process.argv[1]).includes('claude')?'claude':'codex';
 appendFileSync(process.env.FAKE_LOG,JSON.stringify({args,cwd:process.cwd(),tty:[process.stdin.isTTY===true,process.stdout.isTTY===true,process.stderr.isTTY===true]})+'\n');
 if(args.includes('--version'))console.log(process.env.FAKE_VERSION||(provider==='codex'?'codex-cli 0.171.0':'2.1.330 (Claude Code)'));
 else if(args.includes('--help')){

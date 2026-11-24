@@ -12,6 +12,8 @@ const run=(actions,scenario='',extra={})=>{
  const done=result.output.match(/DONE (.*)\r?\n/);if(done){const state=JSON.parse(done[1]);assert.deepEqual(state.listeners,state.before);}assert.match(result.output,/\x1b\[\?25h\x1b\[\?1049l/);return result;
 };
 const key=(send,wait)=>({send,wait});
+// The picker clips an input wider than the terminal, so wait for the start of a typed path; a deep temp root makes it that wide.
+const typePath=path=>key(path,path.slice(0,40));
 test('production picker confirms exact prepared plan after terminal cleanup',()=>{
  const r=run([key('\r','Public transcript'),key('\r','Target:'),key('\x1b[C','Target: claude'),key('\r','Mode: fresh-handoff'),key('\r','DONE')]);
  assert.match(r.output,/Included: b7/);assert.match(r.output,/Omitted: old1, old2/);
@@ -61,13 +63,13 @@ test('global selection defaults to recorded source workspace',()=>{
  assert.deepEqual(p.plan.request.workspace,{kind:'source',path:other});
 });
 test('explicit workspace override is included in final summary and exact request',()=>{
- const r=run([...openTarget,key('w','Explicit workspace override'),key(other,other),key('\r','Mode:'),key('\r','DONE')]);
+ const r=run([...openTarget,key('w','Explicit workspace override'),typePath(other),key('\r','Mode:'),key('\r','DONE')]);
  const p=JSON.parse(r.output.match(/DISPATCH (.*)\r?\n/)[1]);
  assert.deepEqual(p.plan.request.workspace,{kind:'override',path:other});
 });
 test('missing source directory requires recovery or cancellation',()=>{
  const r=run([key('\x1b[B\x1b[B','Elsewhere task'),...openTarget,key('\r','Workspace unavailable'),
- key('w','Explicit workspace override'),key(root,root),key('\r','Mode:'),key('\x03','DONE')],
+ key('w','Explicit workspace override'),typePath(root),key('\r','Mode:'),key('\x03','DONE')],
  'missing',{PICKER_OTHER:join(root,'deleted')});noDispatch(r);
 });
 for(const signal of ['SIGTERM','SIGINT']) test(`${signal} cleans up without dispatch`,()=>noDispatch(run([{signal,wait:'DONE'}])));
