@@ -122,7 +122,7 @@ function sessionHeader(source: SessionHit, items: readonly HistoryItem[], width:
   const rows = [styled(clipPanel(source.title, width), 'title', color), ...[`Agent: ${source.agent}`, `Folder: ${source.workspace}`,
     `Last used: ${lastUsed(time, Date.now())} (${exactTime(time)})`, `Session ID: ${source.nativeId}`,
     [plural(items.length, 'item'), ...counts].join(' · ')].map(label => styled(clipPanel(label, width), 'muted', color))];
-  if (!items.length && !loading) rows.push('', styled('No readable conversation in this session (metadata only).', 'muted', color));
+  if (!items.length && !loading) rows.push('', ...wordWrap('No readable conversation in this session (metadata only).', width).map(row => styled(row, 'muted', color)));
   return rows;
 }
 /**
@@ -145,15 +145,17 @@ function transcriptBlocks(source: SessionHit, items: readonly HistoryItem[], wid
     if (lines.length > 1 && lines.at(-1) === '') lines.pop();
     const tool = item.role === 'tool';
     const label = tool ? `⏺ tool output · ${plural(lines.length, 'line')}` : item.role === 'user' ? '● You' : `● ${source.agent}`;
+    const tone = item.role === 'tool' ? 'muted' : item.role;
     const tag = item.status === 'complete' ? '' : `  ${item.status}`;
-    rows.push(styled(clipPanel(label, Math.max(1, width - tag.length)), item.role === 'tool' ? 'muted' : item.role, color)
-      + (tag && styled(tag, item.status === 'failed' ? 'danger' : 'warning', color)));
+    // The status tag keeps at least one label cell beside it; a row too narrow for both clips them together.
+    rows.push(width > tag.length ? styled(clipPanel(label, width - tag.length), tone, color) + (tag && styled(tag, item.status === 'failed' ? 'danger' : 'warning', color))
+      : styled(clipPanel(label + tag, width), tone, color));
     if (!tool || expandTools) { for (const text of lines) for (const row of wordWrap(text, textWidth)) indent(row, tool ? 'muted' : undefined); continue; }
     // Collapsed tool output: the first three non-empty lines, one row each.
     const shown = lines.flatMap((text, index) => text.trim() ? [index] : []).slice(0, 3);
     for (const index of shown) indent(clipPanel(lines[index]!, textWidth), 'muted');
     const rest = lines.length - 1 - (shown.at(-1) ?? -1);
-    if (rest > 0) rows.push(styled(`  … ${plural(rest, 'more line')}`, 'muted', color));
+    if (rest > 0) rows.push(styled(clipPanel(`  … ${plural(rest, 'more line')}`, width), 'muted', color));
   }
   return { rows, focus };
 }

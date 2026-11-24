@@ -170,7 +170,7 @@ async function picker({items=transcript,rows=60,columns=100,color=false,match=fa
  const frame=()=>frames().at(-1)??'';
  const until=async(test,label)=>{for(let i=0;i<200;i++){if(test(frame()))return frame();await new Promise(r=>setTimeout(r,10));}throw Error(`Missing ${label} in ${JSON.stringify(frame())}`);};
  const send=async(data,expect,label=expect)=>{const before=frames().length;t.input.write(data);return until(text=>frames().length>before&&(typeof expect==='function'?expect(text):text.includes(expect)),label);};
- await until(text=>text.includes('Fix the flaky upload test'),'list');
+ await until(text=>text.includes('Details'),'list');
  return {t,frame,until,send,written:()=>written,stop:async()=>{t.input.write('\x03');await running;for(const [k,v] of Object.entries(saved))if(v===undefined)delete process.env[k];else process.env[k]=v;}};
 }
 const open=p=>p.send('\r','Enter choose target');
@@ -216,6 +216,15 @@ test('T6: a message match opens the preview on the matched item and highlights t
 test('T7: an empty history explains that only metadata is readable',async()=>{
  const p=await picker({items:[]});const rows=plainRows(await open(p));await p.stop();
  assert.ok(rows.includes('No readable conversation in this session (metadata only).'));
+});
+test('preview rows fit the terminal from 14 to 80 columns, including the empty state and status tags',async()=>{
+ const tagged=[{id:'u1',role:'user',status:'interrupted',text:'Stop here'},{id:'a1',role:'assistant',status:'failed',text:'Partial reply'},
+  {id:'t1',role:'tool',status:'complete',text:Array.from({length:40},(_,i)=>`line ${i}`).join('\n')}];
+ for(const columns of [14,20,30,40,56,80])for(const items of [[],tagged]) {
+  const p=await picker({items,columns,rows:60});const rows=plainRows(await p.send('\r',text=>text.includes('Agent: codex')&&!text.includes('Loading'),'loaded preview'));await p.stop();
+  for(const row of rows)assert.ok(Array.from(row).length<columns,`${columns} columns: ${JSON.stringify(row)}`);
+  if(!items.length)assert.ok(rows.join(' ').replace(/ +/g,' ').includes('No readable conversation in this session (metadata only).'));
+ }
 });
 test('T8: PgDn and PgUp scroll by one body height',async()=>{
  const tall=await picker();const all=plainRows(await open(tall));await tall.stop();
