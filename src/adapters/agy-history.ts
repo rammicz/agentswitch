@@ -4,6 +4,9 @@ import type { HistoryItem } from '../domain.js';
 const object = (v:unknown):v is Record<string,unknown> => !!v && typeof v==='object' && !Array.isArray(v);
 const validText = (v:unknown):v is string => typeof v==='string' && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ud800-\udfff]/u.test(v);
 const fields = new Set(['step_index','source','type','status','created_at','content','model','input_tokens','cache_read_tokens','output_tokens','thinking','tool_calls']);
+const plainFields = new Set(['step_index','source','type','status','created_at','content']);
+// Unknown top-level keys from newer releases are ignored and never projected; known keys keep their checks.
+const onlyPlainKnown = (row:Record<string,unknown>):boolean => Object.keys(row).every(key=>!fields.has(key)||plainFields.has(key));
 function request(text:string):string {
   const boundary='\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\n';
   const parts=text.split(boundary);
@@ -24,7 +27,7 @@ export function parseAgyHistory(text:string,id:string,stepCount:number,limits:{m
   const records=lines.map((line,index)=>{
     if(Buffer.byteLength(line)>limits.maxLineBytes)throw Error('input-limit');
     const row:unknown=JSON.parse(line);
-    if(!object(row)||Object.keys(row).some(key=>!fields.has(key))||row.step_index!==index||row.status!=='DONE'||
+    if(!object(row)||row.step_index!==index||row.status!=='DONE'||
        typeof row.created_at!=='string'||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(row.created_at)||!Number.isFinite(Date.parse(row.created_at)))throw Error('unsupported-shape');
     if(row.thinking!==undefined && typeof row.thinking!=='string')throw Error('unsupported-shape');
     for(const key of ['input_tokens','cache_read_tokens','output_tokens'])if(row[key]!==undefined&&(!Number.isSafeInteger(row[key])||Number(row[key])<0))throw Error('unsupported-shape');
@@ -44,7 +47,7 @@ export function parseAgyHistory(text:string,id:string,stepCount:number,limits:{m
     if(time<previousTime)throw Error('invalid-ordinal');previousTime=time;
     let role:HistoryItem['role'],value:string;
     if(row.type==='USER_INPUT'&&row.source==='USER_EXPLICIT'&&validText(row.content)&&row.thinking===undefined&&row.tool_calls===undefined) {
-      if(Object.keys(row).some(key=>!['step_index','source','type','status','created_at','content'].includes(key)))throw Error('unsupported-shape');
+      if(!onlyPlainKnown(row))throw Error('unsupported-shape');
       if(items.length&&items.at(-1)!.role!=='assistant')throw Error('partial-record');
       role='user';value=request(row.content);
     } else if(row.type==='PLANNER_RESPONSE'&&row.source==='MODEL') {
@@ -56,7 +59,7 @@ export function parseAgyHistory(text:string,id:string,stepCount:number,limits:{m
            Object.keys(call).some(k=>!['name','args'].includes(k))||call.name!=='read_file'||
            !object(call.args)||Object.keys(call.args).length!==1||typeof call.args.Path!=='string'||
            !result||result.type!=='GENERIC'||result.source!=='MODEL'||typeof result.content!=='string'||
-           Object.keys(result).some(key=>!['step_index','source','type','status','created_at','content'].includes(key))) {
+           !onlyPlainKnown(result)) {
           throw Error('unsupported-shape');
         }
         excludedSteps.push(ordinal,ordinal+1);ordinal++;continue;

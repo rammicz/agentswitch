@@ -163,7 +163,7 @@ export class NativeCatalog {
         }
         const sessions=await this.adapters[agent].discover();
         // agy's metadata file is its entire source, rather than optional enrichment.
-        const isDegraded=()=>this.diagnostics[agent].some(diagnostic=>agent==='grok'||agent==='opencode'||agent==='agy'||!harmless.has(diagnostic.code));
+        const isDegraded=()=>this.diagnostics[agent].some(diagnostic=>agent==='grok'||agent==='agy'||(agent==='opencode'&&diagnostic.code!=='untested-producer')||!harmless.has(diagnostic.code));
         let degraded=isDegraded();
         const healthy:Session[]=[];
         for(const session of sessions) {

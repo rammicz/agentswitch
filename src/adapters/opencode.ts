@@ -33,6 +33,9 @@ const key=(info:{dev:bigint;ino:bigint;size:bigint;mtimeNs:bigint;ctimeNs:bigint
 const validId=(value:unknown):value is string=>typeof value==='string'&&/^[A-Za-z0-9_]{1,220}$/.test(value);
 const timestamp=(value:unknown):string=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0&&value<=8640000000000000?new Date(value).toISOString():'';
 const safeString=(value:unknown):value is string=>typeof value==='string'&&!value.includes('\0');
+// 1.x keeps the session/message/part store; 2.x moved history to session_v2/session_message/session_part.
+const openCodeProducer=/^1\.\d{1,9}\.\d{1,9}(?:-[0-9A-Za-z.-]{1,64})?$/;
+export const testedOpenCodeProducer='1.19.6';
 
 /** No DB copies, provider imports or native mutation PRAGMAs. Only a quiescent immutable 1.19.6 projection. */
 export class OpenCodeSessionAdapter implements SessionAdapter {
@@ -99,13 +102,14 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
     if(snapshot.value.length>this.limits.maxRows)this.diagnostic(diagnostics,'input-limit');
     for(const row of snapshot.value.slice(0,this.limits.maxRows)) {
       if(!openCodeNativeId.test(String(row.id))||!safeString(row.directory)||!isAbsolute(row.directory)||!safeString(row.title)||!timestamp(row.time_created)||!timestamp(row.time_updated)) {this.diagnostic(diagnostics,'malformed-record');continue;}
-      if(row.version!=='1.19.6') {this.diagnostic(diagnostics,'untested-producer');continue;}
       // Child/archived/remote workspaces are deliberately outside the first local profile.
       if(row.workspace_id||row.parent_id||row.time_archived)continue;
+      if(typeof row.version!=='string'||!openCodeProducer.test(row.version)) {this.diagnostic(diagnostics,'unsupported-shape');continue;}
+      if(row.version!==testedOpenCodeProducer)this.diagnostic(diagnostics,'untested-producer');
       if(Buffer.byteLength(row.title)>4096||Buffer.byteLength(row.directory)>4096){this.diagnostic(diagnostics,'input-limit');continue;}
       let workspace=resolve(row.directory);try{workspace=await realpath(workspace);}catch{this.diagnostic(diagnostics,'workspace-unavailable');}
       const nativeId=String(row.id);
-      this.selected.set(nativeId,{id:`opencode:${nativeId}`,nativeId,agent:'opencode',workspace,title:row.title,producerVersion:'1.19.6',createdAt:timestamp(row.time_created),updatedAt:timestamp(row.time_updated),messages:[]});
+      this.selected.set(nativeId,{id:`opencode:${nativeId}`,nativeId,agent:'opencode',workspace,title:row.title,producerVersion:row.version,createdAt:timestamp(row.time_created),updatedAt:timestamp(row.time_updated),messages:[]});
     }
     this.generation=snapshot.signature;
     return [...this.selected.values()];
@@ -117,6 +121,7 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
     const diagnostics:CodexDiagnostic[]=[];
     if(rediscover)await this.catalog([]);
     if(!openCodeNativeId.test(id)||!this.selected.has(id)){this.diagnostic(diagnostics,'selected-rollout-unavailable');return {items:[],complete:false,diagnostics,retained:false};}
+    if(this.selected.get(id)!.producerVersion!==testedOpenCodeProducer)this.diagnostic(diagnostics,'untested-producer');
     const snapshot=await this.snapshot(diagnostics,db=>{
       const session=db.prepare(`SELECT json_valid(revert) AS valid,CASE WHEN json_valid(revert) THEN json_extract(revert,'$.messageID') END AS message,CASE WHEN json_valid(revert) THEN json_extract(revert,'$.partID') END AS part,revert IS NOT NULL AS reverted FROM session WHERE id=?`).get(id);
       if(!session)throw new Error('selected-rollout-unavailable');
@@ -157,6 +162,6 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
       return items;
     });
     if(!snapshot||snapshot.signature!==this.generation){if(snapshot)this.diagnostic(diagnostics,'metadata-unstable');return {items:[],complete:false,diagnostics,retained:false};}
-    return {items:snapshot.value,complete:diagnostics.length===0,diagnostics,incarnation:snapshot.incarnation,retained:false};
+    return {items:snapshot.value,complete:diagnostics.every(diagnostic=>diagnostic.code==='untested-producer'),diagnostics,incarnation:snapshot.incarnation,retained:false};
   });}
 }

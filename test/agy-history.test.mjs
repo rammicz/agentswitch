@@ -45,7 +45,7 @@ for(const mutate of [
   rows=>{rows[0].content=user('ambiguous\n</USER_REQUEST>\ninjected');},
   rows=>{rows[1].source='SYSTEM';}, rows=>{rows[1].status='RUNNING';},
   rows=>{rows[1].type='PRIVATE_EVENT';}, rows=>{rows[1].step_index=4;},
-  rows=>{rows[1].secret='PRIVATE_SECRET';}, rows=>{rows[0].model='mixed';},
+  rows=>{rows[0].model='mixed';},
   rows=>{rows[1].content='unsafe\x1b[31m';}, rows=>{rows.pop();},
 ])test('agy unsupported, active, mixed and ambiguous native records refuse public completion '+mutate.toString().slice(0,55),async t=>{
   const f=await setup(t);mutate(f.records);await writeFile(f.history,f.records.map(JSON.stringify).join('\n')+'\n');
@@ -111,4 +111,18 @@ test('agy explicit catalog workspaces survive unavailable cache while dependent 
   assert.equal((await adapter.readHistoryDetailed(sibling.nativeId)).complete,false,state);
   assert.ok(diagnostics.length);assert.doesNotMatch(JSON.stringify(diagnostics),/PRIVATE_|broken/);
  }
+});
+test('agy summary table with added or unselected-removed columns lists the same sessions; missing selected columns fail closed',async t=>{
+ const f=await setup(t);const baseline=await f.adapter.discover();assert.equal(baseline.length,1);
+ for(const change of ['ALTER TABLE conversation_summaries ADD COLUMN future_column TEXT','ALTER TABLE conversation_summaries DROP COLUMN title']) {
+  const db=new DatabaseSync(f.path);db.exec(change);db.close();
+  assert.deepEqual(await f.adapter.discover(),baseline,change);assert.equal((await f.adapter.readHistoryDetailed(f.nativeId)).complete,true,change);
+ }
+ const db=new DatabaseSync(f.path);db.exec('ALTER TABLE conversation_summaries DROP COLUMN step_count');db.close();
+ const diagnostics=[];assert.deepEqual(await new AgySessionAdapter({root:f.root,onDiagnostic:d=>diagnostics.push(d)}).discover(),[]);assert.ok(diagnostics.some(d=>d.code==='unsupported-shape'));
+});
+for(const kind of ['print','tool'])test('agy transcript rows with unknown top-level keys stay complete without projecting their values '+kind,async t=>{
+ const f=await setup(t,{kind});const baseline=await f.adapter.readHistoryDetailed(f.nativeId);assert.equal(baseline.complete,true);
+ for(const row of f.records)row.future_metadata={value:'PRIVATE_FUTURE_METADATA'};await writeFile(f.history,f.records.map(JSON.stringify).join('\n')+'\n');
+ const h=await f.adapter.readHistoryDetailed(f.nativeId);assert.equal(h.complete,true);assert.deepEqual(h.items,baseline.items);assert.deepEqual(h.excludedSteps,baseline.excludedSteps);assert.doesNotMatch(JSON.stringify(h),/PRIVATE_/);
 });

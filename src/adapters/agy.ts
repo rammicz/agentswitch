@@ -140,7 +140,7 @@ export class AgySessionAdapter implements SessionAdapter {
       const schema=db.prepare("SELECT type,sql FROM sqlite_schema WHERE name='conversation_summaries'").get();
       const columns=db.prepare('PRAGMA table_info(conversation_summaries)').all();
       if(schema?.type!=='table'||typeof schema.sql!=='string'||/VIRTUAL/i.test(schema.sql)||
-         columns.length!==summaryColumns.length||columns.some(c=>!summaryColumns.includes(String(c.name)))||
+         !selectedColumns.every(name=>columns.some(c=>c.name===name))||
          !columns.some(c=>c.name==='conversation_id'&&c.pk===1))throw Error('unsupported-shape');
       const rows=db.prepare(`SELECT ${selectedColumns.join(',')} FROM conversation_summaries ORDER BY last_modified_time DESC,conversation_id LIMIT ?`).all(this.limits.maxEntries+1);
       if(rows.length>this.limits.maxEntries)throw Error('input-limit');

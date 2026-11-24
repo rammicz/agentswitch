@@ -36,7 +36,7 @@ for(const sidecar of ['-wal','-shm','-journal','-mj123'])test(`quiescent reader 
  const f=await setup();await writeFile(f.path+sidecar,'synthetic');const before=await readFile(f.path);const diagnostics=[];const adapter=new OpenCodeSessionAdapter({dbPath:f.path,onDiagnostic:x=>diagnostics.push(x)});
  assert.deepEqual(await adapter.discover(),[]);assert.ok(diagnostics.some(x=>x.code==='unsupported-mode'));assert.deepEqual(await readFile(f.path),before);assert.equal((await readFile(f.path+sidecar,'utf8')),'synthetic');
 });
-test('unsupported v2 schema, nonlocal/child/archived sessions and producer versions fail closed',async()=>{
+test('unsupported v2 schema, nonlocal/child/archived sessions and non-1.x producer versions fail closed',async()=>{
  const f=await setup();const adapter=new OpenCodeSessionAdapter({dbPath:f.path});
  for(const [field,value]of [['workspace_id','wrk_remote'],['parent_id','ses_parent'],['time_archived',12],['version','2.3.2']]){mutate(f.path,db=>db.prepare(`UPDATE session SET ${field}=?`).run(value));assert.deepEqual(await adapter.discover(),[]);mutate(f.path,db=>db.prepare(`UPDATE session SET ${field}=?`).run(field==='version'?'1.19.6':null));}
  mutate(f.path,db=>db.exec('DROP TABLE message'));assert.deepEqual(await adapter.discover(),[]);
@@ -128,4 +128,37 @@ test('unknown selected shape retains its prior cache while healthy OpenCode sibl
   mutate(f.path,db=>{db.prepare('INSERT INTO part VALUES (?,?,?,?,?,?)').run('prt_unknown','msg_b',id,3,3,JSON.stringify({type:'future-public-shape',text:'UNCLASSIFIED_PUBLIC_TEXT'}));db.prepare('UPDATE part SET data=? WHERE id=?').run(JSON.stringify({type:'text',text:'healthy updated'}),'prt_healthy');});
   await catalog.refresh(index);assert.equal((await index.query({...query,text:'OpenCode public'})).length,1);assert.equal((await index.query({...query,text:'healthy updated'})).length,1);assert.equal((await index.query({...query,text:'UNCLASSIFIED_PUBLIC_TEXT'})).length,0);assert.match(catalog.notices().join(' '),/opencode: degraded.*unsupported-shape/);const selected=(await index.query({...query,text:'OpenCode public'}))[0];assert.equal((await catalog.snapshot(selected)).history.complete,false);
  }finally{await index.close();}
+});
+test('1.x producers other than 1.19.6 are listed with their real version, complete history and a non-blocking untested-producer',async()=>{
+ const f=await setup();mutate(f.path,db=>{
+  db.exec("UPDATE session SET version='1.18.32'");
+  db.prepare('INSERT INTO session SELECT ?,directory,workspace_id,parent_id,?,?,time_created,time_updated+1,time_archived,revert FROM session WHERE id=?').run('ses_newer','Newer OpenCode','1.20.0',id);
+  db.prepare('INSERT INTO message VALUES (?,?,?,?,?)').run('msg_newer','ses_newer',3,3,JSON.stringify({role:'user',time:{created:3}}));db.prepare('INSERT INTO part VALUES (?,?,?,?,?,?)').run('prt_newer','msg_newer','ses_newer',3,3,JSON.stringify({type:'text',text:'Newer public'}));
+ });const diagnostics=[];const adapter=new OpenCodeSessionAdapter({dbPath:f.path,onDiagnostic:x=>diagnostics.push(x)});
+ assert.deepEqual((await adapter.discover()).map(s=>[s.nativeId,s.producerVersion]),[['ses_newer','1.20.0'],[id,'1.18.32']]);assert.deepEqual([...new Set(diagnostics.map(x=>x.code))],['untested-producer']);
+ const history=await adapter.readHistoryDetailed(id);assert.equal(history.complete,true);assert.deepEqual(history.diagnostics.map(x=>x.code),['untested-producer']);assert.deepEqual(history.items.map(x=>x.text),['First public','OpenCode public NEEDLE_SECRET','Safe output','Safe error','OpenCode answer']);assert.doesNotMatch(JSON.stringify(history),/PRIVATE_/);
+ const newer=await adapter.readHistoryDetailed('ses_newer');assert.equal(newer.complete,true);assert.deepEqual(newer.items.map(x=>x.text),['Newer public']);
+ mutate(f.path,db=>db.exec("UPDATE session SET version='1.19.6' WHERE id='ses_newer'"));assert.deepEqual((await adapter.readHistoryDetailed('ses_newer')).diagnostics,[]);
+});
+test('only well-formed 1.x producer strings are listed; other values fail closed without exposing the value',async()=>{
+ const f=await setup();
+ for(const [version,listed] of [['1.20.0-beta.1',true],['1.0.0',true],['2.0.0',false],['0.9.9',false],['1.20',false],['v1.20.0',false],['1.20.0 PRIVATE_VERSION',false],['1.20.0\n',false],[null,false],[120,false]]) {
+  mutate(f.path,db=>db.prepare('UPDATE session SET version=?').run(version));const diagnostics=[];
+  const sessions=await new OpenCodeSessionAdapter({dbPath:f.path,onDiagnostic:x=>diagnostics.push(x)}).discover();
+  assert.equal(sessions.length,listed?1:0,String(version));if(listed)assert.equal(sessions[0].producerVersion,version);else assert.ok(diagnostics.some(x=>x.code==='unsupported-shape'||x.code==='malformed-record'),String(version));
+  assert.doesNotMatch(JSON.stringify([sessions,diagnostics]),/PRIVATE_/);
+ }
+});
+test('a refresh whose only OpenCode diagnostic is untested-producer indexes 1.x sessions and is not degraded',async()=>{
+ const f=await setup();mutate(f.path,db=>db.exec("UPDATE session SET version='1.18.32'"));
+ const env={GROK_HOME:join(f.root,'grok'),AGENTSWITCH_AGY_ROOT:join(f.root,'agy'),OPENCODE_DB:f.path,XDG_DATA_HOME:join(f.root,'data'),CODEX_HOME:join(f.root,'codex'),CLAUDE_CONFIG_DIR:join(f.root,'claude')};const catalog=await NativeCatalog.create(env);const index=await SearchIndex.open({directory:join(f.root,'cache'),sources:catalog.sources()});
+ try {
+  await catalog.refresh(index);const [hit,...rest]=await index.query({text:'Safe output',agent:'opencode',scope:'folder',workspace:f.cwd});assert.ok(hit);assert.equal(rest.length,0);
+  const notices=catalog.notices().join(' ');assert.doesNotMatch(notices,/opencode: degraded/);assert.match(notices,/opencode: .*untested-producer/);
+  const snapshot=await catalog.snapshot(hit);assert.equal(snapshot.history.complete,true);assert.equal(snapshot.session.producerVersion,'1.18.32');assert.equal(snapshot.runtime.nativeResume,'unknown');
+ }finally{await index.close();}
+});
+test('a session table without a required column still fails closed with unsupported-shape',async()=>{
+ const f=await setup();mutate(f.path,db=>db.exec('ALTER TABLE session DROP COLUMN directory'));const diagnostics=[];
+ assert.deepEqual(await new OpenCodeSessionAdapter({dbPath:f.path,onDiagnostic:x=>diagnostics.push(x)}).discover(),[]);assert.ok(diagnostics.some(x=>x.code==='unsupported-shape'));
 });
