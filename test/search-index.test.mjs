@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdir, realpath, rm, stat, symlink, writeFile, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { SearchIndex } from '../dist/search-index.js';
 import { tempDir } from './fixtures/temp.mjs';
@@ -380,6 +381,28 @@ test('T4: an unchanged refresh or remembered transcript writes nothing; a change
   await f.index.remember({ ...f.rows.get('codex/c'), messages: [said('m1', 'assistant', 'c-text remembered')] });
   assert.notEqual(db.version(), after);
   assert.deepEqual(ids(await f.index.query(query('c-text remembered'))), ['codex:c']);
+});
+
+test('T4: a commit by another connection after the plan is made is planned again before writing', async (t) => {
+  const f = await fixture(t);
+  for (const nativeId of ['a', 'b']) f.add('codex', nativeId, 'project', `${nativeId}-text`);
+  await f.index.refresh();
+  // The other connection retitles b and holds its write lock until well after the next refresh has planned.
+  const writer = spawn(process.execPath, ['--no-warnings', '-e', `
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(process.argv[1]);
+    db.exec("PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; UPDATE sessions SET data=json_set(data, '$.title', 'external') WHERE native_id='b'");
+    console.log('locked');
+    setTimeout(() => db.exec('COMMIT'), 1000);`, join(f.directory, 'index.sqlite')], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const exited = new Promise((resolve) => writer.once('exit', resolve));
+  t.after(() => { if (writer.exitCode === null) writer.kill(); });
+  await new Promise((resolve) => writer.stdout.once('data', resolve));
+  f.rows.get('codex/a').messages = [said('m1', 'assistant', 'a-text changed')];
+  await f.index.refresh();
+  assert.equal(await exited, 0);
+  const titles = Object.fromEntries((await f.index.query(query())).map((hit) => [hit.id, hit.title]));
+  assert.deepEqual(titles, { 'codex:a': f.rows.get('codex/a').title, 'codex:b': f.rows.get('codex/b').title });
+  assert.deepEqual(ids(await f.index.query(query('a-text changed'))), ['codex:a']);
 });
 
 test('T4: over the cap, an unchanged refresh or a remembered evicted transcript writes nothing and keeps results', async (t) => {

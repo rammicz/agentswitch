@@ -72,8 +72,8 @@ function stored({ id, nativeId, agent, title, workspace, updatedAt, messages }: 
   return { updated: Number.isFinite(time) ? time : null, bytes: items.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0),
     data: JSON.stringify({ id, nativeId, agent, title, workspace, updatedAt, messages: items }) };
 }
-/** The stored form of an evicted session: its data without message text. */
 interface Generation { source: string; sessions: readonly Session[] }
+/** The stored form of an evicted session: its data without message text. */
 const emptied = (data: string): string => `json_set(${data}, '$.messages', json('[]'))`;
 // `updated` and `bytes` precede `data` so totals and eviction order never read the large text column.
 const table = (name: string): string => `CREATE TABLE ${name} (source TEXT NOT NULL, native_id TEXT NOT NULL, updated INTEGER, bytes INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source, native_id));`;
@@ -230,12 +230,17 @@ export class SearchIndex {
   private total(): number { return Number(this.database.prepare('SELECT total(bytes) AS total FROM sessions').get()!.total); }
   private statement(sql: string): StatementSync { return this.statements.get(sql) ?? this.statements.set(sql, this.database.prepare(sql)).get(sql)!; }
   /**
-   * Stores generations, writing only rows whose stored state changes. A no-op reads without opening a write transaction;
-   * otherwise the plan is made again inside it, so a concurrent writer cannot invalidate it.
+   * Stores generations, writing only rows whose stored state changes. A no-op reads without opening a write transaction.
+   * The plan is made again inside the transaction only when another connection committed since it was made.
    */
   private save(generations: readonly Generation[], removeMissing: boolean, fromQuery: boolean, reload: boolean): void {
-    if (!this.plan(generations, removeMissing, fromQuery).length) return;
-    this.transaction(() => { for (const [sql, ...values] of this.plan(generations, removeMissing, fromQuery)) this.statement(sql).run(...values); }, reload);
+    const version = this.version();
+    const planned = this.plan(generations, removeMissing, fromQuery);
+    if (!planned.length) return;
+    this.transaction(() => {
+      const writes = this.version() === version ? planned : this.plan(generations, removeMissing, fromQuery);
+      for (const [sql, ...values] of writes) this.statement(sql).run(...values);
+    }, reload);
   }
   /**
    * The writes that store generations: new or changed sessions, sessions that left a provider, and eviction over the cap,
