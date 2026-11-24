@@ -235,6 +235,23 @@ test('unknown record values never reach catalog search or the handoff snapshot',
   assert.doesNotMatch(JSON.stringify({snapshot,hit,notices:catalog.notices()}),/PRIVATE_/);
 });
 
+test('image blocks and image or tool_reference result parts are omitted without making history incomplete',async t=>{
+  const {root,cwd}=await fixture(t),image=data=>({type:'image',source:{type:'base64',media_type:'image/png',data}});
+  const transcript=(id,rich)=>[
+    e(id,cwd,'u',null,'user',[{type:'text',text:'Look at this'},...(rich?[image('PRIVATE_BASE64_USER')]:[])]),
+    e(id,cwd,'a','u','assistant',[{type:'tool_use',id:'call1',name:'shot',input:{}}]),
+    e(id,cwd,'r','a','user',[{type:'tool_result',tool_use_id:'call1',content:[{type:'text',text:'Screenshot taken'},...(rich?[image('PRIVATE_BASE64_RESULT')]:[])]}]),
+    e(id,cwd,'a2','r','assistant',[{type:'tool_use',id:'call2',name:'search',input:{}}]),
+    e(id,cwd,'r2','a2','user',[{type:'tool_result',tool_use_id:'call2',content:rich?[{type:'tool_reference',tool_name:'PRIVATE_TOOL_REFERENCE'}]:[]}]),
+    e(id,cwd,'z','r2','assistant','Done'),
+  ];
+  await write(root,ids[0],transcript(ids[0],false));await write(root,ids[1],transcript(ids[1],true));
+  const a=reader({root}),baseline=await a.readHistoryDetailed(ids[0]),rich=await a.readHistoryDetailed(ids[1]);
+  assert.equal(baseline.complete,true);assert.deepEqual(texts(rich),['Look at this','Screenshot taken','Done']);
+  assert.deepEqual(withoutId(rich.items,ids[1]),withoutId(baseline.items,ids[0]));assert.equal(rich.complete,true);
+  assert.ok(!rich.diagnostics.some(d=>d.code==='unsupported-shape'));assert.doesNotMatch(JSON.stringify(rich),/PRIVATE_/);
+});
+
 test('strictness stays for malformed graph entries, unknown blocks, wrong owners, untyped records and spilled output',async t=>{
   const {root,cwd}=await fixture(t),u=id=>e(id,cwd,'u',null,'user','Request');
   const cases=[

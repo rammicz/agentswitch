@@ -140,6 +140,10 @@ function projectedText(value: string, id: string, role: HistoryItem['role'], fai
   if (value.includes('<persisted-output>')) ctx.add('unsupported-shape', 'history', line);
   return { id, role, text: value, status: failed ? 'failed' : role === 'user' && interrupted(value) ? 'interrupted' : 'complete' };
 }
+// Known non-text content: omitted from projection without making history incomplete. Its data is never read.
+const omittedBlocks = new Set(['thinking', 'redacted_thinking', 'tool_use']);
+const omittedUserBlocks = new Set([...omittedBlocks, 'image']);
+const omittedResultParts = new Set(['image', 'tool_reference']);
 /** Only explicit public text and inline textual tool results cross this boundary. */
 export function project(entries: readonly Entry[], nativeId: string, ctx: ReadContext): HistoryItem[] {
   const items: HistoryItem[] = [];
@@ -163,10 +167,10 @@ export function project(entries: readonly Entry[], nativeId: string, ctx: ReadCo
               const result = object(part);
               if (result.type === 'text' && typeof result.text === 'string') {
                 if (result.text) items.push(projectedText(result.text, `${blockId}:text-${partIndex}`, 'tool', block.is_error === true, ctx, e.line));
-              } else ctx.add('unsupported-shape', 'history', e.line);
+              } else if (!omittedResultParts.has(text(result.type))) ctx.add('unsupported-shape', 'history', e.line);
             });
           } else if (block.content !== undefined && block.content !== null) ctx.add('unsupported-shape', 'history', e.line);
-        } else if (!['thinking', 'redacted_thinking', 'tool_use'].includes(text(block.type))) ctx.add('unsupported-shape', 'history', e.line);
+        } else if (!(role === 'user' ? omittedUserBlocks : omittedBlocks).has(text(block.type))) ctx.add('unsupported-shape', 'history', e.line);
       });
     } else ctx.add('unsupported-shape', 'history', e.line);
   }
