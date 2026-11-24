@@ -72,10 +72,11 @@ test('untested Codex and Claude producers stay natively resumable and retained; 
  const f=await fixture();
  await writeFile(f.claudePath,encode([entry(claudeIds[0],f.cwd,'u',null,'user','healthy sibling',{version:'2.1.331'})]));await f.catalog.refresh(f.index);
  const claude=await f.catalog.snapshot((await f.index.query({...query(f.cwd),agent:'claude'}))[0]);assert.equal(claude.session.producerVersion,'2.1.331');assert.equal(claude.runtime.nativeResume,'compatible');
- for(const version of ['0.172.0','0.163.0','0.180.0-alpha.2','0.171.0','v0.172']) {
+ // The Codex reader flattens a missing, null or non-string cli_version to '', which counts as missing.
+ for(const [version,producer,compatible] of [['0.172.0','0.172.0',true],['0.163.0','0.163.0',true],['0.180.0-alpha.2','0.180.0-alpha.2',true],['0.171.0','0.171.0',true],[undefined,'',true],[null,'',true],['','',true],[0.172,'',true],['v0.172','v0.172',false],['garbage','garbage',false]]) {
   await writeRollout(f.codex,rollout(f.cwd,ids[0],[completed('UserMessage','u','original public message',1)],{cli_version:version}));await f.catalog.refresh(f.index);
-  const codex=await f.catalog.snapshot((await f.index.query({...query(f.cwd),agent:'codex'}))[0]),compatible=version!=='v0.172';
-  assert.equal(codex.session.producerVersion,version);assert.equal(codex.runtime.nativeResume,compatible?'compatible':'unknown',version);assert.equal(codex.retained,compatible&&codex.history.retained===true);
+  const codex=await f.catalog.snapshot((await f.index.query({...query(f.cwd),agent:'codex'}))[0]);
+  assert.equal(codex.session.producerVersion,producer);assert.equal(codex.runtime.nativeResume,compatible?'compatible':'unknown',String(version));assert.equal(codex.retained,compatible&&codex.history.retained===true);
  }
  await f.index.close();
 });
