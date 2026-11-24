@@ -2,6 +2,8 @@
 import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess
 
 def main():
+ # An interrupted test run sends SIGTERM; exiting through finally still kills the session this driver created.
+ signal.signal(signal.SIGTERM,lambda *_:sys.exit(128+signal.SIGTERM))
  config=json.load(sys.stdin)
  master,slave=pty.openpty()
  fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',30,140,0,0))

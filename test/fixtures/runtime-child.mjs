@@ -33,8 +33,10 @@ else {
  if(process.env.CLI_CHILD_HEARTBEAT){
   // Keep a verifiable live child even after macOS revokes its terminal descriptors.
   process.stdin.on('error',()=>{});
+  // It outlives its wrapper on purpose, but never its test: it stops once the test directory is gone or after 90 s.
   let sequence=0;
-  setInterval(()=>writeFileSync(process.env.CLI_CHILD_HEARTBEAT,JSON.stringify({pid:process.pid,sequence:sequence++})),20);
+  setTimeout(()=>process.exit(0),90_000);
+  setInterval(()=>{try{writeFileSync(process.env.CLI_CHILD_HEARTBEAT,JSON.stringify({pid:process.pid,sequence:sequence++}));}catch{process.exit(0);}},20);
  }
  appendFileSync(process.env.RUNTIME_LOG,JSON.stringify({pid:process.pid,args,cwd:process.cwd(),tty:[process.stdin.isTTY,process.stdout.isTTY,process.stderr.isTTY]})+'\n');
  console.log('CHILD '+JSON.stringify({tty:[process.stdin.isTTY,process.stdout.isTTY,process.stderr.isTTY],raw:process.stdin.isRaw===true}));

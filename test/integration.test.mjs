@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { rollout, writeRollout, completed, ids as codexIds } from './fixtures/codex/native.mjs';
 import { entry, encode, ids as claudeIds } from './fixtures/claude/native.mjs';
 import { tempDir } from './fixtures/temp.mjs';
+import { stopHeartbeatChild } from './fixtures/heartbeat.mjs';
 
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
@@ -111,9 +112,9 @@ test('two real CLI processes choosing the same source admit exactly one launch',
  const {TransferJournal}=await import('../dist/transfer-journal.js');const journal=await TransferJournal.open(join(f.state,'transfers'));assert.deepEqual(journal.list().map(record=>record.state).sort(),['failed','uncertain']);journal.close();
 });
 
-for(const phase of ['committed-first','ready-first','pre-pid'])test(`wrapper death ${phase==='pre-pid'?'before durable child PID':'after READY ('+phase+')'} leaves source and live archive protected on restart`,async()=>{
+for(const phase of ['committed-first','ready-first','pre-pid'])test(`wrapper death ${phase==='pre-pid'?'before durable child PID':'after READY ('+phase+')'} leaves source and live archive protected on restart`,async t=>{
  const gap=phase==='pre-pid';
- const f=await setup();f.env.CLI_CHILD_HEARTBEAT=join(f.root,'child-heartbeat');f.env.CLI_TRACK_PID_COMMIT='1';if(phase==='ready-first')f.env.CLI_DELAY_PID_COMMIT='1';if(phase==='committed-first')f.env.RUNTIME_READY_DELAY_MS='150';if(gap){f.env.CLI_CRASH_POINT='spawn-before-pid';f.env.RUNTIME_READY_DELAY_MS='100';}
+ const f=await setup();f.env.CLI_CHILD_HEARTBEAT=join(f.root,'child-heartbeat');t.after(()=>stopHeartbeatChild(f.env.CLI_CHILD_HEARTBEAT));f.env.CLI_TRACK_PID_COMMIT='1';if(phase==='ready-first')f.env.CLI_DELAY_PID_COMMIT='1';if(phase==='committed-first')f.env.RUNTIME_READY_DELAY_MS='150';if(gap){f.env.CLI_CRASH_POINT='spawn-before-pid';f.env.RUNTIME_READY_DELAY_MS='100';}
  const first=[...list,...select('codex'),{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},...(gap?[{waitPrePidBarrier:true}]:[{waitPostPidCommit:true}]),{assertWrapperAlive:true},{killWrapper:true}];
  // A later wrapper reads the same native source. Ownership cannot be stolen even
  // when the original parent is dead and the target PID was never committed.

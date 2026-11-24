@@ -10,6 +10,7 @@ import { TransferJournal } from '../dist/transfer-journal.js';
 import { parseHandoffPrompt } from '../dist/handoff.js';
 import { fixture as agyFixture } from './fixtures/agy/native.mjs';
 import { tempDir } from './fixtures/temp.mjs';
+import { stopHeartbeatChild } from './fixtures/heartbeat.mjs';
 const repo=resolve('.'),id='12345678-1234-1234-1234-123456789abc';
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(t) {
@@ -103,7 +104,7 @@ test('agy changed metadata after confirmation cannot dispatch or publish a journ
  const f=await setup(t);const r=pty(f,[...select('agy'),...target,...clear,{send:'\r'},{wait:'Exact current request'},{append:{path:f.cache,text:'invalid changed suffix'}},{send:'\r'},{wait:'Selected source is unavailable'}]);assert.equal(r.code,1);assert.equal(r.restored,true);await assert.rejects(access(f.env.RUNTIME_LOG));assert.equal((await records(f)).length,0);
 });
 test('agy native open refuses an app-owned crashed unknown writer without takeover',async t=>{
- const f=await setup(t);f.env.CLI_TRACK_PID_COMMIT='1';f.env.CLI_CHILD_HEARTBEAT=join(f.root,'child-heartbeat');
+ const f=await setup(t);f.env.CLI_TRACK_PID_COMMIT='1';f.env.CLI_CHILD_HEARTBEAT=join(f.root,'child-heartbeat');t.after(()=>stopHeartbeatChild(f.env.CLI_CHILD_HEARTBEAT));
  const first=[...select('agy'),...target,...clear,{send:'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{waitPostPidCommit:true},{assertWrapperAlive:true},{killWrapper:true}];
  const results=pty(f,[...first,{assertLiveChild:true},{start:true},...select('agy'),...target,...clear,{send:'\r'},{wait:'ownership is unknown'},{send:'\x03'},{assertLiveChild:true}],[],true);
  const [prior]=await records(f);assert.equal(prior.writer,'unknown');assert.equal(prior.state,'pending');assert.equal(results[0].code,-9);assert.equal(results[1].restored,true);assert.equal(results[1].sampledWhileAlive,true);assert.match(results[0].output,/PID_COMMIT_DONE/);assert.equal(prior.childPid,(await launches(f))[0].pid);assert.equal((await launches(f)).length,1);assert.equal((await records(f)).length,1);

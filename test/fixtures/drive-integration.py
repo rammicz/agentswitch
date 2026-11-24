@@ -39,6 +39,8 @@ def cleanup_processes(state):
  child.wait()
 
 def main():
+ # An interrupted test run sends SIGTERM; exiting through finally still kills the sessions this driver created.
+ signal.signal(signal.SIGTERM,lambda *_:sys.exit(128+signal.SIGTERM))
  config=json.load(sys.stdin);instances=[]
  def start():
   master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',config.get('rows',44),config.get('columns',170),0,0))
