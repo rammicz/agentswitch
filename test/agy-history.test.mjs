@@ -138,12 +138,14 @@ const toolSession=()=>[
   step(2,'GENERIC','MODEL',{content:'PRIVATE_OUTPUT_DONE'}),
   step(3,'GENERIC','MODEL',{content:'PRIVATE_OUTPUT_RUNNING',status:'RUNNING',truncated_fields:['content']}),
   step(4,'SYSTEM_MESSAGE','SYSTEM',{content:'PRIVATE_SYSTEM_MESSAGE'}),
-  step(5,'PLANNER_RESPONSE','MODEL',{model:'m',input_tokens:1,cache_read_tokens:0,output_tokens:1,tool_calls:[
+  // Tool names, call shapes and the status of excluded steps are never inspected.
+  step(5,'PLANNER_RESPONSE','MODEL',{status:'PRIVATE_FUTURE_STATUS',model:'m',input_tokens:1,cache_read_tokens:0,output_tokens:1,tool_calls:[call('PRIVATE_FUTURE_TOOL','PRIVATE_STRING_ARGS'),{name:'x',args:{},PRIVATE_FIELD:1},
     call('write_file',{Path:'/PRIVATE_W',Content:'PRIVATE_CONTENT',Overwrite:true}),call('edit_file',{Path:'/PRIVATE_E',Target:'PRIVATE_T',Replacement:'PRIVATE_R'}),
     call('invoke_subagent',{Prompt:'PRIVATE_PROMPT',Role:'PRIVATE_ROLE',TypeName:'PRIVATE_TYPE'}),call('define_subagent',{Name:'PRIVATE_NAME',Description:'PRIVATE_D',SystemPrompt:'PRIVATE_SP',EnableWriteTools:false}),
     call('send_message',{Recipient:'PRIVATE_TO',Message:'PRIVATE_MESSAGE'}),call('manage_task',{Action:'PRIVATE_ACTION',TaskId:'PRIVATE_TASK'}),call('schedule',{Prompt:'PRIVATE_SP2',DurationSeconds:1,TimerCondition:'PRIVATE_TC'})]}),
-  ...['DONE','ERROR','INVALID','DONE','DONE','DONE','DONE'].map((status,i)=>step(6+i,'GENERIC','MODEL',{content:'PRIVATE_RESULT',status,...(status==='ERROR'?{error:'PRIVATE_ERROR'}:{})})),
-  step(13,'PLANNER_RESPONSE','MODEL',{content:'Checks pass',model:'m',input_tokens:1,cache_read_tokens:0,output_tokens:1}),
+  ...['DONE','ERROR','INVALID','CANCELED','DONE','DONE','DONE'].map((status,i)=>step(6+i,'GENERIC','MODEL',{content:'PRIVATE_RESULT',status,...(status==='ERROR'?{error:'PRIVATE_ERROR'}:{})})),
+  // Public content beside tool calls is projected; a tool-call step may have no result steps at all.
+  step(13,'PLANNER_RESPONSE','MODEL',{content:'Checks pass',model:'m',input_tokens:1,cache_read_tokens:0,output_tokens:1,tool_calls:[call('read_file',{Path:'/PRIVATE_LAST'})]}),
   step(14,'USER_INPUT','USER_EXPLICIT',{content:user('Thanks')}),
   step(15,'PLANNER_RESPONSE','MODEL',{content:'You are welcome'}),
 ];
@@ -155,18 +157,18 @@ test('agy known tool and system steps are excluded while surrounding public text
   const f=await setup(t),h=await writeSession(f,toolSession());
   assert.equal(h.complete,true);assert.deepEqual(h.diagnostics,[]);
   assert.deepEqual(h.items.map(x=>[x.role,x.text]),[['user','Run the checks'],['assistant','I will run them'],['assistant','Checks pass'],['user','Thanks'],['assistant','You are welcome']]);
-  assert.deepEqual(h.excludedSteps,[1,2,3,4,5,6,7,8,9,10,11,12]);
+  assert.deepEqual(h.excludedSteps,[1,2,3,4,5,6,7,8,9,10,11,12,13]);
   assert.doesNotMatch(JSON.stringify(h),/PRIVATE_|run_command|CommandLine/);
 });
 for(const [name,mutate] of [
   ['unknown step type',rows=>{rows[4].type='PRIVATE_FUTURE_STEP';}],
   ['system message from the model',rows=>{rows[4].source='MODEL';}],
-  ['result without a call',rows=>{rows.splice(13,0,step(13,'GENERIC','MODEL',{content:'PRIVATE_ORPHAN'}));renumber(rows);}],
-  ['missing result',rows=>{rows.splice(12,1);renumber(rows);}],
-  ['unknown result status',rows=>{rows[2].status='PRIVATE_STATUS';}],
-  ['active public step',rows=>{rows[13].status='RUNNING';}],
-  ['extra call field',rows=>{rows[1].tool_calls[0].PRIVATE_FIELD=1;}],
-  ['non-object call arguments',rows=>{rows[1].tool_calls[0].args='PRIVATE_ARGS';}],
+  ['result after a public answer without a new call',rows=>{rows.splice(15,0,step(15,'GENERIC','MODEL',{content:'PRIVATE_ORPHAN'}));renumber(rows);}],
+  ['active public answer beside tool calls',rows=>{rows[13].status='RUNNING';}],
+  ['active user request',rows=>{rows[14].status='PRIVATE_STATUS';}],
+  ['non-list tool calls',rows=>{rows[1].tool_calls='PRIVATE_CALLS';}],
+  ['non-string status',rows=>{rows[2].status=1;}],
+  ['turn ending in tool steps',rows=>{rows.splice(15,1,step(15,'PLANNER_RESPONSE','MODEL',{tool_calls:[]}),step(16,'GENERIC','MODEL',{content:'PRIVATE_TAIL'}));}],
 ])test('agy tool step strictness stays for '+name,async t=>{
   const f=await setup(t),rows=toolSession();mutate(rows);const h=await writeSession(f,rows);
   assert.equal(h.complete,false);assert.deepEqual(h.items,[]);assert.doesNotMatch(JSON.stringify(h),/PRIVATE_/);
@@ -191,4 +193,13 @@ test('agy writer lag note keeps the catalog source healthy, so a removed sibling
   const db=new DatabaseSync(f.path);db.prepare('DELETE FROM conversation_summaries WHERE conversation_id=?').run(other.nativeId);db.close();
   await rm(join(f.root,'brain',other.nativeId),{recursive:true});await writeFile(f.cache,JSON.stringify({[f.cwd]:f.nativeId}));
   await catalog.refresh(index);assert.equal((await index.query(q)).length,0);assert.equal((await index.query({...q,text:'Checks pass'})).length,1);
+});
+test('agy excluded step notice stays bounded with thousands of excluded steps',async()=>{
+  const {excludedStepsSummary}=await import('../dist/native-catalog.js');
+  assert.equal(excludedStepsSummary([]),'none');
+  assert.equal(excludedStepsSummary([1,2]),'2 (indexes 1–2)');
+  assert.equal(excludedStepsSummary([3,4,5,6,7,12,40,41,95]),'9 (indexes 3–7, 12, 40–41, 95)');
+  const many=Array.from({length:5000},(_,i)=>i*2+1),summary=excludedStepsSummary(many);
+  assert.equal(summary,'5000 (indexes 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, …)');
+  assert.equal(excludedStepsSummary(Array.from({length:5000},(_,i)=>i+1)),'5000 (indexes 1–5000)');
 });

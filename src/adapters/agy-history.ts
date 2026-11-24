@@ -18,18 +18,10 @@ function request(text:string):string {
   return value;
 }
 
-// Tool results may stay RUNNING (asynchronous commands) or end in ERROR/INVALID; they are never projected.
-const resultStatuses = new Set(['DONE','RUNNING','ERROR','INVALID']);
-function toolCalls(value:unknown):number {
-  if(!Array.isArray(value)||!value.length||!value.every(call=>object(call)&&Object.keys(call).every(k=>k==='name'||k==='args')&&
-     validText(call.name)&&call.name.length>0&&call.name.length<=200&&object(call.args)))throw Error('unsupported-shape');
-  return value.length;
-}
-
 /**
  * Complete means the reviewed public-text projection. Tool calls, their results and system messages are excluded
- * steps whose arguments and bodies are never read into items. `lagging` marks a writer that has not yet appended
- * the last step its idle summary counts.
+ * steps whose calls, results and bodies are never read into items, whatever their tool name or status. `lagging`
+ * marks a writer that has not yet appended the last step its idle summary counts.
  */
 export function parseAgyHistory(text:string,id:string,stepCount:number,limits:{maxItems:number;maxLineBytes:number}):{items:HistoryItem[];excludedSteps:number[];lagging:boolean} {
   if(!text.endsWith('\n'))throw Error('partial-record');
@@ -48,34 +40,35 @@ export function parseAgyHistory(text:string,id:string,stepCount:number,limits:{m
     return row;
   });
   const items:HistoryItem[]=[],excludedSteps:number[]=[];
-  let previousTime=0,results=0;
+  // Results are only accepted after a tool-call step, until the next public item.
+  let previousTime=0,inTools=false;
   for(let ordinal=0;ordinal<records.length;ordinal++) {
     const row=records[ordinal]!;
     const time=Date.parse(row.created_at as string);
     if(time<previousTime)throw Error('invalid-ordinal');previousTime=time;
-    if(results) {
-      // The next steps after a tool-call step are its results, one per call.
-      if(row.type!=='GENERIC'||row.source!=='MODEL'||!resultStatuses.has(row.status as string)||typeof row.content!=='string'||!onlyPlainKnown(row))throw Error('unsupported-shape');
-      excludedSteps.push(ordinal);results--;continue;
-    }
+    if(typeof row.status!=='string')throw Error('unsupported-shape');
+    if(row.type==='PLANNER_RESPONSE'&&row.source==='MODEL'&&row.tool_calls!==undefined) {
+      if(!items.length)throw Error('partial-record');
+      if(!Array.isArray(row.tool_calls))throw Error('unsupported-shape');
+      excludedSteps.push(ordinal);inTools=true;
+      if(row.content===undefined)continue;
+    } else if((row.type==='GENERIC'&&row.source==='MODEL'&&inTools||row.type==='SYSTEM_MESSAGE'&&row.source==='SYSTEM')&&
+              typeof row.content==='string'&&onlyPlainKnown(row)) {excludedSteps.push(ordinal);continue;}
+    // Projected user and assistant steps must have completed.
     if(row.status!=='DONE')throw Error('unsupported-shape');
-    if(row.type==='SYSTEM_MESSAGE'&&row.source==='SYSTEM'&&typeof row.content==='string'&&onlyPlainKnown(row)) {excludedSteps.push(ordinal);continue;}
     let role:HistoryItem['role'],value:string;
     if(row.type==='USER_INPUT'&&row.source==='USER_EXPLICIT'&&validText(row.content)&&row.thinking===undefined&&row.tool_calls===undefined) {
       if(!onlyPlainKnown(row))throw Error('unsupported-shape');
       if(items.length&&items.at(-1)!.role!=='assistant')throw Error('partial-record');
-      role='user';value=request(row.content);
+      role='user';value=request(row.content);inTools=false;
     } else if(row.type==='PLANNER_RESPONSE'&&row.source==='MODEL') {
       if(!items.length)throw Error('partial-record');
-      if(row.tool_calls!==undefined) {
-        results=toolCalls(row.tool_calls);excludedSteps.push(ordinal);
-        if(row.content===undefined)continue;
-      }
+      if(row.tool_calls===undefined)inTools=false;
       if(!validText(row.content)||!row.content)throw Error('unsupported-shape');
       role='assistant';value=row.content;
     } else throw Error('unsupported-shape');
     items.push({id:createHash('sha256').update(JSON.stringify([id,row.step_index,role,value])).digest('hex'),role,text:value,status:'complete'});
   }
-  if(results||items.at(-1)?.role!=='assistant')throw Error('partial-record');
+  if(items.at(-1)?.role!=='assistant')throw Error('partial-record');
   return {items,excludedSteps,lagging};
 }

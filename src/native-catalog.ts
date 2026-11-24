@@ -35,6 +35,16 @@ export function partialHistoryNotice(agent:AgentId, history:Pick<CodexHistory,'c
     ? `Partial history: at least ${records} source record${records===1?'':'s'} could not be read${listed} and ${records===1?'is':'are'} not included.${more}`
     : `Partial history: the source reader reported incomplete history${listed}. Unread records are not included.${more}`;
 }
+/** Ascending excluded step indexes as a count and at most ten compact ranges, so the notice stays bounded. */
+export function excludedStepsSummary(steps:readonly number[]):string {
+  if(!steps.length)return 'none';
+  const ranges:string[]=[];
+  for(let start=0;start<steps.length&&ranges.length<=10;) {
+    let end=start;while(end+1<steps.length&&steps[end+1]===steps[end]!+1)end++;
+    ranges.push(start===end?`${steps[start]}`:`${steps[start]}–${steps[end]}`);start=end+1;
+  }
+  return `${steps.length} (indexes ${ranges.slice(0,10).join(', ')}${ranges.length>10?', …':''})`;
+}
 /** Disclosure for a retry of a transfer recorded as partial: its counts and codes were not persisted. */
 export const recordedPartialHistory='Partial history: the earlier transfer recorded this history as partial. Unread records are not included; their count was not recorded.';
 const implicitContext = /^(?:# AGENTS\.md instructions|<(?:environment_context|permissions instructions|collaboration_mode|subagent_notification)\b)/iu;
@@ -224,6 +234,6 @@ export class NativeCatalog {
     const runtime:RuntimeSource={agent:session.agent,id:session.id,nativeId:session.nativeId,workspace:session.workspace,nativeResume:compatible?'compatible':'unknown'};
     const sourceKey=digest(JSON.stringify([source.agent,this.rootKeys[source.agent],source.nativeId]));
     const context:ContextRef={...runtime,root:this.rootKey(source.agent),incarnation:history.incarnation??'unknown',sourceKey};
-    return {session,history,runtime,fingerprint:digest(JSON.stringify([runtime,history.items,history.complete,context.incarnation,history.retained,history.itemTurns,'snapshotIdentity' in history?history.snapshotIdentity:null,'excludedSteps' in history?history.excludedSteps:[]])),sourceKey,context,retained:compatible&&history.retained===true,...(source.agent==='agy'?{metadataOnly:'metadataOnly' in session&&session.metadataOnly===true,projectionNotice:`Antigravity public-text projection excludes internal metadata, settings, thinking and raw tool data. Excluded native tool step indexes: ${'excludedSteps' in history&&Array.isArray(history.excludedSteps)&&history.excludedSteps.length?history.excludedSteps.join(', '):'none'}. Archive completeness describes this public-text projection.`}:{})};
+    return {session,history,runtime,fingerprint:digest(JSON.stringify([runtime,history.items,history.complete,context.incarnation,history.retained,history.itemTurns,'snapshotIdentity' in history?history.snapshotIdentity:null,'excludedSteps' in history?history.excludedSteps:[]])),sourceKey,context,retained:compatible&&history.retained===true,...(source.agent==='agy'?{metadataOnly:'metadataOnly' in session&&session.metadataOnly===true,projectionNotice:`Antigravity public-text projection excludes internal metadata, settings, thinking and raw tool data. Excluded native tool and system steps: ${excludedStepsSummary('excludedSteps' in history&&Array.isArray(history.excludedSteps)?history.excludedSteps:[])}. Archive completeness describes this public-text projection.`}:{})};
   }
 }
