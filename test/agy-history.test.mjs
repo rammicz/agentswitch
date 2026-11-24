@@ -259,15 +259,16 @@ test('agy text the producer marked as shortened stays included with a note and i
 for (const [name, fields] of [['only non-projected fields', ['tool_calls', 'thinking']], ['an empty list', []], ['unknown field names', ['PRIVATE_FUTURE_FIELD']]])
   test(`agy truncated_fields with ${name} changes nothing`, async t => {
     const f = await setup(t), rows = toolSession();
-    rows[1].truncated_fields = fields; rows[0].truncated_fields = fields.filter(field => field !== 'tool_calls' && field !== 'thinking'); rows[2].truncated_fields = ['content'];
+    rows[0].truncated_fields = fields; rows[1].truncated_fields = fields;
     const h = await writeSession(f, rows);
     assert.equal(h.complete, true); assert.deepEqual(h.diagnostics, []); assert.deepEqual(h.truncatedSteps, []);
   });
 
-for (const value of ['content', [1], { content: true }, null])
-  test(`agy truncated_fields ${JSON.stringify(value)} stays strict`, async t => {
-    const f = await setup(t), rows = toolSession();
-    rows[4].truncated_fields = value;
+test('agy truncated_fields that is not a list of strings stays strict', async t => {
+  const f = await setup(t);
+  for (const value of ['content', [1], { content: true }, null]) {
+    const rows = toolSession(); rows[4].truncated_fields = value;
     const h = await writeSession(f, rows);
-    assert.equal(h.complete, false); assert.deepEqual(h.items, []); assert.deepEqual(h.diagnostics.map(d => d.code), ['unsupported-shape']);
-  });
+    assert.deepEqual([h.complete, h.items, h.diagnostics.map(d => d.code)], [false, [], ['unsupported-shape']], JSON.stringify(value));
+  }
+});

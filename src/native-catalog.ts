@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { CodexSessionAdapter, ClaudeSessionAdapter, OpenCodeSessionAdapter, openCodePaths, testedOpenCodeProducer, AgySessionAdapter, agyPaths, GrokSessionAdapter, grokPaths } from './adapters/index.js';
 import { defaultLimits } from './adapters/codex-io.js';
-import type { CodexDiagnostic, CodexHistory, CodexSession, ClaudeSession, OpenCodeSession, AgySession, GrokSession } from './adapters/index.js';
+import type { CodexDiagnostic, CodexHistory, CodexSession, ClaudeSession, OpenCodeSession, AgySession, AgyHistory, GrokSession } from './adapters/index.js';
 import { setTimeout } from 'node:timers/promises';
 import type { AgentId, HistoryItem, Session, SessionQuery } from './domain.js';
 import type { SessionHit, SessionSource } from './tui/contracts.js';
@@ -254,6 +254,7 @@ export class NativeCatalog {
     const runtime:RuntimeSource={agent:session.agent,id:session.id,nativeId:session.nativeId,workspace:session.workspace,nativeResume:compatible?'compatible':'unknown'};
     const sourceKey=digest(JSON.stringify([source.agent,this.rootKeys[source.agent],source.nativeId]));
     const context:ContextRef={...runtime,root:this.rootKey(source.agent),incarnation:history.incarnation??'unknown',sourceKey};
-    return {session,history,runtime,fingerprint:digest(JSON.stringify([runtime,history.items,history.complete,context.incarnation,history.retained,history.itemTurns,'snapshotIdentity' in history?history.snapshotIdentity:null,'excludedSteps' in history?history.excludedSteps:[]])),sourceKey,context,retained:compatible&&history.retained===true,...(source.agent==='agy'?{metadataOnly:'metadataOnly' in session&&session.metadataOnly===true,projectionNotice:`Antigravity public-text projection excludes internal metadata, settings, thinking and raw tool data. Excluded native tool and system steps: ${excludedStepsSummary('excludedSteps' in history&&Array.isArray(history.excludedSteps)?history.excludedSteps:[])}. Archive completeness describes this public-text projection.${truncatedStepsNotice('truncatedSteps' in history&&Array.isArray(history.truncatedSteps)?history.truncatedSteps:[])}`}:{})};
+    const {excludedSteps=[],truncatedSteps=[]}=history as Partial<AgyHistory>;
+    return {session,history,runtime,fingerprint:digest(JSON.stringify([runtime,history.items,history.complete,context.incarnation,history.retained,history.itemTurns,'snapshotIdentity' in history?history.snapshotIdentity:null,excludedSteps])),sourceKey,context,retained:compatible&&history.retained===true,...(source.agent==='agy'?{metadataOnly:'metadataOnly' in session&&session.metadataOnly===true,projectionNotice:`Antigravity public-text projection excludes internal metadata, settings, thinking and raw tool data. Excluded native tool and system steps: ${excludedStepsSummary(excludedSteps)}. Archive completeness describes this public-text projection.${truncatedStepsNotice(truncatedSteps)}`}:{})};
   }
 }

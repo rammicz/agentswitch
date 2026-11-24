@@ -69,7 +69,7 @@ export function parseAgyHistory(text:string,id:string,stepCount:number,limits:{m
       if(!validText(row.content)||!row.content)throw Error('unsupported-shape');
       role='assistant';value=row.content;
     } else throw Error('unsupported-shape');
-    if((row.truncated_fields as string[]|undefined)?.includes('content'))truncatedSteps.push(ordinal);
+    if(Array.isArray(row.truncated_fields)&&row.truncated_fields.includes('content'))truncatedSteps.push(ordinal);
     items.push({id:createHash('sha256').update(JSON.stringify([id,row.step_index,role,value])).digest('hex'),role,text:value,status:'complete'});
   }
   if(items.at(-1)?.role!=='assistant')throw Error('partial-record');
