@@ -5,6 +5,8 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import * as adapters from '../dist/adapters/index.js';
+import {NativeCatalog} from '../dist/native-catalog.js';
+import {SearchIndex} from '../dist/search-index.js';
 import {ids,stamp,entry,encode,parallel} from './fixtures/claude/native.mjs';
 const reader = options => {assert.equal(typeof adapters.ClaudeSessionAdapter,'function','ClaudeSessionAdapter must be exported'); return new adapters.ClaudeSessionAdapter(options);};
 async function fixture(t) {
@@ -189,6 +191,67 @@ test('a corrupt sibling does not make selected healthy history incomplete; diagn
   const {root,cwd}=await fixture(t),diagnostics=[];await write(root,ids[0],[e(ids[0],cwd,'u',null,'user','Healthy')]);await write(root,ids[1],['{PRIVATE_CORRUPT']);
   const a=reader({root,onDiagnostic:d=>diagnostics.push(d)}),result=await a.readHistoryDetailed(ids[0]);
   assert.equal(result.complete,true);assert.deepEqual(result.diagnostics,[]);assert.ok(diagnostics.some(d=>d.code==='malformed-record'));
+});
+
+// Bookkeeping records newer Claude Code writes beside the graph, plus an invented future type; each carries PRIVATE_ values.
+const bookkeeping=id=>[
+  {type:'session-owner',sessionId:id,owner:'PRIVATE_OWNER',cwd:'/PRIVATE_OWNER_CWD'},
+  {type:'api-request',sessionId:id,uuid:'PRIVATE_UUID',parentUuid:'u',message:{role:'assistant',content:'PRIVATE_API'},version:'PRIVATE_VERSION'},
+  {type:'mode',mode:'PRIVATE_MODE',customTitle:'PRIVATE_TITLE',timestamp:'2030-01-01T00:00:00Z'},
+  {type:'future-bookkeeping',payload:{text:'PRIVATE_FUTURE'},summary:'PRIVATE_SUMMARY',lastPrompt:'PRIVATE_PROMPT'},
+];
+const interleave=(records,extra)=>records.flatMap((record,i)=>i<extra.length?[extra[i],record]:[record]);
+const withoutId=(value,id)=>JSON.parse(JSON.stringify(value).replaceAll(id,'ID'));
+
+test('unknown top-level record types are skipped without making history incomplete',async t=>{
+  const {root,cwd}=await fixture(t);
+  const clean=id=>[e(id,cwd,'u',null,'user','Clean request'),e(id,cwd,'a','u','assistant','Clean answer'),{type:'custom-title',customTitle:'Clean title'}];
+  for(const [n,base] of [[0,clean],[2,id=>parallel(id,cwd)]]){
+    await write(root,ids[n],base(ids[n]));await write(root,ids[n+1],interleave(base(ids[n+1]),bookkeeping(ids[n+1])));
+  }
+  const diagnostics=[],a=reader({root,onDiagnostic:d=>diagnostics.push(d)}),sessions=await a.discover();
+  const meta=id=>{const {id:_,nativeId,...rest}=sessions.find(s=>s.nativeId===id);return rest;};
+  assert.deepEqual(meta(ids[1]),meta(ids[0]));assert.deepEqual(meta(ids[3]),meta(ids[2]));
+  assert.equal(diagnostics.filter(d=>d.code==='untested-producer').length,1);
+  assert.ok(diagnostics.every(d=>d.code==='untested-producer'),JSON.stringify(diagnostics));
+  for(const n of [0,2]){
+    const baseline=await a.readHistoryDetailed(ids[n]);diagnostics.length=0;const injected=await a.readHistoryDetailed(ids[n+1]);
+    assert.deepEqual(withoutId(injected.items,ids[n+1]),withoutId(baseline.items,ids[n]));assert.equal(injected.complete,baseline.complete);
+    assert.deepEqual(injected.diagnostics.filter(d=>d.code!=='untested-producer').map(d=>d.code),baseline.diagnostics.map(d=>d.code));
+    assert.equal(injected.diagnostics.filter(d=>d.code==='untested-producer').length,1);assert.equal(injected.diagnostics.find(d=>d.code==='untested-producer').source,'history');
+    assert.doesNotMatch(JSON.stringify({injected,diagnostics,sessions}),/PRIVATE_/);
+  }
+  assert.equal((await a.readHistoryDetailed(ids[1])).complete,true);
+});
+
+test('unknown record values never reach catalog search or the handoff snapshot',async t=>{
+  const {base,cwd}=await fixture(t),claude=join(base,'claude');
+  await write(claude,ids[0],interleave([e(ids[0],cwd,'u',null,'user','Searchable request'),e(ids[0],cwd,'a','u','assistant','Searchable answer')],bookkeeping(ids[0])));
+  const env={GROK_HOME:join(base,'grok'),AGENTSWITCH_AGY_ROOT:join(base,'agy'),XDG_DATA_HOME:join(base,'xdg-data'),OPENCODE_DB:join(base,'opencode','opencode.db'),CODEX_HOME:join(base,'codex'),CODEX_SQLITE_HOME:join(base,'codex'),CLAUDE_CONFIG_DIR:claude,AGENTSWITCH_STATE_DIR:join(base,'state')};
+  const catalog=await NativeCatalog.create(env),index=await SearchIndex.open({directory:join(base,'search'),sources:catalog.sources()});t.after(()=>index.close());
+  await catalog.refresh(index);const query=text=>index.query({text,agent:'claude',scope:'folder',workspace:cwd});
+  const [hit]=await query('Searchable answer');assert.ok(hit);
+  for(const sentinel of ['PRIVATE_OWNER','PRIVATE_API','PRIVATE_MODE','PRIVATE_FUTURE','PRIVATE_TITLE','PRIVATE_SUMMARY','PRIVATE_PROMPT'])assert.deepEqual(await query(sentinel),[]);
+  const snapshot=await catalog.snapshot(hit);assert.equal(snapshot.history.complete,true);assert.deepEqual(snapshot.history.items.map(i=>i.text),['Searchable request','Searchable answer']);
+  assert.doesNotMatch(JSON.stringify({snapshot,hit,notices:catalog.notices()}),/PRIVATE_/);
+});
+
+test('strictness stays for malformed graph entries, unknown blocks, wrong owners, untyped records and spilled output',async t=>{
+  const {root,cwd}=await fixture(t),u=id=>e(id,cwd,'u',null,'user','Request');
+  const cases=[
+    [{type:'user',uuid:'bad',parentUuid:'u',sessionId:ids[0],message:'PRIVATE_NOT_OBJECT'}],
+    [e(ids[1],cwd,'a','u','assistant',[{type:'future-block',value:'PRIVATE_BLOCK'},{type:'text',text:'Kept'}])],
+    [{type:'mode',sessionId:ids[0],mode:'PRIVATE_FOREIGN'}],
+    [{payload:'PRIVATE_UNTYPED'}],
+    [e(ids[4],cwd,'r','u','user',[{type:'tool_result',tool_use_id:'call',content:'<persisted-output>PRIVATE_SPILL</persisted-output>'}])],
+  ];
+  const expected=['unsupported-shape','unsupported-shape','invalid-owner','unsupported-shape','unsupported-shape'];
+  for(const [n,extra] of cases.entries()){
+    await write(root,ids[n],interleave([u(ids[n]),...extra],bookkeeping(ids[n])));
+    const r=await reader({root}).readHistoryDetailed(ids[n]);
+    assert.equal(r.complete,false,`case ${n}`);assert.ok(r.diagnostics.some(d=>d.code===expected[n]),`case ${n}`);
+    assert.doesNotMatch(JSON.stringify(r.diagnostics),/PRIVATE_/);
+  }
 });
 
 test('unknown records and nested tool input cannot spoof native display metadata',async t=>{
