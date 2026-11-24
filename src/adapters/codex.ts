@@ -50,7 +50,9 @@ function subagentTitle(spawn: ObjectRecord): string {
   if (nickname) return `${nickname} (${role || 'subagent'})`;
   return role ? `${role} subagent` : '';
 }
-function parseRecords(bytes: Buffer, source: string, ctx: ReadContext, malformed: Set<number>, abandoned: boolean): SourceRecord[] {
+/** Malformed interior line numbers, mapped to whether a re-emitted record superseded the line. */
+type Malformed = Map<number, boolean>;
+function parseRecords(bytes: Buffer, source: string, ctx: ReadContext, malformed: Malformed, abandoned: boolean): SourceRecord[] {
   const records: SourceRecord[] = [];
   let offset = 0, line = 0;
   while (offset < bytes.length) {
@@ -64,8 +66,8 @@ function parseRecords(bytes: Buffer, source: string, ctx: ReadContext, malformed
         if (!value.type || !value.payload) throw new Error();
         records.push({ value, offset, end, line, source, ...(integer(value.ordinal) ? { ordinal: value.ordinal } : {}) });
       } catch {
-        if (newline < 0) ctx.add('partial-record', 'history', line, !abandoned);
-        else { ctx.add('malformed-record', 'history', line); malformed.add(line); }
+        if (newline < 0) ctx.add(abandoned ? 'abandoned-record' : 'partial-record', 'history', line, !abandoned);
+        else malformed.set(line, false);
       }
     }
     offset = end;
@@ -81,8 +83,15 @@ async function parseFile(file: RolloutFile, root: string, ctx: ReadContext, cuto
   return parseRollout(file, bytes, ctx, Date.now() - read.modified > abandonedAfterMs);
 }
 function parseRollout(file: RolloutFile, bytes: Buffer, ctx: ReadContext, abandoned = false): ParsedRollout | undefined {
-  const malformed = new Set<number>();
-  const records = parseRecords(bytes, file.rolloutId, ctx, malformed, abandoned), first = records[0];
+  const malformed: Malformed = new Map();
+  try { return validateRollout(file, parseRecords(bytes, file.rolloutId, ctx, malformed, abandoned), malformed, ctx); }
+  finally {
+    // A superseded line lost nothing, so it does not make the history incomplete.
+    for (const [line, superseded] of malformed) ctx.add(superseded ? 'superseded-record' : 'malformed-record', 'history', line, !superseded);
+  }
+}
+function validateRollout(file: RolloutFile, records: SourceRecord[], malformed: Malformed, ctx: ReadContext): ParsedRollout | undefined {
+  const first = records[0];
   if (!first || first.offset !== 0 || first.value.type !== 'session_meta') { ctx.add('unsupported-shape'); return; }
   const meta = object(first.value.payload);
   if (meta.id !== file.owner) { ctx.add('invalid-owner'); return; }
@@ -98,11 +107,12 @@ function parseRollout(file: RolloutFile, bytes: Buffer, ctx: ReadContext, abando
     const accepted: SourceRecord[] = [];
     let superseded = 0;
     for (const record of records) {
-      // Physical record positions remain fixed across malformed interior records, except a torn line that the
-      // writer re-emitted whole on the next line: that record carries the torn line's ordinal and supersedes it.
+      // Physical record positions remain fixed across malformed interior records, except a single torn line between
+      // accepted records that the writer re-emitted on the next line: that record carries the torn line's ordinal.
       const expected = base + record.line - 1 - superseded;
-      if (record.ordinal === expected - 1 && malformed.has(record.line - 1)) superseded++;
-      else if (record.ordinal !== expected) { ctx.add('invalid-ordinal', 'history', record.line); continue; }
+      if (record.ordinal === expected - 1 && malformed.has(record.line - 1) && accepted.at(-1)?.line === record.line - 2) {
+        malformed.set(record.line - 1, true); superseded++;
+      } else if (record.ordinal !== expected) { ctx.add('invalid-ordinal', 'history', record.line); continue; }
       accepted.push(record);
     }
     if (accepted[0] !== first) return;

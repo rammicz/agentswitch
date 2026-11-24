@@ -323,7 +323,7 @@ test('lazy discovery retains capped histories; oversized lines, depth and diagno
 test('a rollout over the file cap returns its readable prefix; a parent cut inside the cap stays complete', async t => {
   const {root,cwd} = await fixture(t);
   const records = rollout(cwd,ids[0],[completed('UserMessage','u','Prefix',1),completed('AgentMessage','a','Answer',2),completed('AgentMessage','big','x'.repeat(4000),3)]);
-  await writeRollout(root,records);
+  const path = await writeRollout(root,records);
   const prefix = encode(records.slice(0,3)).length;
   await writeRollout(root,rollout(cwd,ids[1],[completed('AgentMessage','c','Child',4)],{history_base:{thread_id:ids[0],end_ordinal_exclusive:3,end_byte_offset:prefix}}));
   const adapter = new CodexSessionAdapter({root,limits:{maxFileBytes:prefix + 100}});
@@ -331,6 +331,10 @@ test('a rollout over the file cap returns its readable prefix; a parent cut insi
   assert.deepEqual(texts(result),['Prefix','Answer']); assert.equal(result.complete,false);
   assert.ok(result.diagnostics.some(d=>d.code==='input-limit'));
   assert.ok(!result.diagnostics.some(d=>['partial-record','malformed-record'].includes(d.code)));
+  // The cut last line of an over-cap file is never an abandoned record, however old the file is.
+  const old = new Date(Date.now() - 60 * 60 * 1000); await utimes(path,old,old);
+  const aged = await adapter.readHistoryDetailed(ids[0]);
+  assert.deepEqual(texts(aged),['Prefix','Answer']); assert.equal(aged.complete,false); assert.deepEqual(aged.diagnostics.map(d=>d.code),['input-limit']);
   const child = await adapter.readHistoryDetailed(ids[1]);
   assert.deepEqual(texts(child),['Prefix','Answer','Child']); assert.equal(child.complete,true);
   // A parent whose cutoff does not fit is not read as a prefix.
@@ -338,19 +342,30 @@ test('a rollout over the file cap returns its readable prefix; a parent cut insi
   assert.deepEqual(texts(orphan),['Child']); assert.deepEqual(orphan.diagnostics.map(d=>d.code).sort(),['ancestry-unavailable','input-limit']);
 });
 
-test('a torn interior line re-emitted on the next line does not reject later paginated records', async t => {
+test('only a torn interior line re-emitted whole on the next line is superseded without making history incomplete', async t => {
   const {root,cwd} = await fixture(t);
-  const torn = completed('AgentMessage','a','Torn',2);
-  const records = rollout(cwd,ids[0],[completed('UserMessage','u','Before',1),torn,completed('UserMessage','u2','After',3)]);
-  const path = await writeRollout(root,records);
-  await writeFile(path,Buffer.concat([encode(records.slice(0,2)),encode([torn]).subarray(0,40),Buffer.from('\n'),encode(records.slice(2))]));
-  const result = await new CodexSessionAdapter({root}).readHistoryDetailed(ids[0]);
-  assert.deepEqual(texts(result),['Before','Torn','After']);
-  assert.ok(result.diagnostics.some(d=>d.code==='malformed-record')); assert.ok(!result.diagnostics.some(d=>d.code==='invalid-ordinal'));
-  // A repeated ordinal without a torn line before it is still rejected.
-  await writeRollout(root,rollout(cwd,ids[1],[completed('UserMessage','u','Before',1),completed('AgentMessage','r','Repeated',1),completed('UserMessage','u2','After',3)]));
-  const repeated = await new CodexSessionAdapter({root}).readHistoryDetailed(ids[1]);
-  assert.deepEqual(texts(repeated),['Before','After']); assert.ok(repeated.diagnostics.some(d=>d.code==='invalid-ordinal'));
+  const torn = record => Buffer.concat([encode([record]).subarray(0,40),Buffer.from('\n')]);
+  const read = async (id,parts,limits) => {
+    const path = await writeRollout(root,rollout(cwd,id));
+    await writeFile(path,Buffer.concat([rollout(cwd,id)[0],...parts].map(part=>Buffer.isBuffer(part) ? part : encode([part]))));
+    const result = await new CodexSessionAdapter({root,limits}).readHistoryDetailed(id);
+    return {texts:texts(result),complete:result.complete,codes:new Set(result.diagnostics.map(d=>d.code))};
+  };
+  const before = completed('UserMessage','u','Before',1), again = completed('AgentMessage','a','Again',2);
+  const reemitted = await read(ids[0],[before,torn(again),again,completed('UserMessage','u2','After',3)]);
+  assert.deepEqual(reemitted.texts,['Before','Again','After']); assert.equal(reemitted.complete,true);
+  assert.deepEqual([...reemitted.codes],['superseded-record']);
+  // A malformed line followed by the normal next ordinal is ordinary data loss.
+  const lost = await read(ids[1],[before,torn(again),completed('UserMessage','u2','After',3)]);
+  assert.deepEqual(lost.texts,['Before','After']); assert.equal(lost.complete,false); assert.deepEqual([...lost.codes],['malformed-record']);
+  // A repeated ordinal without a torn line, or after an oversized line, is still rejected.
+  const repeated = await read(ids[2],[before,completed('AgentMessage','r','Repeated',1),completed('UserMessage','u2','After',3)]);
+  assert.deepEqual(repeated.texts,['Before','After']); assert.deepEqual([...repeated.codes],['invalid-ordinal']);
+  const oversized = await read(ids[3],[before,completed('AgentMessage','a','x'.repeat(2000),2),again],{maxHistoryLineBytes:1000});
+  assert.deepEqual(oversized.texts,['Before']); assert.deepEqual([...oversized.codes].sort(),['input-limit','invalid-ordinal']);
+  // Two malformed lines in a row are not a single re-emitted record.
+  const twice = await read(ids[4],[before,torn(again),torn(completed('UserMessage','x','X',3)),completed('UserMessage','x','X',3)]);
+  assert.deepEqual(twice.texts,['Before']); assert.equal(twice.complete,false); assert.deepEqual([...twice.codes].sort(),['invalid-ordinal','malformed-record']);
 });
 
 test('an image tool output above the discovery line cap stays complete; the history line cap still bounds it', async t => {
@@ -382,7 +397,7 @@ test('an abandoned torn final line does not make history incomplete; a recent on
   const recent = await age(9);
   assert.deepEqual(texts(recent),['Before']); assert.equal(recent.complete,false); assert.ok(recent.diagnostics.some(d=>d.code==='partial-record'));
   const abandoned = await age(11);
-  assert.deepEqual(texts(abandoned),['Before']); assert.equal(abandoned.complete,true); assert.ok(abandoned.diagnostics.some(d=>d.code==='partial-record'));
+  assert.deepEqual(texts(abandoned),['Before']); assert.equal(abandoned.complete,true); assert.deepEqual(abandoned.diagnostics.map(d=>d.code),['abandoned-record']);
   assert.doesNotMatch(JSON.stringify([recent,abandoned]),/PRIVATE_/);
 });
 

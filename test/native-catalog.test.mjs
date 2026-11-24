@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp,mkdir,writeFile,rename,access,readdir,symlink } from 'node:fs/promises';
+import { mkdtemp,mkdir,writeFile,rename,access,readdir,symlink,utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NativeCatalog, partialHistoryNotice } from '../dist/native-catalog.js';
 import { SearchIndex } from '../dist/search-index.js';
 import { applicationPaths } from '../dist/application.js';
-import { rollout, writeRollout, completed, ids } from './fixtures/codex/native.mjs';
+import { rollout, writeRollout, completed, ids, encode as encodeCodex } from './fixtures/codex/native.mjs';
 import { entry,encode,ids as claudeIds } from './fixtures/claude/native.mjs';
 
 const query=cwd=>({text:'',agent:'all',scope:'folder',workspace:cwd});
@@ -25,6 +25,16 @@ test('unavailable/partial source retains earlier index; healthy siblings/new cat
  await rename(f.codex+'.missing',f.codex);await writeFile(f.path,'{broken\n');
  await writeRollout(f.codex,rollout(f.cwd,ids[1],[completed('UserMessage','u','new healthy entry',1)]));await f.catalog.refresh(f.index);
  assert.equal((await f.index.query({...query(f.cwd),text:'new healthy entry'})).length,1);assert.equal((await f.index.query({...query(f.cwd),text:'original public'})).length,1);assert.match(f.catalog.notices().join(' '),/degraded/);
+ await f.index.close();
+});
+
+test('a re-emitted torn Codex line and an abandoned final line keep the source healthy',async()=>{
+ const f=await fixture(),again=completed('AgentMessage','a','re-emitted answer',2),records=rollout(f.cwd,ids[0],[completed('UserMessage','u','original public message',1)]);
+ await writeFile(f.path,Buffer.concat([encodeCodex(records),encodeCodex([again]).subarray(0,40),Buffer.from('\n'),encodeCodex([again]),Buffer.from('{"torn":')]));
+ const old=new Date(Date.now()-60*60*1000);await utimes(f.path,old,old);
+ await f.catalog.refresh(f.index);
+ assert.equal((await f.index.query({...query(f.cwd),text:'re-emitted answer'})).length,1);const notice=f.catalog.notices().filter(n=>n.startsWith('codex:')).join(' ');assert.match(notice,/source warnings/);assert.doesNotMatch(notice,/degraded/);
+ const codex=(await f.index.query({...query(f.cwd),agent:'codex'}))[0];assert.equal((await f.catalog.snapshot(codex)).history.complete,true);
  await f.index.close();
 });
 
