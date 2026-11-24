@@ -216,7 +216,8 @@ export class NativeCatalog {
     this.report(source.agent,source.agent==='agy'&&'metadataOnly' in session&&session.metadataOnly?'metadata only. Native open available, outgoing public history unavailable':history.complete?'':'selected public history incomplete. A fresh handoff sends only readable items');signal?.throwIfAborted();
     const producer='producerVersion' in session?session.producerVersion:undefined;
     // Codex and Claude resume their own store by exact ID, so any well-formed producer is compatible; tested versions only add a note.
-    const compatible=session.agent==='opencode'?producer===testedOpenCodeProducer:session.agent==='codex'?wellFormedVersion.test(producer??''):session.agent==='claude'?!producer||wellFormedVersion.test(producer):true;
+    // The Claude reader already drops a malformed version; Codex takes cli_version as any string.
+    const compatible=session.agent==='opencode'?producer===testedOpenCodeProducer:session.agent==='codex'?wellFormedVersion.test(producer??''):true;
     const runtime:RuntimeSource={agent:session.agent,id:session.id,nativeId:session.nativeId,workspace:session.workspace,nativeResume:compatible?'compatible':'unknown'};
     const sourceKey=digest(JSON.stringify([source.agent,this.rootKeys[source.agent],source.nativeId]));
     const context:ContextRef={...runtime,root:this.rootKey(source.agent),incarnation:history.incarnation??'unknown',sourceKey};

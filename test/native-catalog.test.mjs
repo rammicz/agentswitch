@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp,mkdir,writeFile,readFile,rename,access,readdir,symlink } from 'node:fs/promises';
+import { mkdtemp,mkdir,writeFile,rename,access,readdir,symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NativeCatalog, partialHistoryNotice } from '../dist/native-catalog.js';
@@ -70,13 +70,12 @@ test('partial-history notice counts blocking selected-history records only and s
 
 test('untested Codex and Claude producers stay natively resumable and retained; malformed Codex versions do not',async()=>{
  const f=await fixture();
- for(const [version,expected] of [['0.172.0','compatible'],['0.163.0','compatible'],['0.180.0-alpha.2','compatible'],['0.171.0','compatible'],['v0.172',  'unknown']]) {
-  await writeFile(f.path,(await readFile(f.path,'utf8')).replace(/"cli_version":"[^"]*"/,`"cli_version":${JSON.stringify(version)}`));
-  await writeFile(f.claudePath,encode([entry(claudeIds[0],f.cwd,'u',null,'user','healthy sibling',{version:'2.1.331'})]));
-  await f.catalog.refresh(f.index);
-  const [codex]=await f.index.query({...query(f.cwd),agent:'codex'}),[claude]=await f.index.query({...query(f.cwd),agent:'claude'});
-  const codexSnapshot=await f.catalog.snapshot(codex);assert.equal(codexSnapshot.session.producerVersion,version);assert.equal(codexSnapshot.runtime.nativeResume,expected,version);assert.equal(codexSnapshot.retained,expected==='compatible'&&codexSnapshot.history.retained===true);
-  const claudeSnapshot=await f.catalog.snapshot(claude);assert.equal(claudeSnapshot.session.producerVersion,'2.1.331');assert.equal(claudeSnapshot.runtime.nativeResume,'compatible');
+ await writeFile(f.claudePath,encode([entry(claudeIds[0],f.cwd,'u',null,'user','healthy sibling',{version:'2.1.331'})]));await f.catalog.refresh(f.index);
+ const claude=await f.catalog.snapshot((await f.index.query({...query(f.cwd),agent:'claude'}))[0]);assert.equal(claude.session.producerVersion,'2.1.331');assert.equal(claude.runtime.nativeResume,'compatible');
+ for(const version of ['0.172.0','0.163.0','0.180.0-alpha.2','0.171.0','v0.172']) {
+  await writeRollout(f.codex,rollout(f.cwd,ids[0],[completed('UserMessage','u','original public message',1)],{cli_version:version}));await f.catalog.refresh(f.index);
+  const codex=await f.catalog.snapshot((await f.index.query({...query(f.cwd),agent:'codex'}))[0]),compatible=version!=='v0.172';
+  assert.equal(codex.session.producerVersion,version);assert.equal(codex.runtime.nativeResume,compatible?'compatible':'unknown',version);assert.equal(codex.retained,compatible&&codex.history.retained===true);
  }
  await f.index.close();
 });
