@@ -41,8 +41,7 @@ export function parseAgyHistory(text:string,id:string,stepCount:number,limits:{m
     const row:unknown=JSON.parse(line);
     if(!object(row))throw Error('unsupported-shape');
     if(row.step_index!==index)throw Error('invalid-ordinal');
-    if(!(row.status==='DONE'||row.type==='GENERIC'&&resultStatuses.has(row.status as string))||
-       typeof row.created_at!=='string'||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(row.created_at)||!Number.isFinite(Date.parse(row.created_at)))throw Error('unsupported-shape');
+    if(typeof row.created_at!=='string'||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(row.created_at)||!Number.isFinite(Date.parse(row.created_at)))throw Error('unsupported-shape');
     if(row.thinking!==undefined && typeof row.thinking!=='string')throw Error('unsupported-shape');
     for(const key of ['input_tokens','cache_read_tokens','output_tokens'])if(row[key]!==undefined&&(!Number.isSafeInteger(row[key])||Number(row[key])<0))throw Error('unsupported-shape');
     if(row.model!==undefined&&(!validText(row.model)||row.model.length>200))throw Error('unsupported-shape');
@@ -56,7 +55,7 @@ export function parseAgyHistory(text:string,id:string,stepCount:number,limits:{m
     if(time<previousTime)throw Error('invalid-ordinal');previousTime=time;
     if(results) {
       // The next steps after a tool-call step are its results, one per call.
-      if(row.type!=='GENERIC'||row.source!=='MODEL'||typeof row.content!=='string'||!onlyPlainKnown(row))throw Error('unsupported-shape');
+      if(row.type!=='GENERIC'||row.source!=='MODEL'||!resultStatuses.has(row.status as string)||typeof row.content!=='string'||!onlyPlainKnown(row))throw Error('unsupported-shape');
       excludedSteps.push(ordinal);results--;continue;
     }
     if(row.status!=='DONE')throw Error('unsupported-shape');
@@ -68,8 +67,10 @@ export function parseAgyHistory(text:string,id:string,stepCount:number,limits:{m
       role='user';value=request(row.content);
     } else if(row.type==='PLANNER_RESPONSE'&&row.source==='MODEL') {
       if(!items.length)throw Error('partial-record');
-      if(row.tool_calls!==undefined) {results=toolCalls(row.tool_calls);excludedSteps.push(ordinal);}
-      if(row.content===undefined&&results)continue;
+      if(row.tool_calls!==undefined) {
+        results=toolCalls(row.tool_calls);excludedSteps.push(ordinal);
+        if(row.content===undefined)continue;
+      }
       if(!validText(row.content)||!row.content)throw Error('unsupported-shape');
       role='assistant';value=row.content;
     } else throw Error('unsupported-shape');
