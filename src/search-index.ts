@@ -216,10 +216,15 @@ export class SearchIndex {
     this.operations = next.catch(() => {});
     return next;
   }
-  /** Writes, then evicts over the cap in the same transaction and returns freed pages to the file system. */
-  private transaction(write: () => void, reload = true): void {
+  /**
+   * Writes, then evicts over the cap in the same transaction and returns freed pages to the file system. A write that
+   * reports it changed nothing skips the reclaim and the reload.
+   */
+  private transaction(write: () => boolean | void, reload = true): void {
     this.database.exec('BEGIN IMMEDIATE');
-    try { write(); this.evict(); this.database.exec('COMMIT'); } catch (error) { this.database.exec('ROLLBACK'); throw error; }
+    let changed;
+    try { changed = write() !== false; if (changed) this.evict(); this.database.exec('COMMIT'); } catch (error) { this.database.exec('ROLLBACK'); throw error; }
+    if (!changed) return;
     try { this.database.exec('PRAGMA incremental_vacuum;'); } catch { /* Freed pages are reused or reclaimed by a later write. */ }
     if (reload) this.reload();
     else this.dataVersion = undefined;
@@ -241,6 +246,50 @@ export class SearchIndex {
     this.upsert ??= this.database.prepare('INSERT OR REPLACE INTO sessions(source, native_id, updated, bytes, data) VALUES (?, ?, ?, ?, ?)');
     this.upsert.run(source, session.nativeId, updated, bytes, data);
   }
+  /**
+   * Stores generations as writing every session and then evicting over the cap would leave them, but writes only rows
+   * whose stored state differs. Returns whether anything was written.
+   */
+  private store(generations: readonly { source: string; sessions: readonly Session[] }[], removeMissing: boolean): boolean {
+    const key = (source: string, nativeId: string) => `${source}\0${nativeId}`;
+    const incoming = new Map(generations.flatMap(({ source, sessions }) => sessions.map((session) => [key(source, session.nativeId), { source, session, ...stored(session) }] as const)));
+    const sources = new Set(generations.map((generation) => generation.source));
+    const missing: [string, string][] = [];
+    // The rows as they will be before eviction: kept rows at their stored size, incoming rows with their full text.
+    const planned = new Map<string, { source: string; nativeId: string; updated: number | null; bytes: number }>();
+    for (const row of this.database.prepare('SELECT source, native_id, updated, bytes FROM sessions').all()) {
+      const source = row.source as string, nativeId = row.native_id as string, id = key(source, nativeId);
+      if (incoming.has(id)) continue;
+      if (removeMissing && sources.has(source)) { missing.push([source, nativeId]); continue; }
+      planned.set(id, { source, nativeId, updated: row.updated as number | null, bytes: Number(row.bytes) });
+    }
+    for (const [id, { source, session, updated, bytes }] of incoming) planned.set(id, { source, nativeId: session.nativeId, updated, bytes });
+    // The same order as evict(): undated first, then oldest, then source and native ID in SQLite's binary text order.
+    let total = [...planned.values()].reduce((sum, row) => sum + row.bytes, 0);
+    const cleared = new Set<string>();
+    if (total > this.maxBytes) {
+      const text = (a: string, b: string) => Buffer.compare(Buffer.from(a), Buffer.from(b));
+      const order = [...planned].filter(([, row]) => row.bytes > 0).sort(([, a], [, b]) =>
+        (a.updated === null ? (b.updated === null ? 0 : -1) : b.updated === null ? 1 : a.updated - b.updated) || text(a.source, b.source) || text(a.nativeId, b.nativeId));
+      for (const [id, row] of order) { if (total <= this.maxBytes) break; cleared.add(id); total -= row.bytes; }
+    }
+    let changed = missing.length > 0;
+    const remove = this.database.prepare('DELETE FROM sessions WHERE source=? AND native_id=?');
+    for (const [source, nativeId] of missing) remove.run(source, nativeId);
+    const same = this.database.prepare('SELECT 1 FROM sessions WHERE source=? AND native_id=? AND updated IS ? AND bytes=? AND data=?');
+    const sameCleared = this.database.prepare(`SELECT 1 FROM sessions WHERE source=? AND native_id=? AND updated IS ? AND bytes=0 AND data=json_set(?, '$.messages', json('[]'))`);
+    const clear = this.database.prepare(`UPDATE sessions SET bytes=0, data=json_set(data, '$.messages', json('[]')) WHERE source=? AND native_id=?`);
+    for (const [id, { source, session, updated, bytes, data }] of incoming) {
+      if (cleared.has(id) ? sameCleared.get(source, session.nativeId, updated, data) : same.get(source, session.nativeId, updated, bytes, data)) continue;
+      this.insert(source, session); changed = true;
+      if (cleared.has(id)) clear.run(source, session.nativeId);
+    }
+    for (const id of cleared) {
+      const row = planned.get(id)!;
+      if (!incoming.has(id)) { clear.run(row.source, row.nativeId); changed = true; }
+    }
+    return changed;
+  }
   /** The persisted namespace of one configured provider. */
   private sourceKey(agent: AgentId): string {
     const source = this.sources.find((item) => item.adapter.id === agent);
@@ -251,7 +300,7 @@ export class SearchIndex {
   /** Cache a complete matched transcript without loading any other cached records. */
   remember(session: Session): Promise<void> {
     const source = this.sourceKey(session.agent);
-    return this.enqueue(async () => this.transaction(() => this.insert(source, session), false));
+    return this.enqueue(async () => this.transaction(() => this.store([{ source, sessions: [session] }], false), false));
   }
 
   async remembered(session: Session, text: string): Promise<SessionHit | undefined> {
@@ -290,11 +339,7 @@ export class SearchIndex {
       await this.assertCurrentCache();
       this.transaction(() => {
         if (replaceAll) this.database.exec('DELETE FROM sessions');
-        const remove = this.database.prepare('DELETE FROM sessions WHERE source=?');
-        for (const generation of staged) {
-          if (!preserveMissing) remove.run(generation.source);
-          for (const session of generation.sessions) this.insert(generation.source, session);
-        }
+        return this.store(staged, !preserveMissing) || replaceAll;
       });
     });
   }

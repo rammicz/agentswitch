@@ -337,3 +337,56 @@ test('T3: pruning drops cached sessions that left a provider while other provide
   assert.deepEqual(ids(await f.index.query(query())), ['claude:gone', 'codex:kept']);
   await assert.rejects(f.index.prune('grok', []), /not configured/);
 });
+
+// Commits by the index show up as a changed data_version on another connection; rowids show which rows were rewritten.
+function observe(directory) {
+  const db = new DatabaseSync(join(directory, 'index.sqlite'), { readOnly: true });
+  return {
+    version: () => db.prepare('PRAGMA data_version').get().data_version,
+    rows: () => Object.fromEntries(db.prepare('SELECT native_id, rowid, bytes FROM sessions').all().map((row) => [row.native_id, [row.rowid, row.bytes]])),
+    close: () => db.close(),
+  };
+}
+
+test('T4: an unchanged refresh or remembered transcript writes nothing; a changed session is rewritten once', async (t) => {
+  const f = await fixture(t);
+  for (const nativeId of ['a', 'b', 'c']) f.add('codex', nativeId, 'project', `${nativeId}-text`);
+  await f.index.refresh();
+  const db = observe(f.directory); t.after(db.close);
+  const results = async () => [ids(await f.index.query(query('text'))), ids(await f.index.query(query('b-text')))];
+  const before = { version: db.version(), rows: db.rows(), results: await results() };
+  await f.index.refresh();
+  await f.index.remember({ ...f.rows.get('codex/a'), messages: f.rows.get('codex/a').messages });
+  assert.deepEqual({ version: db.version(), rows: db.rows(), results: await results() }, before);
+  f.rows.get('codex/b').messages = [said('m1', 'assistant', 'b-text changed')];
+  await f.index.refresh();
+  const changed = db.rows();
+  assert.notEqual(db.version(), before.version);
+  assert.deepEqual([changed.a, changed.c], [before.rows.a, before.rows.c]);
+  assert.notEqual(changed.b[0], before.rows.b[0]);
+  assert.deepEqual(ids(await f.index.query(query('b-text changed'))), ['codex:b']);
+  const after = db.version();
+  await f.index.refresh();
+  await f.index.remember(f.rows.get('codex/b'));
+  assert.deepEqual([db.version(), db.rows()], [after, changed]);
+  await f.index.remember({ ...f.rows.get('codex/c'), messages: [said('m1', 'assistant', 'c-text remembered')] });
+  assert.notEqual(db.version(), after);
+  assert.deepEqual(ids(await f.index.query(query('c-text remembered'))), ['codex:c']);
+});
+
+test('T4: over the cap, an unchanged refresh or a remembered evicted transcript writes nothing and keeps results', async (t) => {
+  const f = await fixture(t, { maxBytes: 2500 });
+  for (const [nativeId, day] of [['oldest', 1], ['middle', 2], ['newest', 3], ['undated', 0]]) {
+    f.add('codex', nativeId, 'project', '', { title: `Title ${nativeId}`, updatedAt: day ? `2026-01-0${day}T00:00:00Z` : '',
+      messages: [said('m', 'assistant', `${nativeId.toUpperCase()}_TEXT ${'x'.repeat(1000)}`)] });
+  }
+  await f.index.refresh();
+  const db = observe(f.directory); t.after(db.close);
+  const results = async () => Promise.all(['newest_text', 'middle_text', 'oldest_text', 'undated_text', ''].map(async (text) => ids(await f.index.query(query(text)))));
+  const before = { version: db.version(), rows: db.rows(), results: await results() };
+  assert.deepEqual(before.results.slice(0, 4), [['codex:newest'], ['codex:middle'], [], []]);
+  await f.index.refresh();
+  await f.index.remember(f.rows.get('codex/oldest'));
+  await f.index.remember(f.rows.get('codex/newest'));
+  assert.deepEqual({ version: db.version(), rows: db.rows(), results: await results() }, before);
+});
