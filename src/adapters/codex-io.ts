@@ -35,7 +35,8 @@ export class ReadContext {
     if (bytes > this.remainingDecoded) throw new Error('input-limit');
     this.decodedBytes += bytes;
   }
-  fork(): ReadContext { return new ReadContext(this.limits, this.notify, this.budget); }
+  /** A context spending the same byte budget, optionally under other limits. */
+  fork(limits = this.limits): ReadContext { return new ReadContext(limits, this.notify, this.budget); }
   add(code: DiagnosticCode, source: CodexDiagnostic['source'] = 'history', line?: number, incomplete = true): void {
     if (incomplete) this.complete = false;
     if (this.diagnostics.length >= this.limits.maxDiagnostics) return;
@@ -52,6 +53,10 @@ export function contains(root: string, path: string): boolean {
 }
 /** Resolve symlinks before opening; final-component swaps fail through O_NOFOLLOW. */
 export async function boundedRead(path: string, root: string, limit: number, ctx: ReadContext, prefixOnly = false): Promise<Buffer> {
+  return (await readBounded(path, root, limit, ctx, prefixOnly)).data;
+}
+async function readBounded(path: string, root: string, limit: number, ctx: ReadContext, prefixOnly: boolean):
+  Promise<{ data: Buffer; size: number; modified: number }> {
   const canonical = await realpath(path);
   if (!contains(root, canonical)) throw new Error('unsafe-path');
   const handle = await open(canonical, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -69,7 +74,7 @@ export async function boundedRead(path: string, root: string, limit: number, ctx
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
-    return data.subarray(0, offset);
+    return { data: data.subarray(0, offset), size: info.size, modified: info.mtimeMs };
   } finally { await handle.close(); }
 }
 
@@ -141,15 +146,26 @@ export async function historyHeader(path: string, root: string, ctx: ReadContext
     return undefined;
   }
 }
-export async function historyBytes(path: string, root: string, ctx: ReadContext): Promise<Buffer | undefined> {
+/**
+ * Bytes of one rollout and its modification time. Only the first `wanted` bytes are read when given (a parent cutoff).
+ * A plain file that does not fit keeps its complete lines with `input-limit`; a compressed one is still all or nothing.
+ */
+export async function historyBytes(path: string, root: string, ctx: ReadContext, wanted = Infinity):
+  Promise<{ bytes: Buffer; modified: number } | undefined> {
   try {
     if (ctx.remainingDecoded < 1) throw new Error('input-limit');
-    const encodedLimit = path.endsWith('.zst') ? ctx.limits.maxFileBytes : Math.min(ctx.limits.maxFileBytes, ctx.remainingDecoded);
-    const input = await boundedRead(path, root, encodedLimit, ctx);
     if (!path.endsWith('.zst')) {
-      ctx.consumeDecoded(input.length);
-      return input;
+      const { data, size, modified } = await readBounded(path, root, Math.min(ctx.limits.maxFileBytes, ctx.remainingDecoded, wanted), ctx, true);
+      let bytes = data;
+      if (data.length < Math.min(size, wanted)) {
+        ctx.add('input-limit');
+        bytes = data.subarray(0, data.lastIndexOf(10) + 1);
+        if (!bytes.length) return undefined;
+      }
+      ctx.consumeDecoded(bytes.length);
+      return { bytes, modified };
     }
+    const { data: input, modified } = await readBounded(path, root, ctx.limits.maxFileBytes, ctx, false);
     const stream = Readable.from([input]).pipe(createZstdDecompress());
     const chunks: Buffer[] = [];
     let size = 0;
@@ -160,7 +176,7 @@ export async function historyBytes(path: string, root: string, ctx: ReadContext)
         ctx.consumeDecoded(data.length);
         chunks.push(data);
       }
-      return Buffer.concat(chunks, size);
+      return { bytes: Buffer.concat(chunks, size), modified };
     } finally { stream.destroy(); }
   } catch (error) {
     const code = error instanceof Error ? error.message : '';

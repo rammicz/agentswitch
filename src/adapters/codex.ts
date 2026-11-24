@@ -9,9 +9,11 @@ import type { CodexDiagnostic, CodexLimits, MetadataRow } from './codex-io.js';
 import { object, project, text } from './codex-projection.js';
 import type { ObjectRecord, SourceRecord } from './codex-projection.js';
 export type { CodexDiagnostic, CodexLimits } from './codex-io.js';
+/** `maxLineBytes` bounds header and metadata lines; `maxHistoryLineBytes` bounds lines in a hydrated history. */
+export type CodexAdapterLimits = CodexLimits & { maxHistoryLineBytes: number };
 export interface CodexAdapterOptions {
   root?: string; sqliteRoot?: string; home?: string; env?: NodeJS.ProcessEnv;
-  limits?: Partial<CodexLimits>; onDiagnostic?: (diagnostic: CodexDiagnostic) => void;
+  limits?: Partial<CodexAdapterLimits>; onDiagnostic?: (diagnostic: CodexDiagnostic) => void;
 }
 export interface CodexSession extends Session {
   createdAt: string; historyMode: 'legacy' | 'paginated'; producerVersion: string;
@@ -20,6 +22,10 @@ export interface CodexSession extends Session {
 export interface CodexHistory { items: readonly HistoryItem[]; complete: boolean; diagnostics: readonly CodexDiagnostic[]; incarnation?:string; retained?:boolean; itemTurns?:readonly NativeItemTurn[] }
 interface RolloutFile { path: string; owner: string; rolloutId: string }
 interface ParsedRollout { file: RolloutFile; meta: ObjectRecord; records: SourceRecord[] }
+// Image tool outputs are single lines over 1 MiB; a history line never extends past the file cap anyway.
+const codexDefaults: CodexAdapterLimits = { ...defaultLimits, maxHistoryLineBytes: defaultLimits.maxFileBytes };
+// Codex can leave a torn final line that is never completed; after this long it no longer blocks the history.
+const abandonedAfterMs = 10 * 60 * 1000;
 const uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 const uuidPattern = new RegExp(`^${uuid}$`);
 const filePattern = new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${uuid})(?:_(${uuid}))?\\.jsonl(?:\\.zst)?$`);
@@ -48,7 +54,7 @@ function subagentTitle(spawn: ObjectRecord): string {
   if (nickname) return `${nickname} (${role || 'subagent'})`;
   return role ? `${role} subagent` : '';
 }
-function parseRecords(bytes: Buffer, source: string, ctx: ReadContext): SourceRecord[] {
+function parseRecords(bytes: Buffer, source: string, ctx: ReadContext, malformed: Set<number>, abandoned: boolean): SourceRecord[] {
   const records: SourceRecord[] = [];
   let offset = 0, line = 0;
   while (offset < bytes.length) {
@@ -61,21 +67,27 @@ function parseRecords(bytes: Buffer, source: string, ctx: ReadContext): SourceRe
         const value = object(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(chunk)));
         if (!value.type || !value.payload) throw new Error();
         records.push({ value, offset, end, line, source, ...(integer(value.ordinal) ? { ordinal: value.ordinal } : {}) });
-      } catch { ctx.add(newline < 0 ? 'partial-record' : 'malformed-record', 'history', line); }
+      } catch {
+        if (newline < 0) ctx.add('partial-record', 'history', line, !abandoned);
+        else { ctx.add('malformed-record', 'history', line); malformed.add(line); }
+      }
     }
     offset = end;
   }
   return records;
 }
 async function parseFile(file: RolloutFile, root: string, ctx: ReadContext, cutoff?: number, headerOnly = false): Promise<ParsedRollout | undefined> {
-  const input = await (headerOnly ? historyHeader(file.path, root, ctx) : historyBytes(file.path, root, ctx));
-  if (!input) return;
+  if (headerOnly) { const header = await historyHeader(file.path, root, ctx); return header && parseRollout(file, header, ctx); }
+  const read = await historyBytes(file.path, root, ctx, cutoff);
+  if (!read) return;
+  const input = read.bytes;
   if (cutoff !== undefined && (cutoff > input.length || cutoff < 1 || input[cutoff - 1] !== 10)) { ctx.add('invalid-boundary'); return; }
   const bytes = cutoff === undefined ? input : input.subarray(0, cutoff);
-  return parseRollout(file, bytes, ctx);
+  return parseRollout(file, bytes, ctx, Date.now() - read.modified > abandonedAfterMs);
 }
-function parseRollout(file: RolloutFile, bytes: Buffer, ctx: ReadContext): ParsedRollout | undefined {
-  const records = parseRecords(bytes, file.rolloutId, ctx), first = records[0];
+function parseRollout(file: RolloutFile, bytes: Buffer, ctx: ReadContext, abandoned = false): ParsedRollout | undefined {
+  const malformed = new Set<number>();
+  const records = parseRecords(bytes, file.rolloutId, ctx, malformed, abandoned), first = records[0];
   if (!first || first.offset !== 0 || first.value.type !== 'session_meta') { ctx.add('unsupported-shape'); return; }
   const meta = object(first.value.payload);
   if (meta.id !== file.owner) { ctx.add('invalid-owner'); return; }
@@ -89,9 +101,13 @@ function parseRollout(file: RolloutFile, bytes: Buffer, ctx: ReadContext): Parse
     const base = meta.history_base == null ? 0 : object(meta.history_base).end_ordinal_exclusive;
     if (!integer(base)) { ctx.add('invalid-boundary'); return; }
     const accepted: SourceRecord[] = [];
+    let superseded = 0;
     for (const record of records) {
-      // Physical record positions remain fixed across malformed interior records.
-      if (record.ordinal !== base + record.line - 1) { ctx.add('invalid-ordinal', 'history', record.line); continue; }
+      // Physical record positions remain fixed across malformed interior records, except a torn line that the
+      // writer re-emitted whole on the next line: that record carries the torn line's ordinal and supersedes it.
+      const expected = base + record.line - 1 - superseded;
+      if (record.ordinal === expected - 1 && malformed.has(record.line - 1)) superseded++;
+      else if (record.ordinal !== expected) { ctx.add('invalid-ordinal', 'history', record.line); continue; }
       accepted.push(record);
     }
     if (accepted[0] !== first) return;
@@ -104,16 +120,16 @@ function parseRollout(file: RolloutFile, bytes: Buffer, ctx: ReadContext): Parse
 export class CodexSessionAdapter implements SessionAdapter {
   readonly id = 'codex' as const;
   private readonly options: CodexAdapterOptions;
-  private readonly limits: CodexLimits;
+  private readonly limits: CodexAdapterLimits;
   private root = '';
   private readonly selected = new Map<string, RolloutFile>();
   private files: RolloutFile[] = [];
   private pending: Promise<void> = Promise.resolve();
   constructor(options: CodexAdapterOptions = {}) {
     this.options = options;
-    this.limits = { ...defaultLimits, ...options.limits };
+    this.limits = { ...codexDefaults, ...options.limits };
     for (const [key, value] of Object.entries(this.limits)) {
-      if (!Number.isSafeInteger(value) || value < 1 || value > defaultLimits[key as keyof CodexLimits]) throw new RangeError(`Invalid Codex limit: ${key}`);
+      if (!Number.isSafeInteger(value) || value < 1 || value > codexDefaults[key as keyof CodexAdapterLimits]) throw new RangeError(`Invalid Codex limit: ${key}`);
     }
   }
   private context(): ReadContext { return new ReadContext(this.limits, this.options.onDiagnostic); }
@@ -263,7 +279,7 @@ export class CodexSessionAdapter implements SessionAdapter {
     // Public selected-session reads refresh authoritative selection; catalog batches use their explicit generation.
     const discovery = this.context();
     if (rediscover) await this.discoverCatalog(discovery);
-    const ctx = discovery.fork(), file = this.selected.get(nativeId);
+    const ctx = discovery.fork({ ...this.limits, maxLineBytes: this.limits.maxHistoryLineBytes }), file = this.selected.get(nativeId);
     if (!file) { ctx.add('selected-rollout-unavailable'); return { items: [], complete: false, diagnostics: ctx.diagnostics }; }
     const leaf = await parseFile(file, this.root, ctx);
     const records = leaf ? await this.lineage(leaf, ctx, new Set(), 0) : [];

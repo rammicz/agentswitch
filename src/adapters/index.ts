@@ -17,7 +17,7 @@ export const agentCatalog = [
 ] as const;
 
 export { CodexSessionAdapter } from './codex.js';
-export type { CodexAdapterOptions, CodexDiagnostic, CodexHistory, CodexLimits, CodexSession } from './codex.js';
+export type { CodexAdapterLimits, CodexAdapterOptions, CodexDiagnostic, CodexHistory, CodexLimits, CodexSession } from './codex.js';
 
 export { ClaudeSessionAdapter } from './claude.js';
 export type { ClaudeAdapterOptions, ClaudeDiagnostic, ClaudeHistory, ClaudeLimits, ClaudeSession } from './claude.js';

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile, readdir, writeFile, appendFile, symlink, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, readdir, writeFile, appendFile, symlink, realpath, utimes } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -307,7 +307,7 @@ test('lazy discovery retains capped histories; oversized lines, depth and diagno
   const capped = new CodexSessionAdapter({root,limits:{maxFileBytes:1000}});
   assert.equal((await capped.discover()).length,1);
   assert.equal((await capped.readHistoryDetailed(ids[0])).complete,false);
-  const lines = new CodexSessionAdapter({root,limits:{maxLineBytes:1000}});
+  const lines = new CodexSessionAdapter({root,limits:{maxLineBytes:1000,maxHistoryLineBytes:1000}});
   const result = await lines.readHistoryDetailed(ids[0]);
   assert.deepEqual(result.items,[]); assert.ok(result.diagnostics.some(d=>d.code==='input-limit'));
   await writeFile(path,Buffer.concat([encode(records.slice(0,1)),Buffer.from('{PRIVATE\n'.repeat(20))]));
@@ -318,6 +318,69 @@ test('lazy discovery retains capped histories; oversized lines, depth and diagno
   await writeRollout(root,rollout(cwd,ids[1],[completed('AgentMessage','c','Child',3)],{history_base:{thread_id:ids[0],end_ordinal_exclusive:2,end_byte_offset:encode(records).length}}));
   const depth = await new CodexSessionAdapter({root,limits:{maxDepth:1}}).readHistoryDetailed(ids[1]);
   assert.equal(depth.complete,false); assert.deepEqual(texts(depth),['Child']);
+});
+
+test('a rollout over the file cap returns its readable prefix; a parent cut inside the cap stays complete', async t => {
+  const {root,cwd} = await fixture(t);
+  const records = rollout(cwd,ids[0],[completed('UserMessage','u','Prefix',1),completed('AgentMessage','a','Answer',2),completed('AgentMessage','big','x'.repeat(4000),3)]);
+  await writeRollout(root,records);
+  const prefix = encode(records.slice(0,3)).length;
+  await writeRollout(root,rollout(cwd,ids[1],[completed('AgentMessage','c','Child',4)],{history_base:{thread_id:ids[0],end_ordinal_exclusive:3,end_byte_offset:prefix}}));
+  const adapter = new CodexSessionAdapter({root,limits:{maxFileBytes:prefix + 100}});
+  const result = await adapter.readHistoryDetailed(ids[0]);
+  assert.deepEqual(texts(result),['Prefix','Answer']); assert.equal(result.complete,false);
+  assert.ok(result.diagnostics.some(d=>d.code==='input-limit'));
+  assert.ok(!result.diagnostics.some(d=>['partial-record','malformed-record'].includes(d.code)));
+  const child = await adapter.readHistoryDetailed(ids[1]);
+  assert.deepEqual(texts(child),['Prefix','Answer','Child']); assert.equal(child.complete,true);
+});
+
+test('a torn interior line re-emitted on the next line does not reject later paginated records', async t => {
+  const {root,cwd} = await fixture(t);
+  const torn = completed('AgentMessage','a','Torn',2);
+  const records = rollout(cwd,ids[0],[completed('UserMessage','u','Before',1),torn,completed('UserMessage','u2','After',3)]);
+  const path = await writeRollout(root,records);
+  await writeFile(path,Buffer.concat([encode(records.slice(0,2)),encode([torn]).subarray(0,40),Buffer.from('\n'),encode(records.slice(2))]));
+  const result = await new CodexSessionAdapter({root}).readHistoryDetailed(ids[0]);
+  assert.deepEqual(texts(result),['Before','Torn','After']);
+  assert.ok(result.diagnostics.some(d=>d.code==='malformed-record')); assert.ok(!result.diagnostics.some(d=>d.code==='invalid-ordinal'));
+  // A repeated ordinal without a torn line before it is still rejected.
+  await writeRollout(root,rollout(cwd,ids[1],[completed('UserMessage','u','Before',1),completed('AgentMessage','r','Repeated',1),completed('UserMessage','u2','After',3)]));
+  const repeated = await new CodexSessionAdapter({root}).readHistoryDetailed(ids[1]);
+  assert.deepEqual(texts(repeated),['Before','After']); assert.ok(repeated.diagnostics.some(d=>d.code==='invalid-ordinal'));
+});
+
+test('an image tool output above the discovery line cap stays complete; the history line cap still bounds it', async t => {
+  const {root,cwd} = await fixture(t), image = 'PRIVATE_IMAGE' + 'A'.repeat(8192);
+  await writeRollout(root,rollout(cwd,ids[0],[
+    line('response_item',{type:'message',id:'u',role:'user',content:[{type:'input_text',text:'Before'}]}),
+    line('response_item',{type:'custom_tool_call_output',call_id:'shot',output:[{type:'input_text',text:'Shot taken'},{type:'input_image',image_url:`data:image/png;base64,${image}`}]}),
+    line('response_item',{type:'message',id:'a',role:'assistant',content:[{type:'output_text',text:'After'}]}),
+  ],{history_mode:'legacy'}));
+  // Discovery keeps the shared line cap: an oversized header is still not listed.
+  await writeRollout(root,rollout(cwd,ids[1],[],{fixturePadding:'x'.repeat(8192)}));
+  const adapter = new CodexSessionAdapter({root,limits:{maxLineBytes:4096}});
+  assert.deepEqual((await adapter.discover()).map(s=>s.nativeId),[ids[0]]);
+  const result = await adapter.readHistoryDetailed(ids[0]);
+  assert.deepEqual(texts(result),['Before','Shot taken','After']); assert.equal(result.complete,true);
+  assert.ok(!result.diagnostics.some(d=>d.code==='input-limit')); assert.doesNotMatch(JSON.stringify(result),/PRIVATE_/);
+  const capped = await new CodexSessionAdapter({root,limits:{maxLineBytes:4096,maxHistoryLineBytes:4096}}).readHistoryDetailed(ids[0]);
+  assert.deepEqual(texts(capped),['Before','After']); assert.equal(capped.complete,false); assert.ok(capped.diagnostics.some(d=>d.code==='input-limit'));
+  assert.doesNotThrow(()=>new CodexSessionAdapter({root,limits:{maxHistoryLineBytes:32 * 1024 * 1024}}));
+  assert.throws(()=>new CodexSessionAdapter({root,limits:{maxHistoryLineBytes:32 * 1024 * 1024 + 1}}),RangeError);
+});
+
+test('an abandoned torn final line does not make history incomplete; a recent one still does', async t => {
+  const {root,cwd} = await fixture(t);
+  const path = await writeRollout(root,rollout(cwd,ids[0],[completed('UserMessage','u','Before',1)]));
+  await appendFile(path,'{"PRIVATE_TORN":');
+  const adapter = new CodexSessionAdapter({root});
+  const age = async minutes => { const at = new Date(Date.now() - minutes * 60 * 1000); await utimes(path,at,at); return adapter.readHistoryDetailed(ids[0]); };
+  const recent = await age(9);
+  assert.deepEqual(texts(recent),['Before']); assert.equal(recent.complete,false); assert.ok(recent.diagnostics.some(d=>d.code==='partial-record'));
+  const abandoned = await age(11);
+  assert.deepEqual(texts(abandoned),['Before']); assert.equal(abandoned.complete,true); assert.ok(abandoned.diagnostics.some(d=>d.code==='partial-record'));
+  assert.doesNotMatch(JSON.stringify([recent,abandoned]),/PRIVATE_/);
 });
 
 test('concurrent catalog and lazy reads keep their selected identities', async t => {
