@@ -21,7 +21,7 @@ import { OpenCodeSessionAdapter,openCodePaths } from '../dist/adapters/opencode.
 import { NativeCatalog } from '../dist/native-catalog.js';
 import { SearchIndex } from '../dist/search-index.js';
 import { applicationPaths } from '../dist/application.js';
-async function setup(){const root=await mkdtemp(join(tmpdir(),'agentswitch-opencode-'));const cwd=join(root,'workspace');await mkdir(cwd);const path=await fixture(join(root,'native','opencode.db'),cwd);return {root,cwd,path};}
+async function setup(make=fixture,options){const root=await mkdtemp(join(tmpdir(),'agentswitch-opencode-'));const cwd=join(root,'workspace');await mkdir(cwd);const path=await make(join(root,'native','opencode.db'),cwd,options);return {root,cwd,path};}
 function mutate(path,fn){const db=new DatabaseSync(path);try{fn(db);}finally{db.close();}}
 
 test('native DB/root precedence is explicit and follows the 1.19.6 truthy XDG and OPENCODE_DB contract',()=>{
@@ -164,7 +164,7 @@ test('a session table without a required column still fails closed with unsuppor
 });
 
 import { fixtureV2, fixtureMixed, v2Id } from './fixtures/opencode/native-v2.mjs';
-async function setupV2(make=fixtureV2,options){const root=await mkdtemp(join(tmpdir(),'agentswitch-opencode2-'));const cwd=join(root,'workspace');await mkdir(cwd);const path=await make(join(root,'native','opencode.db'),cwd,options);return {root,cwd,path};}
+const setupV2=(make=fixtureV2,options)=>setup(make,options);
 const v2Expected=[['user','V2 public question','complete'],['assistant','Part one','complete'],['tool','Tool output','complete'],['assistant','Part three','complete'],['tool','Tool failed','failed'],['assistant','Inline after parts','complete'],['assistant','Old inline answer','failed'],['user','Latest question','complete'],['assistant','Streaming answer','interrupted']];
 test('a fresh 2.x store lists local top-level sessions and projects public text in seq, ordinal then inline order',async()=>{
  const f=await setupV2();const before=await readFile(f.path);const diagnostics=[];const adapter=new OpenCodeSessionAdapter({dbPath:f.path,onDiagnostic:x=>diagnostics.push(x)});

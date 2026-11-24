@@ -56,6 +56,7 @@ function populate(db, cwd, { revert = null } = {}) {
   session('ses_v2archived1', { title: 'Archived', archived: 5 });
   session('ses_v2fork001', { title: 'Forked session', version: '1.19.6', fork: v2Id, updated: 1795255250000 });
   message('ses_v2fork001', 'msg_f1', 'user', 1, { text: 'Fork question' });
+  return { session, message };
 }
 
 /** A fresh 2.x store: no session/message/part tables. */
@@ -71,14 +72,13 @@ export async function fixtureMixed(path, cwd) {
   await v1Fixture(path, cwd);
   const db = new DatabaseSync(path);
   try {
-    db.exec('DROP TABLE session_message; DROP TABLE credential;'); // loose_psylocke recreates session_message for session_v2.
+    db.exec('DROP TABLE session_message'); // loose_psylocke recreates session_message for session_v2.
     db.prepare('INSERT INTO session SELECT ?,directory,workspace_id,parent_id,?,version,time_created,time_updated-1,time_archived,revert FROM session WHERE id=?').run('ses_v1only001', 'V1 only session', v1Id);
-    populate(db, cwd);
-    db.prepare('INSERT INTO session_v2 (id,project_id,slug,directory,title,version,time_created,time_updated) VALUES (?,?,?,?,?,?,?,?)').run(v1Id, 'prj_1', 'migrated', cwd, 'OpenCode synthetic', '1.19.6', 1795255200000, 1795255400000);
-    const message = (mid, type, seq, data) => db.prepare('INSERT INTO session_message VALUES (?,?,?,?,?,?,?)').run(mid, v1Id, type, seq, seq, seq, JSON.stringify(data));
-    message('msg_a', 'user', 1, { text: 'First public' });
-    message('msg_b', 'assistant', 2, { time: { created: 2, completed: 3 }, content: [{ type: 'text', text: 'OpenCode answer' }] });
-    message('msg_after', 'user', 3, { text: 'Post-upgrade turn' });
+    const { session, message } = populate(db, cwd);
+    session(v1Id, { title: 'OpenCode synthetic', version: '1.19.6', updated: 1795255400000 });
+    message(v1Id, 'msg_a', 'user', 1, { text: 'First public' });
+    message(v1Id, 'msg_b', 'assistant', 2, { time: { created: 2, completed: 3 }, content: [{ type: 'text', text: 'OpenCode answer' }] });
+    message(v1Id, 'msg_after', 'user', 3, { text: 'Post-upgrade turn' });
   } finally { db.close(); }
   return path;
 }

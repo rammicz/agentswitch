@@ -159,7 +159,7 @@ export class NativeCatalog {
           signal.throwIfAborted();
           if(!this.openingTitles.has(session.id)) {
             const items=await (agent==='codex' ? this.adapters.codex.readCatalogTitleItems(session.nativeId,signal)
-              : agent==='opencode' ? this.adapters.opencode.readCatalogHistoryDetailed(session.nativeId).then(history=>history.items)
+              : agent==='opencode' ? this.adapters.opencode.readCatalogTitleItems(session.nativeId)
               : this.adapters.agy.readCatalogTitleItems(session.nativeId)).catch(()=>[]);
             signal.throwIfAborted();
             this.openingTitles.set(session.id,openingTitle(items));

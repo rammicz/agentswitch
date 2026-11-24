@@ -42,10 +42,11 @@ const openCodeV2Version=/^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 // Pinned v2.4.1 packages/schema/src/session-message.ts: message types and assistant part types without public text.
 const excludedV2MessageTypes=new Set(['synthetic','system','skill','shell','compaction','idle','agent-switched','model-switched','location-switched']);
 const v2ToolStates=new Set(['streaming','running','completed','error']);
-const v1Tables={session:['id','directory','workspace_id','parent_id','title','version','time_created','time_updated','time_archived','revert'],message:['id','session_id','time_created','time_updated','data'],part:['id','message_id','session_id','time_created','time_updated','data']};
-const v2Tables={session_v2:['id','directory','workspace_id','parent_id','title','version','time_created','time_updated','time_archived','revert'],session_message:['id','session_id','type','seq','data'],session_part:['message_id','session_id','ordinal','type','data']};
+const sessionColumns=['id','directory','workspace_id','parent_id','title','version','time_created','time_updated','time_archived','revert'];
+const v1Tables={session:sessionColumns,message:['id','session_id','time_created','time_updated','data'],part:['id','message_id','session_id','time_created','time_updated','data']};
+const v2Tables={session_v2:sessionColumns,session_message:['id','session_id','type','seq','data'],session_part:['message_id','session_id','ordinal','type','data']};
 interface Stores { v1:boolean; v2:boolean; parts:boolean }
-/** Required columns, or undefined when the table is absent. 1.x message/part must match exactly; 2.x tables may grow. */
+/** False when the table is absent; throws unless it has the required columns. 1.x message/part must match exactly; 2.x tables may grow. */
 function columns(db:DatabaseSync,table:string,required:readonly string[],exact:boolean):boolean {
   const schema=db.prepare('SELECT type,sql FROM sqlite_schema WHERE name=?').get(table);
   if(!schema)return false;
@@ -59,10 +60,17 @@ function stores(db:DatabaseSync):Stores {
   const v2=columns(db,'session_v2',v2Tables.session_v2,false);
   if(v2&&!columns(db,'session_message',v2Tables.session_message,false))throw new Error('unsupported-shape');
   // A fresh 2.x store has no 1.x tables; an upgraded one keeps them, and then they must still be the exact 1.x shape.
-  const v1=!v2||columns(db,'session',v1Tables.session,false);
-  if(v1&&!(columns(db,'session',v1Tables.session,false)&&columns(db,'message',v1Tables.message,true)&&columns(db,'part',v1Tables.part,true)))throw new Error('unsupported-shape');
+  const v1=columns(db,'session',v1Tables.session,false);
+  if((v1||!v2)&&!(v1&&columns(db,'message',v1Tables.message,true)&&columns(db,'part',v1Tables.part,true)))throw new Error('unsupported-shape');
   return {v1,v2,parts:v2&&columns(db,'session_part',v2Tables.session_part,false)};
 }
+const assistantStatus=(message:Record<string,unknown>):HistoryItem['status']=>message.error?'failed':message.completed?'complete':'interrupted';
+/** Bounded public text: every projected string counts toward the limit; empty text adds no item. */
+function textItems(maxBytes:number) {
+  const items:HistoryItem[]=[];let bytes=0;
+  return {items,add(item:HistoryItem){bytes+=Buffer.byteLength(item.text);if(bytes>maxBytes)throw new Error('input-limit');if(item.text)items.push(item);}};
+}
+const group=<K,V>(map:Map<K,V[]>,key:K,value:V)=>{const list=map.get(key);if(list)list.push(value);else map.set(key,[value]);};
 
 /** No DB copies, provider imports or native mutation PRAGMAs. Only a quiescent immutable 1.x projection, tested on 1.19.6. */
 export class OpenCodeSessionAdapter implements SessionAdapter {
@@ -119,9 +127,10 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
   private async catalog(diagnostics:CodexDiagnostic[]):Promise<OpenCodeSession[]> {
     this.selected.clear();this.generation='';
     // A shared ID is the 1.x session that 2.x copied into session_v2; later turns go only to the 2.x copy.
+    const listed=sessionColumns.filter(column=>column!=='revert').join(',');
     const snapshot=await this.snapshot(diagnostics,(db,{v1,v2})=>db.prepare([
-      ...(v2?["SELECT 'v2' AS store,id,directory,workspace_id,parent_id,title,version,time_created,time_updated,time_archived FROM session_v2"]:[]),
-      ...(v1?[`SELECT 'v1' AS store,id,directory,workspace_id,parent_id,title,version,time_created,time_updated,time_archived FROM session${v2?' WHERE id NOT IN (SELECT id FROM session_v2)':''}`]:[]),
+      ...(v2?[`SELECT 'v2' AS store,${listed} FROM session_v2`]:[]),
+      ...(v1?[`SELECT 'v1' AS store,${listed} FROM session${v2?' WHERE id NOT IN (SELECT id FROM session_v2)':''}`]:[]),
     ].join(' UNION ALL ')+' ORDER BY time_updated DESC,id LIMIT ?').all(this.limits.maxRows+1));
     if(!snapshot)return [];
     if(snapshot.value.length>this.limits.maxRows)this.diagnostic(diagnostics,'input-limit');
@@ -153,7 +162,7 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
     if(!openCodeNativeId.test(id)||!this.selected.has(id)){this.diagnostic(diagnostics,'selected-rollout-unavailable');return {items:[],complete:false,diagnostics,retained:false};}
     const store=this.selected.get(id)!.store;
     const snapshot=await this.snapshot(diagnostics,(db,stores)=>{
-      if(store==='v2')return this.historyV2(db,stores,id,diagnostics);
+      if(store==='v2')return this.historyV2(db,stores.parts,id,diagnostics);
       const session=db.prepare(`SELECT json_valid(revert) AS valid,CASE WHEN json_valid(revert) THEN json_extract(revert,'$.messageID') END AS message,CASE WHEN json_valid(revert) THEN json_extract(revert,'$.partID') END AS part,revert IS NOT NULL AS reverted FROM session WHERE id=?`).get(id);
       if(!session)throw new Error('selected-rollout-unavailable');
       const messages=db.prepare(`SELECT id,time_created,json_valid(data) AS valid,CASE WHEN json_valid(data) THEN json_extract(data,'$.role') END AS role,CASE WHEN json_valid(data) THEN json_type(data,'$.time.completed')='integer' AND json_extract(data,'$.time.completed')>=0 END AS completed,CASE WHEN json_valid(data) THEN json_type(data,'$.error') END AS error FROM message WHERE session_id=? ORDER BY time_created,id LIMIT ?`).all(id,this.limits.maxRows+1);
@@ -168,7 +177,7 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
         FROM part p JOIN message m ON m.id=p.message_id AND m.session_id=p.session_id WHERE p.session_id=? ORDER BY m.time_created,m.id,p.id LIMIT ?`).all(id,this.limits.maxRows+1);
       if(messages.length>this.limits.maxRows||parts.length>this.limits.maxRows)throw new Error('input-limit');
       if(session.reverted&&(!session.valid||!validId(session.message)||!messages.some(row=>row.id===session.message)||(session.part!==null&&(!validId(session.part)||!parts.some(row=>row.id===session.part&&row.message_id===session.message)))))throw new Error('invalid-boundary');
-      const items:HistoryItem[]=[];let bytes=0;
+      const {items,add}=textItems(this.limits.maxTextBytes);
       const boundary=messages.findIndex(row=>row.id===session.message);
       const positions=new Map(messages.map((row,index)=>[row.id,index]));
       const grouped=new Map(messages.map(row=>[row.id,row]));
@@ -186,9 +195,7 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
           if(part.status==='pending'||part.status==='running')continue;
         }
         if(!safeString(part.text)){this.diagnostic(diagnostics,'malformed-record');continue;}
-        bytes+=Buffer.byteLength(part.text);if(bytes>this.limits.maxTextBytes)throw new Error('input-limit');
-        if(!part.text)continue;
-        items.push({id:`opencode:${id}:${message.id}:${part.id}`,role:part.type==='tool'?'tool':message.role as 'user'|'assistant',text:part.text,status:part.type==='tool'?part.status==='error'?'failed':'complete':message.role==='user'?'complete':message.error?'failed':message.completed?'complete':'interrupted'});
+        add({id:`opencode:${id}:${message.id}:${part.id}`,role:part.type==='tool'?'tool':message.role as 'user'|'assistant',text:part.text,status:part.type==='tool'?part.status==='error'?'failed':'complete':message.role==='user'?'complete':assistantStatus(message)});
       }
       return items;
     });
@@ -198,13 +205,21 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
     if(rediscover&&(store==='v2'||this.selected.get(id)!.producerVersion!==testedOpenCodeProducer))this.diagnostic(diagnostics,'untested-producer');
     return {items:snapshot.value,complete,diagnostics,incarnation:snapshot.incarnation,retained:false};
   });}
+  /** Public user requests of a 2.x session before any revert boundary, for an untitled label; 1.x sessions always have a title. */
+  readCatalogTitleItems(id:string):Promise<readonly HistoryItem[]> {return this.run(async()=>{
+    if(this.selected.get(id)?.store!=='v2')return [];
+    const snapshot=await this.snapshot([],db=>db.prepare(`SELECT m.id,CASE WHEN NOT json_valid(m.data) THEN NULL WHEN json_type(m.data,'$.text')='text' THEN json_extract(m.data,'$.text') END AS text
+      FROM session_message m JOIN session_v2 s ON s.id=m.session_id WHERE m.session_id=? AND m.type='user'
+      AND (s.revert IS NULL OR m.seq<(SELECT b.seq FROM session_message b WHERE b.session_id=s.id AND b.id=CASE WHEN json_valid(s.revert) THEN json_extract(s.revert,'$.messageID') END))
+      ORDER BY m.seq LIMIT 8`).all(id));
+    return (snapshot?.value??[]).filter(row=>validId(row.id)&&safeString(row.text)).map(row=>({id:`opencode:${id}:${String(row.id)}`,role:'user' as const,text:row.text as string,status:'complete' as const}));
+  });}
   /** 2.x projection (pinned v2.4.1 history.ts): messages by seq; an assistant's part rows by ordinal, then its inline content. */
-  private historyV2(db:DatabaseSync,stores:Stores,id:string,diagnostics:CodexDiagnostic[]):HistoryItem[] {
+  private historyV2(db:DatabaseSync,partRows:boolean,id:string,diagnostics:CodexDiagnostic[]):HistoryItem[] {
     const limit=this.limits.maxRows+1;
     const session=db.prepare(`SELECT revert IS NOT NULL AS reverted,json_valid(revert) AS valid,CASE WHEN json_valid(revert) THEN json_type(revert,'$.messageID') END AS type,CASE WHEN json_valid(revert) THEN json_extract(revert,'$.messageID') END AS message FROM session_v2 WHERE id=?`).get(id);
     if(!session)throw new Error('selected-rollout-unavailable');
     const messages=db.prepare(`SELECT id,type,seq,CASE WHEN json_valid(data) THEN json_type(data)='object' END AS valid,
-      CASE WHEN json_valid(data) THEN json_type(data,'$.text') END AS textType,
       CASE WHEN NOT json_valid(data) OR type<>'user' THEN NULL WHEN json_type(data,'$.text')='text' THEN json_extract(data,'$.text') END AS text,
       CASE WHEN json_valid(data) THEN json_type(data,'$.content') END AS contentType,
       CASE WHEN json_valid(data) THEN json_type(data,'$.time.completed')='integer' AND json_extract(data,'$.time.completed')>=0 END AS completed,
@@ -217,7 +232,7 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
       CASE WHEN ${type}='tool' THEN json_type(${data},${path}||'.state.content') END AS contentType,
       CASE WHEN ${type}='tool' AND json_type(${data},${path}||'.state.error.message')='text' THEN json_extract(${data},${path}||'.state.error.message') END AS error`;
     const assistants=`(SELECT id,seq,CASE WHEN NOT json_valid(data) THEN '{"content":[]}' WHEN json_type(data,'$.content')='array' THEN data ELSE '{"content":[]}' END AS data FROM session_message WHERE session_id=? AND type='assistant')`;
-    const rows=stores.parts?`(SELECT p.message_id,p.ordinal,p.type AS column_type,CASE WHEN json_valid(p.data) THEN json_type(p.data)='object' END AS valid,CASE WHEN json_valid(p.data) THEN p.data ELSE '{}' END AS data FROM session_part p JOIN session_message m ON m.id=p.message_id AND m.session_id=p.session_id WHERE p.session_id=? AND m.type='assistant')`:'';
+    const rows=partRows?`(SELECT p.message_id,p.ordinal,p.type AS column_type,CASE WHEN json_valid(p.data) THEN json_type(p.data)='object' END AS valid,CASE WHEN json_valid(p.data) THEN p.data ELSE '{}' END AS data FROM session_part p JOIN session_message m ON m.id=p.message_id AND m.session_id=p.session_id WHERE p.session_id=? AND m.type='assistant')`:'';
     const parts=db.prepare([
       ...(rows?[`SELECT message_id AS message,0 AS source,ordinal AS position,valid,${fields('data',"'$'",'column_type')} FROM ${rows}`]:[]),
       `SELECT m.id AS message,1 AS source,CAST(c.key AS INTEGER) AS position,1 AS valid,${fields('m.data','c.fullkey',"json_extract(m.data,c.fullkey||'.type')")} FROM ${assistants} m,json_each(m.data,'$.content') c`,
@@ -225,28 +240,27 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
     const content=db.prepare([
       ...(rows?[`SELECT p.message_id AS message,0 AS source,p.ordinal AS position,json_extract(p.data,c.fullkey||'.type') AS type,CASE WHEN json_type(p.data,c.fullkey||'.text')='text' THEN json_extract(p.data,c.fullkey||'.text') END AS text FROM ${rows} p,json_each(p.data,'$.state.content') c WHERE p.column_type='tool' AND json_type(p.data,'$.state.content')='array'`]:[]),
       `SELECT m.id AS message,1 AS source,CAST(c.key AS INTEGER) AS position,json_extract(m.data,cc.fullkey||'.type') AS type,CASE WHEN json_type(m.data,cc.fullkey||'.text')='text' THEN json_extract(m.data,cc.fullkey||'.text') END AS text FROM ${assistants} m,json_each(m.data,'$.content') c,json_each(m.data,c.fullkey||'.state.content') cc WHERE json_extract(m.data,c.fullkey||'.type')='tool' AND json_type(m.data,c.fullkey||'.state.content')='array'`,
-    ].join(' UNION ALL ')+' ORDER BY 1,2,3 LIMIT ?').all(...(rows?[id]:[]),id,limit*10);
-    if(messages.length>this.limits.maxRows||parts.length>this.limits.maxRows||content.length>this.limits.maxRows*10)throw new Error('input-limit');
+    ].join(' UNION ALL ')+' ORDER BY 1,2,3 LIMIT ?').all(...(rows?[id]:[]),id,limit);
+    if(messages.length>this.limits.maxRows||parts.length>this.limits.maxRows||content.length>this.limits.maxRows)throw new Error('input-limit');
     // A staged revert hides its message and everything after it; upstream ignores the legacy partID.
     const boundary=session.reverted?messages.findIndex(row=>row.id===session.message):messages.length;
     if(session.reverted&&(!session.valid||session.type!=='text'||!validId(session.message)||boundary<0))throw new Error('invalid-boundary');
-    const key=(row:Record<string,unknown>)=>`${String(row.message)}\0${String(row.source)}\0${String(row.position)}`;
+    const partKey=(row:Record<string,unknown>)=>`${String(row.message)}\0${String(row.source)}\0${String(row.position)}`;
     const partsOf=new Map<unknown,Record<string,unknown>[]>(),contentOf=new Map<string,Record<string,unknown>[]>();
-    for(const part of parts)partsOf.set(part.message,[...partsOf.get(part.message)??[],part]);
-    for(const entry of content)contentOf.set(key(entry),[...contentOf.get(key(entry))??[],entry]);
-    const items:HistoryItem[]=[];let bytes=0;
-    const add=(item:HistoryItem)=>{bytes+=Buffer.byteLength(item.text);if(bytes>this.limits.maxTextBytes)throw new Error('input-limit');if(item.text)items.push(item);};
+    for(const part of parts)group(partsOf,part.message,part);
+    for(const entry of content)group(contentOf,partKey(entry),entry);
+    const {items,add}=textItems(this.limits.maxTextBytes);
     for(const message of messages.slice(0,boundary)) {
       if(!message.valid||!validId(message.id)||typeof message.type!=='string'||!Number.isSafeInteger(message.seq)){this.diagnostic(diagnostics,'malformed-record');continue;}
       if(excludedV2MessageTypes.has(message.type))continue;
       const base=`opencode:${id}:${message.id}`;
       if(message.type==='user') {
-        if(message.textType!=='text'||!safeString(message.text)){this.diagnostic(diagnostics,'malformed-record');continue;}
+        if(!safeString(message.text)){this.diagnostic(diagnostics,'malformed-record');continue;}
         add({id:base,role:'user',text:message.text,status:'complete'});continue;
       }
       if(message.type!=='assistant'){this.diagnostic(diagnostics,'unsupported-shape');continue;}
       if(message.contentType!==null&&message.contentType!=='array')this.diagnostic(diagnostics,'malformed-record');
-      const status:HistoryItem['status']=message.error?'failed':message.completed?'complete':'interrupted';
+      const status=assistantStatus(message);
       for(const part of partsOf.get(message.id)??[]) {
         const partId=`${base}:${part.source?'c':'p'}${String(part.position)}`;
         if(!part.valid||!Number.isSafeInteger(part.position)){this.diagnostic(diagnostics,'malformed-record');continue;}
@@ -264,7 +278,7 @@ export class OpenCodeSessionAdapter implements SessionAdapter {
         if(part.contentType!=='array'){this.diagnostic(diagnostics,'malformed-record');continue;}
         // Completed output is text and file entries; file entries (URIs, media) never transfer.
         const texts:string[]=[];
-        for(const entry of contentOf.get(key(part))??[]) {
+        for(const entry of contentOf.get(partKey(part))??[]) {
           if(entry.type==='file')continue;
           if(entry.type!=='text'){this.diagnostic(diagnostics,'unsupported-shape');continue;}
           if(!safeString(entry.text)){this.diagnostic(diagnostics,'malformed-record');continue;}
