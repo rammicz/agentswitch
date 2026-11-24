@@ -67,7 +67,7 @@ for(const source of ['codex','claude'])test(`default CLI ${source}→agy uses re
  const [record]=await records(f);assert.equal(record.state,'uncertain');assert.equal(record.targetNativeId,null);assert.equal(record.continuity.targetRef,null);assert.equal(record.observation,undefined);assert.equal(record.writer,'stopped');
 });
 test('agy native open requires explicitly cleared draft, exact cache ID/cwd and sends no history or new request',async t=>{
- const f=await setup(t);const r=pty(f,[...select('agy'),...target,{send:'\r'},{wait:'Clear the request explicitly'},...clear,{send:'\r'},{wait:'Open the exact cached Antigravity conversation'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);assert.equal(r.restored,true);assert.deepEqual((await launches(f))[0].args,['--conversation',id]);
+ const f=await setup(t);const r=pty(f,[...select('agy'),...target,{wait:'Clear the request (C, then Ctrl+U), or press F for a handoff.'},{send:'\r'},{wait:'Clear the request explicitly'},...clear,{wait:'Opens the original agy session natively, without an initial request.'},{send:'\r'},{wait:'Open the exact cached Antigravity conversation'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);assert.equal(r.restored,true);assert.deepEqual((await launches(f))[0].args,['--conversation',id]);
  const [record]=await records(f);assert.equal(record.completeness,'unknown');assert.equal(record.continuity,undefined);assert.equal(record.archive,null);assert.equal(record.prompt,'');assert.equal(record.targetNativeId,null);assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
 });
 test('agy metadata discovery/filter/global search does no provider probes or launches',async t=>{
@@ -86,7 +86,7 @@ test('agy incoming omissions keep a retrievable full archive within the complete
 });
 test('agy incoming workspace override is explicit and cache-only native override cannot launch',async t=>{
  const f=await setup(t);pty(f,[...select('codex'),...target,{send:'w'},{wait:'Explicit workspace override'},{send:f.other+'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);assert.equal((await launches(f))[0].cwd,f.other);
- pty(f,[...select('agy'),...target,...clear,{send:'w'},{wait:'Explicit workspace override'},{send:f.other+'\r'},{wait:'requires its recorded workspace'},{send:'\x03'}]);assert.equal((await launches(f)).length,1);
+ pty(f,[...select('agy'),...target,...clear,{send:'w'},{wait:'Explicit workspace override'},{send:f.other+'\r'},{wait:'requires its recorded workspace'},{wait:'[agy]  grok\r\n   Native resume requires its recorded workspace.'},{send:'\x03'}]);assert.equal((await launches(f)).length,1);
 });
 test('agy unknown delivery survives restart without replay; explicit fresh retry stays uncertain',async t=>{
  const f=await setup(t);pty(f,[...select('codex'),...target,...finish]);const [record]=await records(f);pty(f,[{wait:'EXPLICIT FRESH RECOVERY'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},...target,...finish],['transfers','retry',record.id]);const all=await records(f);assert.equal(all.length,2);assert.ok(all.every(x=>x.state==='uncertain'&&x.targetNativeId===null));assert.equal((await launches(f)).length,2);

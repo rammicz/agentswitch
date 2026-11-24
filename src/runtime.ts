@@ -93,6 +93,17 @@ interface Snapshot {
 }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (code: string, message: string): never => { throw new RuntimeError(code, message); };
+/** Agents whose native open of an existing session takes no initial request. */
+export const opensWithoutRequest = (agent: string): boolean => ['opencode', 'agy', 'grok'].includes(agent);
+/**
+ * Why a native open of an existing session is refused, if it is: it needs the recorded workspace and no initial request.
+ * Preparation enforces it; the picker's outcome states it in advance.
+ */
+export function nativeOpenRefusal(recordedWorkspace: boolean, currentRequest: string | undefined): RuntimeError | undefined {
+  if (!recordedWorkspace) return new RuntimeError('WORKSPACE_CHOICE', 'Native resume requires its recorded workspace. Select F for a reviewed fresh context.');
+  if (currentRequest !== '') return new RuntimeError('NATIVE_REQUEST_UNSUPPORTED', 'Native resume opens without an initial request. Clear the request explicitly, or select F to preserve the draft in a reviewed fresh context.');
+  return undefined;
+}
 function cancelled(signal?: AbortSignal): void {
   if (signal?.aborted) fail('CANCELLED', 'Continuation cancelled before launch.');
 }
@@ -230,8 +241,10 @@ export function createRuntime(options: RuntimeOptions) {
       if(input.resumeTarget&&targetSource.workspace!==workspace.path)return fail('WORKSPACE_CHOICE','Earlier native target workspace differs from the selected workspace.');
       if (native && !(request.target==='opencode'?openCodeNativeId:uuid).test(targetSource.nativeId)) return fail('INVALID_NATIVE_ID', 'Native resume requires the exact source UUID or provider-native ses_ identifier. Refresh or explicitly choose a fresh handoff.');
       if (native && targetSource.nativeResume !== 'compatible') return fail('INCOMPATIBLE_NATIVE', 'Native session compatibility is unavailable. Explicitly choose a fresh handoff or use the native client.');
-      if(native&&['opencode','agy','grok'].includes(request.target)&&(request.workspace.kind!=='source'||workspace.path!==(await directory(targetSource.workspace)).path))return fail('WORKSPACE_CHOICE','Native resume requires its recorded workspace. Select F for a reviewed fresh context.');
-      if(native&&['opencode','agy','grok'].includes(request.target)&&(input.currentRequest!==''||input.handoff))return fail('NATIVE_REQUEST_UNSUPPORTED','Native resume opens without an initial request. Clear the request explicitly, or select F to preserve the draft in a reviewed fresh context.');
+      if (native && opensWithoutRequest(request.target)) {
+        const refusal = nativeOpenRefusal(request.workspace.kind === 'source' && workspace.path === (await directory(targetSource.workspace)).path, input.handoff ? undefined : input.currentRequest);
+        if (refusal) throw refusal;
+      }
       if (native) available(guard, targetSource);
       if (!native && !input.handoff) return fail('HANDOFF_REQUIRED', 'A prepared historical user prompt and distinct current request are required for a fresh handoff.');
       const prompt = input.handoff?.prompt??input.currentRequest??'';

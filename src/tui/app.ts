@@ -116,7 +116,7 @@ function keycaps(hints: readonly Hint[], width: number, color: boolean): string 
 }
 /** A muted label and its plain value two spaces apart, wrapped to at most `limit` rows. */
 function pair(label: string, value: string, width: number, color: boolean, limit = Infinity): string[] {
-  return panelWrap(`${label}  ${value}`, width).slice(0, limit)
+  return wordWrap(`${label}  ${value}`, width).slice(0, limit)
     .map((row, index) => index === 0 && row.startsWith(label) ? styled(label, 'muted', color) + row.slice(label.length) : row);
 }
 /** One input row. Text that does not fit shows its end after `…`, so the typing position stays visible. */
@@ -472,7 +472,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
         ...indent(panelWrap(`${choice!.path}${choice!.kind === 'override' ? ' (override)' : ''}`, inner)),
         ...(options.compose ? [
           '', section('Handoff'),
-          ...indent([...pair('Current request', currentRequest, inner, color),
+          ...indent([...pair('Current request', currentRequest || '(empty)', inner, color),
             ...pair('Redactions', redactions.length ? `${redactions.length} (${redactions.map(() => '•••').join(', ')})` : 'none', inner, color),
             ...pair('Fresh context', fresh ? 'on' : 'off (automatic)', inner, color)]),
         ] : []),
@@ -492,7 +492,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       const predict = options.outcome;
       if (active && predict && stage === 'target' && picked && !busy) {
         const value = continuationRequest();
-        const key = JSON.stringify([value.source, value.target, value.workspace, value.redactions ?? [], value.fresh ?? false]);
+        const key = JSON.stringify([value.source, value.target, value.workspace, value.redactions ?? [], value.fresh ?? false, value.currentRequest === '']);
         if (outcome?.key !== key) {
           outcomeRequest?.abort();
           const controller = new AbortController();

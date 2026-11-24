@@ -111,6 +111,7 @@ for(const [scenario,steps,late] of [
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { runPicker } from '../dist/tui/app.js';
+import { DEFAULT_CURRENT_REQUEST } from '../dist/handoff-format.js';
 function terminal() {
  const input=new PassThrough();input.isTTY=true;input.isRaw=false;
  input.setRawMode=function(value){this.isRaw=value;return this;};
@@ -290,6 +291,8 @@ test('#17 T5: the target screen names the five targets and the service outcome, 
  for(const heading of ['To','Workspace','Handoff'])assert.equal(rows[rows.indexOf(heading)-1],'',heading);
  assert.ok(rows.every(row=>cells(row)<=78));
  for(const row of ['  Current request  Review the historical context','  Redactions  none','  Fresh context  off (automatic)','Enter review  Esc back  C edit request  X redact  F toggle fresh'])assert.ok(rows.some(line=>line.startsWith(row)),row);
+ const start=rows.findIndex(row=>row.startsWith('  Current request  ')),end=rows.findIndex(row=>row.startsWith('  Redactions  '));
+ assert.equal(rows.slice(start,end).map(row=>row.trim()).join(' '),'Current request  '+DEFAULT_CURRENT_REQUEST,'the request wraps between words');
  rows=plainRows(await p.send('\x1b[C','[claude]'));assert.ok(rows.includes('  Checking what this target will do…'),'no stale outcome while the service decides');
  rows=plainRows(await p.until(text=>text.includes('Outcome for claude in source.'),'claude outcome'));
  await p.send('\x1b[D','Outcome for codex in source.');

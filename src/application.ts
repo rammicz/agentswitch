@@ -9,7 +9,7 @@ import { grokPaths } from './adapters/grok.js';
 import { agyPaths } from './adapters/agy.js';
 import { openCodePaths } from './adapters/opencode.js';
 import { NativeCatalog, partialHistoryNotice, recordedPartialHistory, type NativeSnapshot } from './native-catalog.js';
-import { createRuntime, RuntimeError, type LaunchPlan, type RuntimeSource } from './runtime.js';
+import { createRuntime, nativeOpenRefusal, opensWithoutRequest, RuntimeError, type LaunchPlan, type RuntimeSource } from './runtime.js';
 import { defaultMaxCacheBytes, SearchIndex } from './search-index.js';
 import { digest, TransferJournal, type TransferIntent } from './transfer-journal.js';
 import { runPicker, type ContinuationRequest, type SessionSource } from './tui/app.js';
@@ -67,8 +67,6 @@ export interface ApplicationOptions {
 // contains controls or ambiguous-width Unicode. JSON.parse reconstructs the exact bytes.
 const encodedPrompt=(prompt:string):string=>JSON.stringify(prompt).replace(/[\x7f-\x9f\u2028\u2029]|\p{Bidi_Control}/gu,unit=>`\\u${unit.charCodeAt(0).toString(16).padStart(4,'0')}`);
 const publicIdentity=(source:SessionSource):SessionSource=>({agent:source.agent,id:source.id,nativeId:source.nativeId});
-// These agents open an existing native session with no initial request.
-const opensWithoutRequest=(agent:string):boolean=>['opencode','agy','grok'].includes(agent);
 const nativeProjection=(snapshot:NativeSnapshot):ContextSnapshot=>({ref:snapshot.context,items:snapshot.history.items,retained:snapshot.retained,...(snapshot.history.itemTurns?{itemTurns:snapshot.history.itemTurns}:{})});
 
 const archiveRetention=30*24*60*60*1000;
@@ -226,7 +224,15 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
       preview:async(source,signal)=>{const snapshot=await resolveSource(source,signal);return snapshot.items;},
       outcome:async(request,signal)=>{
         const decision=await decide(request,signal),agent=request.target;
-        if(decision.metadataOnly||decision.ordinaryNative)return {native:true,text:opensWithoutRequest(agent)?`Opens the original ${agent} session natively, without an initial request.`:`Resumes the original ${agent} session natively.`};
+        if((decision.metadataOnly||decision.ordinaryNative)&&!opensWithoutRequest(agent))return {native:true,text:`Resumes the original ${agent} session natively.`};
+        if(decision.metadataOnly||decision.ordinaryNative) {
+          // The same preconditions preparation checks, with the request it would pass.
+          const recorded=request.workspace.kind==='source'&&await realpath(request.workspace.path)===await realpath(decision.snapshot.runtime.workspace).catch(()=>'');
+          const refusal=nativeOpenRefusal(recorded,decision.metadataOnly?request.currentRequest:request.currentRequest??DEFAULT_CURRENT_REQUEST);
+          if(refusal?.code==='NATIVE_REQUEST_UNSUPPORTED')throw new Error(`Opens the original ${agent} session natively only without an initial request. Clear the request (C, then Ctrl+U), or press F for a handoff.`);
+          if(refusal)throw refusal;
+          return {native:true,text:`Opens the original ${agent} session natively, without an initial request.`};
+        }
         if(decision.choice.target)return {native:true,text:`Continues the earlier ${agent} session natively with only the history it is missing.`};
         return {native:false,text:`Starts ${agent} with a handoff of this conversation.`};
       },
