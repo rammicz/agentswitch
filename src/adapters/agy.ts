@@ -136,17 +136,6 @@ export class AgySessionAdapter implements SessionAdapter {
     let db:DatabaseSync|undefined;
     try {
       const signature=await this.physical(root,catalog);
-      db=new DatabaseSync(pathToFileURL(path).href+'?mode=ro&immutable=1',{readOnly:true});
-      const schema=db.prepare("SELECT type,sql FROM sqlite_schema WHERE name='conversation_summaries'").get();
-      const columns=db.prepare('PRAGMA table_info(conversation_summaries)').all();
-      if(schema?.type!=='table'||typeof schema.sql!=='string'||/VIRTUAL/i.test(schema.sql)||
-         !selectedColumns.every(name=>columns.some(c=>c.name===name))||
-         !columns.some(c=>c.name==='conversation_id'&&c.pk===1))throw Error('unsupported-shape');
-      const rows=db.prepare(`SELECT ${selectedColumns.join(',')} FROM conversation_summaries ORDER BY last_modified_time DESC,conversation_id LIMIT ?`).all(this.limits.maxEntries+1);
-      if(rows.length>this.limits.maxEntries)throw Error('input-limit');
-      db.close();db=undefined;
-      if(signature!==await this.physical(root,catalog))throw Error('metadata-unstable');
-      catalog.signature=signature;
       let cached:readonly AgySession[]=[],cacheAmbiguous:ReadonlySet<string>=new Set();
       try {
         const cache=await this.file(join(root,'cache','last_conversations.json'),root,this.limits.maxBytes,catalog.budget);
@@ -157,17 +146,29 @@ export class AgySessionAdapter implements SessionAdapter {
         if((error as NodeJS.ErrnoException).code==='ENOENT')this.diagnostic(diagnostics,'metadata-unavailable');
         else this.failure(diagnostics,error);
       }
+      db=new DatabaseSync(pathToFileURL(path).href+'?mode=ro&immutable=1',{readOnly:true});
+      const schema=db.prepare("SELECT type,sql FROM sqlite_schema WHERE name='conversation_summaries'").get();
+      const columns=db.prepare('PRAGMA table_info(conversation_summaries)').all();
+      if(schema?.type!=='table'||typeof schema.sql!=='string'||/VIRTUAL/i.test(schema.sql)||
+         !selectedColumns.every(name=>columns.some(c=>c.name===name))||
+         !columns.some(c=>c.name==='conversation_id'&&c.pk===1))throw Error('unsupported-shape');
+      // Native subagent rows belong to their parent: they are skipped silently and do not count toward maxEntries.
+      const rows=db.prepare(`SELECT ${selectedColumns.join(',')} FROM conversation_summaries WHERE NOT (${subagentRow}) ORDER BY last_modified_time DESC,conversation_id LIMIT ?`).all(this.limits.maxEntries+1);
+      if(rows.length>this.limits.maxEntries)throw Error('input-limit');
       const known=new Set<string>(),ambiguous=new Set<string>();
       for(const row of rows) {
         const id=row.conversation_id;
         if(typeof id==='string'&&agyNativeId.test(id)) {if(known.has(id.toLowerCase()))ambiguous.add(id.toLowerCase());known.add(id.toLowerCase());}
       }
+      // A cached ID naming a skipped subagent is known, so it is not listed as metadata only.
+      const present=db.prepare('SELECT 1 FROM conversation_summaries WHERE conversation_id=? COLLATE NOCASE LIMIT 1');
+      for(const session of cached)if(!known.has(session.nativeId.toLowerCase())&&present.get(session.nativeId))known.add(session.nativeId.toLowerCase());
+      db.close();db=undefined;
+      if(signature!==await this.physical(root,catalog))throw Error('metadata-unstable');
+      catalog.signature=signature;
       for(const row of rows)try {
         const id=row.conversation_id;
         if(typeof id!=='string'||!agyNativeId.test(id)||id!==id.toLowerCase()||ambiguous.has(id)||cacheAmbiguous.has(id))throw Error('ambiguous-rollout');
-        // Native subagent rows are skipped silently; their IDs stay in `known`, so the cache cannot re-list them.
-        if(typeof row.parent_conversation_id==='string'&&agyNativeId.test(row.parent_conversation_id)&&
-           Number.isSafeInteger(row.nesting_depth)&&Number(row.nesting_depth)>=1&&(row.agent_name==null||typeof row.agent_name==='string'))continue;
         if(row.status!=='CASCADE_RUN_STATUS_IDLE'||row.not_fully_idle!==0||row.killed!==0||
            row.source!==''||row.parent_conversation_id!==''||row.agent_name!==''||
            row.nesting_depth!==0||row.battle_id!==''||row.winning_conversation_id!==''||
@@ -239,5 +240,8 @@ export class AgySessionAdapter implements SessionAdapter {
 }
 interface CatalogRecord {session:AgySession;stepCount?:number}
 interface Catalog {root:string;records:Map<string,CatalogRecord>;diagnostics:CodexDiagnostic[];signature:string;cacheSignature:string;budget:{bytes:number};directories:Map<string,{signature:string;names:Set<string>}>}
+// A native subagent row: UUID parent, integer nesting depth of at least 1, and a text or absent agent name.
+const hex='[0-9a-fA-F]',uuidGlob=[8,4,4,4,12].map(n=>hex.repeat(n)).join('-');
+const subagentRow=`typeof(parent_conversation_id)='text' AND parent_conversation_id GLOB '${uuidGlob}' AND typeof(nesting_depth)='integer' AND nesting_depth>=1 AND (agent_name IS NULL OR typeof(agent_name)='text')`;
 // conversation_summaries columns the reader needs; other columns are ignored.
 const selectedColumns=['conversation_id','step_count','last_modified_time','workspace_uris','status','source','agent_name','parent_conversation_id','nesting_depth','battle_id','winning_conversation_id','not_fully_idle','killed','app_data_dir'];

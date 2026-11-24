@@ -215,3 +215,14 @@ test('agy native subagent rows are skipped silently and their cached IDs are not
   }
   assert.doesNotMatch(JSON.stringify([sessions,diagnostics]),/PRIVATE_/);
 });
+test('agy subagent rows do not count toward the catalog entry limit; listed rows still do',async t=>{
+  const f=await setup(t),other=join(f.base,'subagent-workspace');await mkdir(other);
+  for(const n of [2,3,4])await fixture(f.root,other,{nativeId:`${n}2345678-1234-4234-8234-123456789abc`,row:{parent_conversation_id:f.nativeId,nesting_depth:1,agent_name:'helper'}});
+  await writeFile(f.cache,JSON.stringify({[f.cwd]:f.nativeId,[other]:'42345678-1234-4234-8234-123456789abc'}));
+  const diagnostics=[],limited=new AgySessionAdapter({root:f.root,limits:{maxEntries:2},onDiagnostic:d=>diagnostics.push(d)});
+  assert.deepEqual((await limited.discover()).map(s=>[s.nativeId,s.metadataOnly]),[[f.nativeId,false]]);assert.deepEqual(diagnostics,[]);
+  assert.equal((await limited.readHistoryDetailed(f.nativeId)).complete,true);
+  for(const n of [5,6])await fixture(f.root,f.cwd,{nativeId:`${n}2345678-1234-4234-8234-123456789abc`});
+  await writeFile(f.cache,JSON.stringify({[f.cwd]:f.nativeId}));diagnostics.length=0;
+  assert.deepEqual(await limited.discover(),[]);assert.deepEqual(diagnostics.map(d=>d.code),['input-limit']);
+});
