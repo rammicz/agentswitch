@@ -2,6 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { CodexSessionAdapter, ClaudeSessionAdapter, OpenCodeSessionAdapter, openCodePaths, testedOpenCodeProducer, AgySessionAdapter, agyPaths, GrokSessionAdapter, grokPaths } from './adapters/index.js';
+import { defaultLimits } from './adapters/codex-io.js';
 import type { CodexDiagnostic, CodexHistory, CodexSession, ClaudeSession, OpenCodeSession, AgySession, GrokSession } from './adapters/index.js';
 import { setTimeout } from 'node:timers/promises';
 import type { AgentId, HistoryItem, Session, SessionQuery } from './domain.js';
@@ -16,6 +17,9 @@ const canonical = async (path: string): Promise<string> => realpath(resolve(path
 const harmless = new Set(['workspace-unavailable','metadata-unavailable','metadata-schema','metadata-unstable','untested-producer']);
 // grok and agy metadata is the whole source, so any diagnostic degrades it; OpenCode tolerates only an untested producer.
 const harmlessFor: Record<AgentId, ReadonlySet<string>> = {codex:harmless,claude:harmless,opencode:new Set(['untested-producer']),agy:new Set(),grok:new Set()};
+const listCodes=(codes:readonly string[]):string=>{const unique=[...new Set(codes)];return unique.length?` (${unique.slice(0,5).join(', ')}${unique.length>5?', …':''})`:'';};
+// Every reader caps its diagnostics at this default, some without a marker, so a full list may hide more.
+const diagnosticCap=defaultLimits.maxDiagnostics;
 // Codes that stand for an unknown amount of later history rather than one unread record.
 const truncating = new Set(['input-limit','invalid-boundary','ancestry-unavailable','ancestry-cycle','diagnostic-limit']);
 /** Review-screen disclosure for a source whose public history is incomplete. Counts and codes only, never unread content. */
@@ -23,14 +27,14 @@ export function partialHistoryNotice(agent:AgentId, history:Pick<CodexHistory,'c
   if(history.complete)return undefined;
   const blocking=history.diagnostics.filter(diagnostic=>diagnostic.source==='history'&&!harmlessFor[agent].has(diagnostic.code));
   const records=blocking.filter(diagnostic=>diagnostic.code!=='diagnostic-limit').length;
-  const codes=[...new Set(blocking.map(diagnostic=>diagnostic.code))];
-  const listed=codes.length?` (${codes.slice(0,5).join(', ')}${codes.length>5?', …':''})`:'';
-  // Readers cap their diagnostics at 100, some without a marker, so a full list may hide more.
-  const more=codes.some(code=>truncating.has(code))||history.diagnostics.length>=100?' Later history may also be unread.':'';
+  const listed=listCodes(blocking.map(diagnostic=>diagnostic.code));
+  const more=blocking.some(diagnostic=>truncating.has(diagnostic.code))||history.diagnostics.length>=diagnosticCap?' Later history may also be unread.':'';
   return records
     ? `Partial history: at least ${records} source record${records===1?'':'s'} could not be read${listed} and ${records===1?'is':'are'} not included.${more}`
     : `Partial history: the source reader reported incomplete history${listed}. Unread records are not included.${more}`;
 }
+/** Disclosure for a retry of a transfer recorded as partial: its counts and codes were not persisted. */
+export const recordedPartialHistory='Partial history: the earlier transfer recorded this history as partial. Unread records are not included; their count was not recorded.';
 const implicitContext = /^(?:# AGENTS\.md instructions|<(?:environment_context|permissions instructions|collaboration_mode|subagent_notification)\b)/iu;
 function openingTitle(items: readonly HistoryItem[]): string | undefined {
   for (const item of items) {
@@ -53,7 +57,7 @@ export class NativeCatalog {
   private readonly discoveries = new Map<AgentId, Promise<readonly Session[]>>();
   private readonly openingTitles = new Map<string, string | undefined>();
   private constructor(private readonly roots: Record<AgentId,string>, private readonly rootKeys: Record<AgentId,string>, sqliteRoot: string,opencodeDb:string) {
-    const onDiagnostic=(agent:AgentId)=>(diagnostic:CodexDiagnostic)=>{if(this.diagnostics[agent].length<100)this.diagnostics[agent].push(diagnostic);};
+    const onDiagnostic=(agent:AgentId)=>(diagnostic:CodexDiagnostic)=>{if(this.diagnostics[agent].length<diagnosticCap)this.diagnostics[agent].push(diagnostic);};
     this.adapters={grok:new GrokSessionAdapter({root:roots.grok,onDiagnostic:onDiagnostic('grok')}),agy:new AgySessionAdapter({root:roots.agy,onDiagnostic:onDiagnostic('agy')}),codex:new CodexSessionAdapter({root:roots.codex,sqliteRoot,onDiagnostic:onDiagnostic('codex')}),claude:new ClaudeSessionAdapter({root:roots.claude,onDiagnostic:onDiagnostic('claude')}),opencode:new OpenCodeSessionAdapter({dbPath:opencodeDb,onDiagnostic:onDiagnostic('opencode')})};
   }
   static async create(env:NodeJS.ProcessEnv=process.env):Promise<NativeCatalog> {
@@ -68,8 +72,8 @@ export class NativeCatalog {
   rootPath(agent:AgentId):string {return this.roots[agent];}
   notices():readonly string[] {return agents.map(agent=>this.warnings[agent]).filter(Boolean);}
   private report(agent:AgentId, extra=''):void {
-    const codes=[...new Set(this.diagnostics[agent].map(diagnostic=>diagnostic.code))];
-    this.warnings[agent]=codes.length||extra ? `${agent}: ${extra||'source warnings'}${codes.length?' ('+codes.slice(0,5).join(', ')+(codes.length>5?', …':'')+')':''}` : '';
+    const codes=listCodes(this.diagnostics[agent].map(diagnostic=>diagnostic.code));
+    this.warnings[agent]=codes||extra ? `${agent}: ${extra||'source warnings'}${codes}` : '';
   }
   async details(source:SessionSource,signal:AbortSignal):Promise<readonly HistoryItem[]> {
     signal.throwIfAborted();

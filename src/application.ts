@@ -8,7 +8,7 @@ import { createHandoffPlan, DEFAULT_CURRENT_REQUEST, parseHandoffPrompt, publish
 import { grokPaths } from './adapters/grok.js';
 import { agyPaths } from './adapters/agy.js';
 import { openCodePaths } from './adapters/opencode.js';
-import { NativeCatalog, partialHistoryNotice, type NativeSnapshot } from './native-catalog.js';
+import { NativeCatalog, partialHistoryNotice, recordedPartialHistory, type NativeSnapshot } from './native-catalog.js';
 import { createRuntime, RuntimeError, type LaunchPlan, type RuntimeSource } from './runtime.js';
 import { SearchIndex } from './search-index.js';
 import { digest, TransferJournal, type TransferIntent } from './transfer-journal.js';
@@ -57,7 +57,7 @@ export async function applicationPaths(env: NodeJS.ProcessEnv=process.env): Prom
   return {root:canonical,cache:join(canonical,'search'),archives:join(canonical,'archives'),journal:join(canonical,'transfers')};
 }
 
-interface SourceSnapshot { runtime: RuntimeSource; items: readonly HistoryItem[]; complete: boolean; partialHistory?: string; fingerprint: string; sourceKey: string; context?:ContextRef; retained?:boolean; itemTurns?:readonly NativeItemTurn[]; metadataOnly?:boolean; projectionNotice?:string }
+interface SourceSnapshot { runtime: RuntimeSource; items: readonly HistoryItem[]; complete: boolean; partialHistory?: string|undefined; fingerprint: string; sourceKey: string; context?:ContextRef; retained?:boolean; itemTurns?:readonly NativeItemTurn[]; metadataOnly?:boolean; projectionNotice?:string }
 interface Dispatch { launch: LaunchPlan; handoff: HandoffPlan | null; intent: TransferIntent; fingerprint: string; source: SessionSource; targetFingerprint?:string; targetSource?:SessionSource }
 export interface ApplicationOptions {
   workspace: string; scope?: Scope; env?: NodeJS.ProcessEnv; retry?: string;
@@ -80,20 +80,19 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
     const prior=options.retry?journal.get(options.retry):undefined;
     if(prior?.deleted||prior?.deleting) throw new Error('Deleted transfer cannot be retried.');
     const recovered=prior?.archive?await readArchiveSnapshot(prior.archive):undefined;
-    const partial=(snapshot:NativeSnapshot)=>{const notice=partialHistoryNotice(snapshot.runtime.agent,snapshot.history);return notice?{partialHistory:notice}:{};};
     const resolveSource=async(source:SessionSource,signal?:AbortSignal):Promise<SourceSnapshot>=>{
       if(prior) {
         if(prior.mode==='native-resume'&&!prior.archive) {
           const fresh=await catalog.snapshot(source,signal);
           if(fresh.sourceKey!==prior.sourceKey)throw new Error('Recovery native roots differ from the original source. Restore the configured roots.');
-          return {runtime:{...fresh.runtime,workspace:prior.workspace},items:fresh.history.items,complete:fresh.history.complete,...partial(fresh),fingerprint:fresh.fingerprint,sourceKey:fresh.sourceKey,context:fresh.context,retained:fresh.retained,...(fresh.history.itemTurns?{itemTurns:fresh.history.itemTurns}:{})};
+          return {runtime:{...fresh.runtime,workspace:prior.workspace},items:fresh.history.items,complete:fresh.history.complete,partialHistory:partialHistoryNotice(fresh.runtime.agent,fresh.history),fingerprint:fresh.fingerprint,sourceKey:fresh.sourceKey,context:fresh.context,retained:fresh.retained,...(fresh.history.itemTurns?{itemTurns:fresh.history.itemTurns}:{})};
         }
         if(source.agent!==prior.source.agent||source.nativeId!==prior.source.nativeId) throw new Error('Recovery source identity changed.');
         const complete=prior.completeness==='complete';
-        return {runtime:{...prior.source,workspace:prior.workspace,nativeResume:'unknown'},items:recovered?.items??[],complete,...(complete?{}:{partialHistory:'Partial history: the earlier transfer recorded this history as partial. Unread records are not included; their count was not recorded.'}),fingerprint:digest(JSON.stringify([prior.payloadHash,recovered])),sourceKey:prior.sourceKey};
+        return {runtime:{...prior.source,workspace:prior.workspace,nativeResume:'unknown'},items:recovered?.items??[],complete,partialHistory:complete?undefined:recordedPartialHistory,fingerprint:digest(JSON.stringify([prior.payloadHash,recovered])),sourceKey:prior.sourceKey};
       }
       const snapshot:NativeSnapshot=await catalog.snapshot(source,signal);
-      return {runtime:snapshot.runtime,items:snapshot.history.items,complete:snapshot.history.complete,...partial(snapshot),fingerprint:snapshot.fingerprint,sourceKey:snapshot.sourceKey,context:snapshot.context,retained:snapshot.retained,...(snapshot.metadataOnly!==undefined?{metadataOnly:snapshot.metadataOnly}:{}),...(snapshot.projectionNotice?{projectionNotice:snapshot.projectionNotice}:{}),...(snapshot.history.itemTurns?{itemTurns:snapshot.history.itemTurns}:{})};
+      return {runtime:snapshot.runtime,items:snapshot.history.items,complete:snapshot.history.complete,partialHistory:partialHistoryNotice(snapshot.runtime.agent,snapshot.history),fingerprint:snapshot.fingerprint,sourceKey:snapshot.sourceKey,context:snapshot.context,retained:snapshot.retained,...(snapshot.metadataOnly!==undefined?{metadataOnly:snapshot.metadataOnly}:{}),...(snapshot.projectionNotice?{projectionNotice:snapshot.projectionNotice}:{}),...(snapshot.history.itemTurns?{itemTurns:snapshot.history.itemTurns}:{})};
     };
     let activeAttempt:string|undefined;
     const runtime=createRuntime({env,getSource:async(source,signal)=>(await resolveSource(source,signal)).runtime,
@@ -179,7 +178,8 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         const observed=observeContext({ref,items:snapshot.items,retained:(snapshot.retained??false)&&snapshot.complete,...(snapshot.itemTurns?{itemTurns:snapshot.itemTurns}:{})},prior?[]:contexts,[...aliases,...attempts.filter(attempt=>attempt.deleted||attempt.deleting)],[...retainedItems.values()],known,Boolean(prior||request.fresh||(redactions.length&&source.agent!==request.target)),sourceRecovery);
         const validated=new Map<string,NativeContext>();
         const targetSnapshots=new Map<string,NativeSnapshot>();
-        if(!prior&&!request.fresh&&!redactions.length)for(const candidate of contexts.filter(context=>context.lineageId===observed.lineage.id&&context.epoch===observed.lineage.epoch&&context.ref.agent===request.target&&request.target==='codex'&&context.ref.root===catalog.rootKey(request.target))) {
+        // A partial source never reuses an earlier native target, so its candidates need no validation.
+        if(!prior&&!request.fresh&&!redactions.length&&snapshot.complete)for(const candidate of contexts.filter(context=>context.lineageId===observed.lineage.id&&context.epoch===observed.lineage.epoch&&context.ref.agent===request.target&&request.target==='codex'&&context.ref.root===catalog.rootKey(request.target))) {
           try {
             const target=nativeSnapshots.get(contextKey(candidate.ref))??await catalog.snapshot(candidate.ref,signal);
             const echoes=candidate.acceptedAttempts?.every(id=>{
@@ -193,10 +193,10 @@ export async function runApplication(options:ApplicationOptions):Promise<void> {
         const ordinaryNative=!prior&&!request.fresh&&(!['opencode','agy','grok'].includes(source.agent)||request.workspace.kind==='source')&&!observed.reason&&source.agent===request.target&&snapshot.runtime.nativeResume==='compatible';
         // Native resume/open cannot certify unread records, so only a fresh handoff of the readable items is allowed.
         if(ordinaryNative&&!snapshot.complete) throw new Error('Selected public history is incomplete. Native resume cannot include unread records; select F to send the readable history in a reviewed fresh context.');
-        let target=ordinaryNative||!snapshot.complete?null:choice.target;
+        let target=ordinaryNative?null:choice.target;
         let fresh=!ordinaryNative&&!target;
-        let reason=!snapshot.complete&&choice.target?'Selected source history is partial, so an earlier native target is not reused. Review this new bounded fresh context.':sourceRecovery?'Required ancestry is unavailable. Explicit fresh recovery includes only available active source and known included echoes; unavailable application ancestry is excluded.':ordinaryNative?(['opencode','agy','grok'].includes(source.agent)?`Open the selected existing ${source.agent} session without an initial request.`:'Resume the selected source; send only the new current request.'):choice.reason;
-        const completeness=snapshot.complete?'complete' as const:'partial' as const;
+        let reason=sourceRecovery?'Required ancestry is unavailable. Explicit fresh recovery includes only available active source and known included echoes; unavailable application ancestry is excluded.':ordinaryNative?(['opencode','agy','grok'].includes(source.agent)?`Open the selected existing ${source.agent} session without an initial request.`:'Resume the selected source; send only the new current request.'):choice.reason;
+        const completeness:TransferIntent['completeness']=snapshot.complete?'complete':'partial';
         const makeHandoff=(items:readonly HistoryItem[])=>createHandoffPlan({directory:paths.archives,source,items,currentRequest:request.currentRequest??DEFAULT_CURRENT_REQUEST,redactions,completeness});
         let handoff=ordinaryNative?null:makeHandoff(target?choice.items:observed.items);
         // Use the same redaction implementation for native current-request-only transport.
