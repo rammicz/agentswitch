@@ -157,7 +157,7 @@ const transcript=[
  {id:'item-t2-c3d4',role:'tool',status:'failed',text:'command failed: needle-xyz'},
 ];
 const sessionHit={id:'codex:sess',nativeId:'sess-native-1',agent:'codex',title:'Fix the flaky upload test',workspace:root,updatedAt:new Date(Date.now()-18*60_000).toISOString()};
-const sgr=/\x1b\[[0-9;]*m/g;
+const sgr=/\x1b\[[0-9;]*m/g,hasSgr=/\x1b\[[0-9;]*m/;
 async function picker({items=transcript,rows=60,columns=100,color=false,match=false}={}) {
  const t=terminal();t.output.rows=rows;t.output.columns=columns;
  let written='';t.output.on('data',chunk=>{written+=chunk;});
@@ -171,10 +171,12 @@ async function picker({items=transcript,rows=60,columns=100,color=false,match=fa
  const until=async(test,label)=>{for(let i=0;i<200;i++){if(test(frame()))return frame();await new Promise(r=>setTimeout(r,10));}throw Error(`Missing ${label} in ${JSON.stringify(frame())}`);};
  const send=async(data,expect,label=expect)=>{const before=frames().length;t.input.write(data);return until(text=>frames().length>before&&(typeof expect==='function'?expect(text):text.includes(expect)),label);};
  await until(text=>text.includes('Fix the flaky upload test'),'list');
- return {t,frame,until,send,written:()=>written,stop:async()=>{t.input.write('\x03');await running;Object.assign(process.env,saved);for(const k of ['NO_COLOR','TERM'])if(saved[k]===undefined)delete process.env[k];}};
+ return {t,frame,until,send,written:()=>written,stop:async()=>{t.input.write('\x03');await running;for(const [k,v] of Object.entries(saved))if(v===undefined)delete process.env[k];else process.env[k]=v;}};
 }
 const open=p=>p.send('\r','Enter choose target');
 const plainRows=text=>text.replace(sgr,'').split('\n');
+// A frame is the 2-row heading, the body, a blank row and the footer.
+const bodyOf=(rows,height)=>rows.slice(2,height-2);
 
 test('T1/T4/T5: the preview renders a session header and role blocks without item IDs or complete tags',async()=>{
  const p=await picker();const text=await open(p);const rows=plainRows(text);await p.stop();
@@ -185,7 +187,7 @@ test('T1/T4/T5: the preview renders a session header and role blocks without ite
  assert.ok(you>0&&codex>you);assert.equal(rows[codex-1],'');assert.equal(rows[you-1],'');
  for(const item of transcript)assert.ok(!p.written().includes(item.id),item.id);
  assert.ok(!rows.join('\n').includes('complete'));
- assert.match(rows.find(line=>line.includes('Partial reply')===false&&line.startsWith('● codex')&&line.includes('interrupted'))??'',/interrupted/);
+ assert.ok(rows.some(line=>line.startsWith('● codex')&&line.includes('interrupted')));
  assert.ok(rows.some(line=>line.startsWith('⏺ tool output · 1 line')&&line.includes('failed')));
  assert.ok(rows.some(line=>line.startsWith('⏺ tool output · 10 lines')));
 });
@@ -216,24 +218,24 @@ test('T7: an empty history explains that only metadata is readable',async()=>{
  assert.ok(rows.includes('No readable conversation in this session (metadata only).'));
 });
 test('T8: PgDn and PgUp scroll by one body height',async()=>{
- const tall=await picker();const all=plainRows(await tall.send('t\r'.slice(1),'Enter choose target'));await tall.stop();
- const body=all.slice(2,all.indexOf('',all.length-3));
- const p=await picker({rows:12});const first=plainRows(await open(p));
- const bodyRows=12-4;assert.deepEqual(first.slice(2,2+bodyRows),body.slice(0,bodyRows));
- const next=plainRows(await p.send('\x1b[6~',text=>plainRows(text)[2]!==first[2],'PgDn'));assert.deepEqual(next.slice(2,2+bodyRows),body.slice(bodyRows,2*bodyRows));
- const back=plainRows(await p.send('\x1b[5~',text=>plainRows(text)[2]===first[2],'PgUp'));assert.deepEqual(back.slice(2,2+bodyRows),first.slice(2,2+bodyRows));
+ const tall=await picker();const all=plainRows(await open(tall));await tall.stop();
+ const body=all.slice(2,-2);
+ const p=await picker({rows:12});const first=bodyOf(plainRows(await open(p)),12);const bodyRows=first.length;
+ assert.deepEqual(first,body.slice(0,bodyRows));
+ const next=bodyOf(plainRows(await p.send('\x1b[6~',text=>plainRows(text)[2]!==first[0],'PgDn')),12);assert.deepEqual(next,body.slice(bodyRows,2*bodyRows));
+ const back=bodyOf(plainRows(await p.send('\x1b[5~',text=>plainRows(text)[2]===first[0],'PgUp')),12);assert.deepEqual(back,first);
  await p.stop();
 });
 test('T9: with NO_COLOR the preview has the same rows and no colour sequences',async()=>{
  const plain=await picker();const off=await open(plain);await plain.stop();
  const colored=await picker({color:true});const on=await open(colored);await colored.stop();
- assert.doesNotMatch(off,/\x1b\[/);assert.match(on,sgr);assert.equal(on.replace(sgr,''),off);
+ assert.doesNotMatch(off,/\x1b\[/);assert.match(on,hasSgr);assert.equal(on.replace(sgr,''),off);
 });
 
 for(const [columns,color] of [[80,true],[130,true],[80,false]]) test(`PTY: a real-looking transcript fits ${columns} columns${color?'':' with NO_COLOR'}`,()=>{
  const r=run([{resize:[32,columns],wait:'Alpha task'},key('\r','Enter choose target'),key('\x03','DONE')],'transcript',color?{TERM:'xterm-256color'}:{NO_COLOR:'1'});
  const frame=r.frames[2];const rows=frame.replace(sgr,'').split(/\r?\n/);
- if(color)assert.match(frame,sgr);else assert.doesNotMatch(frame,sgr);
+ if(color)assert.match(frame,hasSgr);else assert.doesNotMatch(frame,hasSgr);
  for(const row of rows)assert.ok(Array.from(row.replace(/\x1b\[[0-9;?]*[A-Za-z]/g,'')).length<columns,JSON.stringify(row));
  for(const expected of ['Alpha task','Agent: codex','5 items · 1 user · 2 assistant · 2 tool','● You','  Please fix the flaky upload test.','  It fails about once in ten runs on CI.','● codex','⏺ tool output · 12 lines','  $ npm test -- --grep upload','  > agentswitch@0.1.0 test','  … 8 more lines','T show tool output'])
   assert.ok(rows.some(row=>row.includes(expected)),expected);
