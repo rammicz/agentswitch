@@ -24,12 +24,30 @@ CREATE UNIQUE INDEX session_message_session_seq_idx ON session_message (session_
 CREATE INDEX session_part_session_message_idx ON session_part (session_id, message_id, ordinal);
 CREATE TABLE blob (hash text PRIMARY KEY, data blob);
 CREATE TABLE session_search_document (id INTEGER PRIMARY KEY, source_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL);
-CREATE VIRTUAL TABLE session_search USING fts5(title, summary, user_text, assistant_text, content='', contentless_delete=1, tokenize='porter unicode61 remove_diacritics 2');
 CREATE TRIGGER session_search_session_delete AFTER DELETE ON session_v2 BEGIN DELETE FROM session_search_document WHERE source_id = OLD.id; END;`;
+
+const searchIndex = `CREATE VIRTUAL TABLE session_search USING fts5(title, summary, user_text, assistant_text, content='', contentless_delete=1, tokenize='porter unicode61 remove_diacritics 2')`;
+// The ordinary tables FTS5 keeps for this contentless index with contentless_delete=1.
+const searchShadows = `
+CREATE TABLE session_search_data(id INTEGER PRIMARY KEY, block BLOB);
+CREATE TABLE session_search_idx(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID;
+CREATE TABLE session_search_docsize(id INTEGER PRIMARY KEY, sz BLOB, origin INTEGER);
+CREATE TABLE session_search_config(k PRIMARY KEY, v) WITHOUT ROWID;`;
+/**
+ * A real 2.x store always carries the FTS5 index in its schema. Without FTS5 (Node 22.15.0's bundled SQLite),
+ * plant the same schema row and shadow tables, so the reader meets that schema on old Node too.
+ */
+function addSearchIndex(db) {
+  try { db.exec(searchIndex); return; } catch (error) { if (!/no such module: fts5/.test(error.message)) throw error; }
+  db.exec(searchShadows + 'PRAGMA writable_schema=ON;');
+  try { db.prepare("INSERT INTO sqlite_schema(type, name, tbl_name, rootpage, sql) VALUES ('table', 'session_search', 'session_search', 0, ?)").run(searchIndex); }
+  finally { db.exec('PRAGMA writable_schema=OFF;'); }
+}
 
 /** Adds the 2.x tables and sessions to `db`. Messages and part rows are inserted out of order on purpose. */
 function populate(db, cwd, { revert = null } = {}) {
   db.exec(v2Tables + `CREATE TABLE IF NOT EXISTS credential(value TEXT); CREATE TABLE IF NOT EXISTS account(access_token TEXT);`);
+  addSearchIndex(db);
   db.prepare('INSERT INTO credential VALUES (?)').run('PRIVATE_CREDENTIAL');
   db.prepare('INSERT INTO blob VALUES (?,?)').run('sha', Buffer.from('PRIVATE_BLOB'));
   db.prepare('INSERT INTO project VALUES (?,?,?,?,?,?)').run('prj_1', cwd, 'git', 'p', 1, 1);

@@ -168,6 +168,8 @@ const setupV2=(make=fixtureV2,options)=>setup(make,options);
 const v2Expected=[['user','V2 public question','complete'],['assistant','Part one','complete'],['tool','Tool output','complete'],['assistant','Part three','complete'],['tool','Tool failed','failed'],['assistant','Inline after parts','complete'],['assistant','Old inline answer','failed'],['user','Latest question','complete'],['assistant','Streaming answer','interrupted']];
 test('a fresh 2.x store lists local top-level sessions and projects public text in seq, ordinal then inline order',async()=>{
  const f=await setupV2();const before=await readFile(f.path);const diagnostics=[];const adapter=new OpenCodeSessionAdapter({dbPath:f.path,onDiagnostic:x=>diagnostics.push(x)});
+ // Like a real 2.x store, the schema carries the FTS5 search index even where this SQLite lacks FTS5.
+ const schema=new DatabaseSync(f.path,{readOnly:true});assert.match(schema.prepare("SELECT sql FROM sqlite_schema WHERE name='session_search'").get().sql,/^CREATE VIRTUAL TABLE session_search USING fts5\(/);schema.close();
  const sessions=await adapter.discover();
  assert.deepEqual(sessions.map(s=>[s.nativeId,s.title,s.producerVersion,s.store]),[[v2Id,'OpenCode '+v2Id,'2.4.1','v2'],['ses_v2fork001','Forked session','1.19.6','v2']]);
  assert.equal(sessions[0].workspace,await realpath(f.cwd));assert.equal(sessions[0].createdAt,new Date(1795255200000).toISOString());
