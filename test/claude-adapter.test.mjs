@@ -119,6 +119,30 @@ test('oversized lines retain later healthy metadata and graph; file cap reports 
   const cap=await limited.readHistoryDetailed(ids[1]);assert.deepEqual(texts(cap),['Prefix']);assert.equal(cap.complete,false);
 });
 
+test('discovery reads bounded metadata and each selected history gets its own byte budget',async t=>{
+  const {root,cwd}=await fixture(t);
+  const long=(id,prompt,turns,title)=>{const records=[e(id,cwd,'u',null,'user',prompt)];for(let i=1;i<=turns;i++)records.push(e(id,cwd,`a${i}`,i===1?'u':`a${i-1}`,'assistant','x'.repeat(5000)));return [...records,{type:'custom-title',customTitle:title}];};
+  for(const i of [0,1,2])await write(root,ids[i],long(ids[i],`Prompt ${i}`,130,`Title ${i}`),`a${i+1}`);
+  await write(root,ids[4],long(ids[4],'Big prefix',280,'Big title'),'m-big');
+  await write(root,ids[3],[e(ids[3],cwd,'u',null,'user','Late prompt'),e(ids[3],cwd,'a','u','assistant','Late answer'),{type:'custom-title',customTitle:'Late title'}],'z-late');
+  // First prompt starts past the first 64 KiB chunk but within one maximal line of it.
+  const snapshots=Array.from({length:9},()=>({type:'file-history-snapshot',pad:'s'.repeat(7500)}));
+  await write(root,ids[5],[...snapshots,...long(ids[5],'Prompt after snapshots',130,'').slice(0,-1)],'b-head');
+  // The tail window (64 KiB) opens exactly where the title line starts.
+  const sized=(record,length)=>{const raw=JSON.stringify({...record,pad:''});return JSON.stringify({...record,pad:'p'.repeat(length-1-raw.length)});};
+  await write(root,ids[6],[...long(ids[6],'Boundary prompt',130,'').slice(0,-1),sized({type:'custom-title',customTitle:'Boundary title'},1536),...Array(8).fill(sized({type:'queue-operation'},8000))],'b-tail');
+  const diagnostics=[],a=reader({root,limits:{maxScanBytes:1_200_000,maxFileBytes:1_000_000,maxLineBytes:10_000},onDiagnostic:d=>diagnostics.push(d)}),sessions=await a.discover();
+  assert.deepEqual(sessions.map(s=>s.nativeId).sort(),ids.slice(0,7).sort());
+  assert.deepEqual(diagnostics.filter(d=>['input-limit','malformed-record','partial-record'].includes(d.code)),[]);
+  const title=id=>sessions.find(s=>s.nativeId===id)?.title;
+  assert.equal(title(ids[3]),'Late title');assert.equal(title(ids[0]),'Title 0');assert.equal(title(ids[4]),'Big title');
+  assert.equal(title(ids[5]),'Prompt after snapshots');assert.equal(title(ids[6]),'Boundary title');
+  const late=await a.readHistoryDetailed(ids[3]);assert.deepEqual(texts(late),['Late prompt','Late answer']);assert.equal(late.complete,true);assert.ok(!late.diagnostics.some(d=>d.code==='input-limit'));
+  const sibling=await a.readHistoryDetailed(ids[2]);assert.equal(sibling.complete,true);assert.equal(sibling.items.length,131);
+  const big=await a.readHistoryDetailed(ids[4]);assert.equal(texts(big)[0],'Big prefix');assert.equal(big.complete,false);assert.ok(big.diagnostics.some(d=>d.code==='input-limit'));
+  assert.equal((await a.readHistoryDetailed(ids[3])).complete,true);
+});
+
 test('duplicate native IDs choose newer file deterministically; invalid names, subagents and symlinks excluded',async t=>{
   const {base,root,cwd}=await fixture(t),diagnostics=[];
   await write(root,ids[0],[e(ids[0],cwd,'u',null,'user','Older')],'a');

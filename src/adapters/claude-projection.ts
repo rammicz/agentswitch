@@ -5,7 +5,7 @@ import type { Entry, NativeRecord } from './claude-io.js';
 export const graphTypes = new Set(['user', 'assistant', 'progress', 'system', 'attachment']);
 export const metadataTypes = new Set(['summary', 'custom-title', 'ai-title', 'last-prompt', 'queue-operation', 'file-history-snapshot']);
 export function visible(e: NativeRecord): boolean { return !e.isSidechain && !e.isMeta && !e.teamName; }
-export function graphEntry(value: NativeRecord, line: number, nativeId: string, ctx: ReadContext): Entry | undefined {
+export function graphEntry(value: NativeRecord, line: number | undefined, nativeId: string, ctx: ReadContext): Entry | undefined {
   if (value.sessionId !== undefined && (typeof value.sessionId !== 'string' || value.sessionId.toLowerCase() !== nativeId)) {
     ctx.add('invalid-owner', 'history', line); return;
   }
@@ -19,7 +19,7 @@ export function graphEntry(value: NativeRecord, line: number, nativeId: string, 
   if ((value.type === 'user' || value.type === 'assistant') && (!value.message || typeof value.message !== 'object' || Array.isArray(value.message))) {
     ctx.add('unsupported-shape', 'history', line); return;
   }
-  return { ...value, uuid: text(value.uuid), parentUuid: text(value.parentUuid) || null, type: text(value.type), line };
+  return { ...value, uuid: text(value.uuid), parentUuid: text(value.parentUuid) || null, type: text(value.type), line: line ?? 0 };
 }
 function response(e: Entry): string { return e.type === 'assistant' ? text(object(e.message).id) : ''; }
 function blocks(e: NativeRecord): NativeRecord[] {

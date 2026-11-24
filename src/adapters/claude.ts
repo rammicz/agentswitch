@@ -6,7 +6,7 @@ import type { HistoryItem, Session } from '../domain.js';
 import type { SessionAdapter } from './index.js';
 import { contains, defaultLimits, ReadContext } from './codex-io.js';
 import type { CodexDiagnostic, CodexLimits } from './codex-io.js';
-import { object, records, text } from './claude-io.js';
+import { metadataRecords, object, records, text } from './claude-io.js';
 import type { Entry, NativeRecord } from './claude-io.js';
 import { conversation, graphEntry, metadataTypes, project, visible } from './claude-projection.js';
 export type ClaudeDiagnostic = CodexDiagnostic;
@@ -47,19 +47,20 @@ export class ClaudeSessionAdapter implements SessionAdapter {
       if (!Number.isSafeInteger(value) || value < 1 || value > defaultLimits[key as keyof CodexLimits]) throw new RangeError(`Invalid Claude limit: ${key}`);
     }
   }
-  private context(): ReadContext {
+  /** One notification cap per public operation, shared by its discovery and history phases. */
+  private notifier(): (diagnostic: ClaudeDiagnostic) => void {
     let notified = 0;
-    return new ReadContext(this.limits, diagnostic => {
+    return diagnostic => {
       if (notified >= this.limits.maxDiagnostics) return;
       notified++;
       this.options.onDiagnostic?.(notified === this.limits.maxDiagnostics
         ? { code: 'diagnostic-limit', source: diagnostic.source } : diagnostic);
-    });
+    };
   }
   private run<T>(operation: () => Promise<T>): Promise<T> {
     const task = this.pending.then(operation); this.pending = task.then(() => {}, () => {}); return task;
   }
-  discover(signal?: AbortSignal): Promise<readonly ClaudeSession[]> { return this.run(() => this.catalog(this.context(), signal)); }
+  discover(signal?: AbortSignal): Promise<readonly ClaudeSession[]> { return this.run(() => this.catalog(new ReadContext(this.limits, this.notifier()), signal)); }
   private async files(ctx: ReadContext): Promise<File[]> {
     let count = 0;
     const list = async (path: string): Promise<import('node:fs').Dirent[]> => {
@@ -92,7 +93,7 @@ export class ClaudeSessionAdapter implements SessionAdapter {
   }
   private async metadata(file: File, ctx: ReadContext): Promise<Metadata | undefined> {
     const meta: Metadata = { cwd: '', created: '', prompt: '', customTitle: '', aiTitle: '', lastPrompt: '', summary: '', producer: '', sidechain: false, valid: false };
-    const mtime = await records(file.path, this.root, ctx, (value, line) => {
+    const mtime = await metadataRecords(file.path, this.root, ctx, (value, line) => {
       const entry = graphEntry(value, line, file.id, ctx);
       if (value.sessionId !== undefined && (typeof value.sessionId !== 'string' || value.sessionId.toLowerCase() !== file.id)) return;
       if (!entry && !metadataTypes.has(text(value.type))) return;
@@ -113,7 +114,7 @@ export class ClaudeSessionAdapter implements SessionAdapter {
         meta.producer = value.version;
         if (value.version !== '2.1.330') ctx.add('untested-producer', 'history', line, false);
       }
-    });
+    }, () => meta.valid && meta.cwd !== '' && meta.prompt !== '');
     if (mtime === undefined) return;
     file.mtime = mtime;
     return meta;
@@ -157,9 +158,10 @@ export class ClaudeSessionAdapter implements SessionAdapter {
   private readDetailed(nativeId: string, rediscover: boolean, excerptSignal?: AbortSignal): Promise<ClaudeHistory> {
     return this.run(async () => {
       excerptSignal?.throwIfAborted();
-      const discovery = excerptSignal ? new ReadContext(this.limits) : this.context();
-      if (rediscover) await this.catalog(discovery);
-      const ctx = discovery.fork();
+      const notify = excerptSignal ? undefined : this.notifier();
+      if (rediscover) await this.catalog(new ReadContext(this.limits, notify));
+      // The selected history gets its own byte budget, so the size of sibling sessions never truncates it.
+      const ctx = new ReadContext(this.limits, notify);
       const file = this.selected.get(nativeId.toLowerCase());
       if (!file) { ctx.add('selected-rollout-unavailable'); return { items: [], complete: false, diagnostics: ctx.diagnostics }; }
       const entries: Entry[] = [];

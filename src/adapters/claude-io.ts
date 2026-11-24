@@ -1,5 +1,6 @@
 import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { contains, ReadContext } from './codex-io.js';
 export type NativeRecord = Record<string, unknown>;
 export function object(value: unknown): NativeRecord {
@@ -7,10 +8,12 @@ export function object(value: unknown): NativeRecord {
 }
 export function text(value: unknown): string { return typeof value === 'string' ? value : ''; }
 export interface Entry extends NativeRecord { uuid: string; type: string; parentUuid: string | null; line: number }
+/** Line numbers are unknown inside a tail window. */
+type Accept = (value: NativeRecord, line: number | undefined) => void;
+const chunk = 64 * 1024;
 
-/** Stream bounded lines; oversized/corrupt records cannot suppress later valid records. */
-export async function records(path: string, root: string, ctx: ReadContext,
-  accept: (value: NativeRecord, line: number) => void, maxBytes = ctx.limits.maxFileBytes): Promise<number | undefined> {
+async function withFile(path: string, root: string, ctx: ReadContext,
+  read: (handle: FileHandle, size: number) => Promise<void>): Promise<number | undefined> {
   try {
     const canonical = await realpath(path);
     if (!contains(root, canonical)) throw new Error('unsafe-path');
@@ -18,46 +21,85 @@ export async function records(path: string, root: string, ctx: ReadContext,
     try {
       const info = await handle.stat();
       if (!info.isFile()) throw new Error('read-failed');
-      let offset = 0, line = 1, parts: Buffer[] = [], size = 0, oversized = false;
-      const parse = (final: boolean): void => {
-        if (!oversized && size > 0) {
-          try {
-            const raw = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts, size));
-            if (raw.trim()) {
-              const value: unknown = JSON.parse(raw);
-              if (value === null || typeof value !== 'object' || Array.isArray(value)) ctx.add('unsupported-shape', 'history', line);
-              else accept(value as NativeRecord, line);
-            }
-          } catch { ctx.add(final ? 'partial-record' : 'malformed-record', 'history', line); }
-        }
-        parts = []; size = 0; oversized = false; line++;
-      };
-      while (offset < info.size && offset < maxBytes && ctx.remaining > 0) {
-        const requested = Math.min(64 * 1024, info.size - offset, maxBytes - offset, ctx.remaining);
-        const buffer = Buffer.alloc(requested);
-        const { bytesRead } = await handle.read(buffer, 0, requested, offset);
-        ctx.bytes += bytesRead; offset += bytesRead;
-        if (!bytesRead) break;
-        let start = 0;
-        while (start < bytesRead) {
-          const next = buffer.indexOf(10, start), end = next < 0 ? bytesRead : next;
-          if (!oversized) {
-            const part = buffer.subarray(start, end);
-            size += part.length;
-            if (size > ctx.limits.maxLineBytes) {
-              ctx.add('input-limit', 'history', line); parts = []; oversized = true;
-            } else parts.push(part);
-          }
-          if (next < 0) break;
-          parse(false); start = next + 1;
-        }
-      }
-      if (offset < info.size) ctx.add('input-limit', 'history', line);
-      else parse(true);
+      await read(handle, info.size);
       return info.mtimeMs;
     } finally { await handle.close(); }
   } catch (error) {
     ctx.add(error instanceof Error && error.message === 'unsafe-path' ? 'unsafe-path' : 'read-failed');
     return undefined;
   }
+}
+
+/**
+ * Parse the lines of [start, end). A window starting mid-file skips its cut first line. Stopping at a window end
+ * or at `until` drops the cut last line silently; running out of byte budget, or a file cap when not a window, is `input-limit`.
+ */
+async function scan(handle: FileHandle, size: number, ctx: ReadContext, accept: Accept, start: number, end: number,
+  window: boolean, until?: () => boolean): Promise<void> {
+  let line = start ? undefined : 1, parts: Buffer[] = [], length = 0, oversized = false;
+  // Reading from the byte before `start` tells whether the window opens on a line boundary.
+  let offset = start ? start - 1 : 0, skipping = start > 0;
+  const parse = (final: boolean): void => {
+    if (!oversized && length > 0) {
+      try {
+        const raw = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts, length));
+        if (raw.trim()) {
+          const value: unknown = JSON.parse(raw);
+          if (value === null || typeof value !== 'object' || Array.isArray(value)) ctx.add('unsupported-shape', 'history', line);
+          else accept(value as NativeRecord, line);
+        }
+      } catch { ctx.add(final ? 'partial-record' : 'malformed-record', 'history', line); }
+    }
+    parts = []; length = 0; oversized = false; if (line !== undefined) line++;
+  };
+  while (offset < end && ctx.remaining > 0 && !until?.()) {
+    const requested = Math.min(chunk, end - offset, ctx.remaining);
+    const buffer = Buffer.alloc(requested);
+    const { bytesRead } = await handle.read(buffer, 0, requested, offset);
+    ctx.bytes += bytesRead; offset += bytesRead;
+    if (!bytesRead) break;
+    let begin = 0;
+    if (skipping) {
+      const next = buffer.indexOf(10);
+      if (next < 0) continue;
+      skipping = false; begin = next + 1;
+    }
+    while (begin < bytesRead) {
+      const next = buffer.indexOf(10, begin), stop = next < 0 ? bytesRead : next;
+      if (!oversized) {
+        const part = buffer.subarray(begin, stop);
+        length += part.length;
+        if (length > ctx.limits.maxLineBytes) {
+          ctx.add('input-limit', 'history', line); parts = []; oversized = true;
+        } else parts.push(part);
+      }
+      if (next < 0) break;
+      parse(false); begin = next + 1;
+    }
+  }
+  if (offset >= size) parse(true);
+  else if (!until?.() && !(window && offset >= end)) ctx.add('input-limit', 'history', line);
+}
+
+/** Stream bounded lines; oversized/corrupt records cannot suppress later valid records. */
+export function records(path: string, root: string, ctx: ReadContext, accept: (value: NativeRecord, line: number) => void,
+  maxBytes = ctx.limits.maxFileBytes): Promise<number | undefined> {
+  return withFile(path, root, ctx, (handle, size) =>
+    scan(handle, size, ctx, (value, line) => accept(value, line!), 0, Math.min(size, maxBytes), false));
+}
+
+/**
+ * Discovery metadata without reading whole transcripts: a head window read until `enough` (at least one maximal line
+ * past its first chunk) plus a tail window, where title updates are appended. Small files are read whole.
+ */
+export function metadataRecords(path: string, root: string, ctx: ReadContext, accept: Accept,
+  enough: () => boolean): Promise<number | undefined> {
+  return withFile(path, root, ctx, async (handle, size) => {
+    const { maxFileBytes, maxLineBytes } = ctx.limits, head = Math.min(maxFileBytes, maxLineBytes + chunk);
+    if (size <= Math.min(maxFileBytes, head + chunk)) return scan(handle, size, ctx, accept, 0, size, true);
+    await scan(handle, size, ctx, accept, 0, head, true, enough);
+    // The tail read includes one byte before its window; together both windows stay within maxFileBytes.
+    const tail = Math.min(chunk, maxFileBytes - head - 1);
+    if (tail > 0 && ctx.remaining > 0) await scan(handle, size, ctx, accept, size - tail, size, true);
+  });
 }
