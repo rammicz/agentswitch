@@ -33,17 +33,17 @@ test('Grok skips backend tool calls and tool_result images silently and keeps th
  const f=await setup(t),baseline=await f.adapter.readHistoryDetailed(id),image={type:'image',url:'data:image/png;base64,PRIVATE_IMAGE'};
  const rows=[...f.rows.slice(0,6),{type:'backend_tool_call',id:'b1',name:'PRIVATE_TOOL',arguments:'PRIVATE_ARGS',content:'PRIVATE_RAW'},...f.rows.slice(6),
   {type:'tool_result',tool_call_id:'t2',content:'Screenshot taken',images:[image]},{type:'tool_result',tool_call_id:'t3',content:'',images:[image]}];
- await writeFile(f.history,rows.map(row=>JSON.stringify(row)).join('\n')+'\n');
+ await fixture(f.root,f.cwd,{items:rows});
  const h=await f.adapter.readHistoryDetailed(id);
  assert.deepEqual(h.items.map(x=>[x.role,x.text]),[...baseline.items.map(x=>[x.role,x.text]),['tool','Screenshot taken']]);
  assert.equal(h.complete,true);assert.deepEqual(h.diagnostics,[]);assert.doesNotMatch(JSON.stringify(h),/PRIVATE_/);
 });
 test('Grok unfinished final line gives exactly one partial-record and is never projected',async t=>{
- const f=await setup(t),text=await readFile(f.history,'utf8');
+ const f=await setup(t),text=await readFile(f.history,'utf8'),baseline=await f.adapter.readHistoryDetailed(id);
  for(const tail of ['{"type":"assistant","content":"PRIVATE_UNFINISHED',JSON.stringify({type:'assistant',content:'PRIVATE_NO_NEWLINE'})]){
   await writeFile(f.history,text+tail);const h=await f.adapter.readHistoryDetailed(id);
   assert.equal(h.complete,false);assert.deepEqual(h.diagnostics.map(d=>d.code),['partial-record']);
-  assert.deepEqual(h.items.map(x=>x.text),['Grok public NEEDLE_SECRET','Grok answer','Safe output']);assert.doesNotMatch(JSON.stringify(h),/PRIVATE_/);
+  assert.deepEqual(h.items,baseline.items);assert.doesNotMatch(JSON.stringify(h),/PRIVATE_/);
  }
 });
 test('Grok recency compares actual timestamps and title fallback without interpreting bucket names',async t=>{const f=await setup(t),second='22345678-1234-4234-8234-123456789abc';await fixture(f.root,f.cwd,{nativeId:second,summary:{generated_title:null,session_summary:'Fallback public title',last_active_at:'2026-09-29T11:00:00.500Z'}});const sessions=await f.adapter.discover();assert.equal(sessions[0].nativeId,second);assert.equal(sessions[0].title,'Fallback public title');assert.equal(sessions[0].updatedAt,'2026-09-29T11:00:00.500Z');});

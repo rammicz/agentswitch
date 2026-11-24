@@ -127,7 +127,6 @@ export class GrokSessionAdapter implements SessionAdapter {
       if(!Array.isArray(row.content)||!row.content.every(part=>object(part)&&part.type==='text'&&typeof part.text==='string'))throw Error('unsupported-shape');
       role='user';value=row.content.map(part=>(part as {text:string}).text).join('\n');
      }else if(row.type==='assistant'&&typeof row.content==='string'){role='assistant';value=row.content;}
-     // Result images are omitted unread; the result text is kept.
      else if(row.type==='tool_result'&&typeof row.content==='string'&&typeof row.tool_call_id==='string'&&(row.images===undefined||Array.isArray(row.images))){role='tool';value=row.content;}
      else throw Error('unsupported-shape');
      if(value)items.push({id:hash(JSON.stringify([record.incarnation,ordinal,role,value])),role,text:value,status:'complete'});
