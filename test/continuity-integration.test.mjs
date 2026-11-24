@@ -115,6 +115,16 @@ test('explicit F recovery decodes a journaled v1 envelope with its status and or
  for(const item of recovered.slice(0,2))assert.deepEqual(item,decoded.history.find(stored=>stored.id===item.id));
  assert.deepEqual(recovered.map(item=>item.origin?.agent),['codex','codex','claude','claude']);
 });
+test('partial paginated Codex source goes fresh to Claude and its context is never reused on return',async()=>{
+ const f=await setup();await appendFile(f.aFile,JSON.stringify(completed('FutureItem','a3','PRIVATE_FUTURE',3))+'\n');
+ const first=pty(f,[...select(ids[0]),{send:'\u001b[C'},{wait:'Target: claude'},{send:'\r'},{wait:'Partial history: at least 1 source record'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ assert.equal(first.code,0);const [partial]=await record(f);assert.equal(partial.completeness,'partial');
+ pty(f,[...select('B response'),...confirm,{wait:'accepted — correlated native turn'}]);
+ const launches=(await readFile(f.env.RUNTIME_LOG,'utf8')).trim().split('\n').map(JSON.parse),last=launches.at(-1);
+ assert.equal(launches.length,2);assert.ok(!last.args.includes('resume'),'the partial Codex context must not be resumed');
+ assert.ok(launches.every(launch=>!launch.args.some(arg=>arg.includes('PRIVATE_FUTURE'))));
+ assert.deepEqual(parseHandoffPrompt(last.args.at(-1)).history.map(item=>item.text),['A original request','A original answer',DEFAULT_CURRENT_REQUEST,'B response']);
+});
 test('rollback invalidates the causal suffix and does not reuse A that already retained the removed B response',async()=>{
  const f=await setup();const b=await switchToB(f);const [first]=await record(f);
  pty(f,[...select('B response'),...confirm,{wait:'accepted — correlated native turn'}]);

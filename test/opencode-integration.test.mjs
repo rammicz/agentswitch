@@ -11,6 +11,7 @@ import { rollout,writeRollout,completed,ids as codexIds } from './fixtures/codex
 import { entry,encode,ids as claudeIds } from './fixtures/claude/native.mjs';
 import { TransferJournal } from '../dist/transfer-journal.js';
 import { parseHandoffPrompt } from '../dist/handoff.js';
+import { listArchive } from '../dist/archive.js';
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(target='opencode') {
@@ -98,8 +99,31 @@ test('OpenCode native resume with help lacking --session fails before publicatio
 test('default CLI accepts an external OpenCode DB with a shared ancestor and separate application state',async()=>{
  const f=await setup();f.env.OPENCODE_DB=await fixture(join(f.root,'opencode.db'),f.cwd);const result=pty(f,[...select('codex'),...target('opencode'),...finish]);assert.equal(result.code,0);assert.equal((await launches(f)).length,1);
 });
-test('default CLI refuses cached OpenCode source with an unknown selected shape before archive or launch',async()=>{
+test('default CLI transfers readable OpenCode history with an unknown part as disclosed partial history',async()=>{
  const f=await setup('codex');pty(f,[...select('opencode'),{send:'\x03'}]);
  const db=new DatabaseSync(f.path);db.prepare('INSERT INTO part VALUES (?,?,?,?,?,?)').run('prt_unknown','msg_b',id,3,3,JSON.stringify({type:'future-public-shape',text:'UNCLASSIFIED_PUBLIC_TEXT'}));db.close();const before=await hash(f.path);
- const result=pty(f,[...select('opencode'),{send:'\r'},{wait:'Selected public history is incomplete'},{send:'\x03'}]);assert.equal(result.restored,true);assert.equal(result.code,0);assert.doesNotMatch(result.output,/UNCLASSIFIED_PUBLIC_TEXT/);await assert.rejects(access(f.env.RUNTIME_LOG));await assert.rejects(access(join(f.state,'archives')));assert.equal((await records(f)).length,0);assert.equal(await hash(f.path),before);
+ // Small terminal: the disclosure must be on the first review screen, and Enter confirms without scrolling.
+ const result=pty(f,[...select('opencode'),{send:'\r'},{wait:'Partial history:'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}],[],{rows:14,columns:58});
+ assert.equal(result.restored,true);assert.equal(result.code,0);
+ // The review screen hard-wraps at 58 columns.
+ assert.match(result.output.replace(/\r\n/g,''),/Partial history: at least 1 source record could not be read \(unsupported-shape\) and is not included\./);
+ assert.doesNotMatch(result.output,/UNCLASSIFIED_PUBLIC_TEXT/);
+ const [launch]=await launches(f),wire=launch.args.at(-1),prompt=parseHandoffPrompt(wire);
+ assert.equal(JSON.parse(wire).completeness,'partial');assert.ok(prompt.history.length>0);assert.ok(prompt.history.some(item=>/OpenCode public/.test(item.text)));assert.doesNotMatch(wire,/UNCLASSIFIED_PUBLIC_TEXT/);
+ const [record]=await records(f);assert.equal(record.completeness,'partial');assert.equal(record.mode,'fresh-handoff');
+ assert.equal((await listArchive(record.archive)).completeness,'partial');
+ for(const name of await readdir(join(f.state,'archives')))assert.doesNotMatch(await readFile(join(f.state,'archives',name),'utf8').catch(()=>''),/UNCLASSIFIED_PUBLIC_TEXT/);
+ assert.doesNotMatch((await readFile(join(f.state,'transfers','attempts.sqlite'))).toString('latin1'),/UNCLASSIFIED_PUBLIC_TEXT/);
+ assert.equal(await hash(f.path),before);
+});
+test('complete OpenCode history shows no partial-history line',async()=>{
+ const f=await setup('codex');const result=pty(f,[...select('opencode'),{send:'\r'},{wait:'Enter confirm continuation'},{send:'\x03'}],[],{rows:14,columns:58});
+ assert.doesNotMatch(result.output,/Partial history/);
+});
+test('OpenCode source with only unreadable parts refuses before archive, journal or launch',async()=>{
+ const f=await setup('codex');pty(f,[...select('opencode'),{send:'\x03'}]);
+ const db=new DatabaseSync(f.path);db.prepare('UPDATE part SET data=?').run(JSON.stringify({type:'future-public-shape',text:'UNCLASSIFIED_PUBLIC_TEXT'}));db.close();
+ const result=pty(f,[{wait:'Enter preview'},{send:'OpenCode synthetic'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\r'},{wait:'no readable items'},{send:'\x03'}]);
+ assert.equal(result.restored,true);assert.match(result.output,/Selected public history is incomplete/);assert.doesNotMatch(result.output,/UNCLASSIFIED_PUBLIC_TEXT/);
+ await assert.rejects(access(f.env.RUNTIME_LOG));await assert.rejects(access(join(f.state,'archives')));assert.equal((await records(f)).length,0);
 });

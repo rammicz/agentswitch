@@ -24,6 +24,8 @@ export interface ContinuationSummary {
   workspace: string;
   includedItemIds: readonly string[];
   omittedItemIds: readonly string[];
+  /** Shown first on the review screen, so it is visible without scrolling. */
+  partialHistory?: string;
   /** Exact final wire value and disclosure supplied by the composition service. */
   previewLines?: readonly string[];
 }

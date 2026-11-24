@@ -16,6 +16,21 @@ const canonical = async (path: string): Promise<string> => realpath(resolve(path
 const harmless = new Set(['workspace-unavailable','metadata-unavailable','metadata-schema','metadata-unstable','untested-producer']);
 // grok and agy metadata is the whole source, so any diagnostic degrades it; OpenCode tolerates only an untested producer.
 const harmlessFor: Record<AgentId, ReadonlySet<string>> = {codex:harmless,claude:harmless,opencode:new Set(['untested-producer']),agy:new Set(),grok:new Set()};
+// Codes that stand for an unknown amount of later history rather than one unread record.
+const truncating = new Set(['input-limit','invalid-boundary','ancestry-unavailable','ancestry-cycle','diagnostic-limit']);
+/** Review-screen disclosure for a source whose public history is incomplete. Counts and codes only, never unread content. */
+export function partialHistoryNotice(agent:AgentId, history:Pick<CodexHistory,'complete'|'diagnostics'>):string|undefined {
+  if(history.complete)return undefined;
+  const blocking=history.diagnostics.filter(diagnostic=>diagnostic.source==='history'&&!harmlessFor[agent].has(diagnostic.code));
+  const records=blocking.filter(diagnostic=>diagnostic.code!=='diagnostic-limit').length;
+  const codes=[...new Set(blocking.map(diagnostic=>diagnostic.code))];
+  const listed=codes.length?` (${codes.slice(0,5).join(', ')}${codes.length>5?', …':''})`:'';
+  // Readers cap their diagnostics at 100, some without a marker, so a full list may hide more.
+  const more=codes.some(code=>truncating.has(code))||history.diagnostics.length>=100?' Later history may also be unread.':'';
+  return records
+    ? `Partial history: at least ${records} source record${records===1?'':'s'} could not be read${listed} and ${records===1?'is':'are'} not included.${more}`
+    : `Partial history: the source reader reported incomplete history${listed}. Unread records are not included.${more}`;
+}
 const implicitContext = /^(?:# AGENTS\.md instructions|<(?:environment_context|permissions instructions|collaboration_mode|subagent_notification)\b)/iu;
 function openingTitle(items: readonly HistoryItem[]): string | undefined {
   for (const item of items) {
@@ -192,7 +207,7 @@ export class NativeCatalog {
     const session=(await this.adapters[source.agent].discover()).find(session=>session.nativeId===source.nativeId&&session.id===source.id);
     if(!session) {this.report(source.agent,'selected history unavailable; cached entry may be stale');throw new Error('Selected source is unavailable. Refresh or restore its native history.');}
     const history:CodexHistory=await this.adapters[source.agent].readHistoryDetailed(source.nativeId);
-    this.report(source.agent,source.agent==='agy'&&'metadataOnly' in session&&session.metadataOnly?'metadata only. Native open available, outgoing public history unavailable':history.complete?'':'selected public history incomplete. Transfer blocked');signal?.throwIfAborted();
+    this.report(source.agent,source.agent==='agy'&&'metadataOnly' in session&&session.metadataOnly?'metadata only. Native open available, outgoing public history unavailable':history.complete?'':'selected public history incomplete. A fresh handoff sends only readable items');signal?.throwIfAborted();
     const producer='producerVersion' in session?session.producerVersion:undefined;
     const compatible=session.agent==='grok'?true:session.agent==='agy'?true:session.agent==='opencode'?producer===testedOpenCodeProducer:session.agent==='codex' ? producer==='0.171.0' : !producer||producer==='2.1.330';
     const runtime:RuntimeSource={agent:session.agent,id:session.id,nativeId:session.nativeId,workspace:session.workspace,nativeResume:compatible?'compatible':'unknown'};

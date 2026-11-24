@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp,mkdir,writeFile,rename,access,readdir,symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { NativeCatalog } from '../dist/native-catalog.js';
+import { NativeCatalog, partialHistoryNotice } from '../dist/native-catalog.js';
 import { SearchIndex } from '../dist/search-index.js';
 import { applicationPaths } from '../dist/application.js';
 import { rollout, writeRollout, completed, ids } from './fixtures/codex/native.mjs';
@@ -52,4 +52,16 @@ test('catalog refresh scans each provider once while hydrating a larger native g
  f.catalog.adapters.codex.scan=(...args)=>{codexScans++;return codexScan(...args);};f.catalog.adapters.claude.files=(...args)=>{claudeScans++;return claudeFiles(...args);};
  await f.catalog.refresh(f.index);assert.equal((await f.index.query(query(f.cwd))).length,13);assert.equal(codexScans,1);assert.equal(claudeScans,1);
  const selected=(await f.index.query({...query(f.cwd),agent:'codex'}))[0];await f.catalog.snapshot(selected);assert.ok(codexScans>1,'selected source must revalidate actual native discovery');await f.index.close();
+});
+
+test('partial-history notice counts blocking selected-history records only and says when more may be unread',()=>{
+ const d=(code,source='history')=>({code,source});
+ assert.equal(partialHistoryNotice('grok',{complete:true,diagnostics:[d('unsupported-shape')]}),undefined);
+ // Grok returns scan-level sibling diagnostics in the same list; OpenCode tolerates an untested producer.
+ assert.equal(partialHistoryNotice('grok',{complete:false,diagnostics:[d('unsupported-shape'),d('unsupported-shape'),d('input-limit','root'),d('metadata-schema','metadata')]}),'Partial history: at least 2 source records could not be read (unsupported-shape) and are not included.');
+ assert.equal(partialHistoryNotice('opencode',{complete:false,diagnostics:[d('unsupported-shape'),d('untested-producer')]}),'Partial history: at least 1 source record could not be read (unsupported-shape) and is not included.');
+ assert.equal(partialHistoryNotice('codex',{complete:false,diagnostics:[d('partial-record'),d('input-limit'),d('diagnostic-limit')]}),'Partial history: at least 2 source records could not be read (partial-record, input-limit, diagnostic-limit) and are not included. Later history may also be unread.');
+ // A full list may have been capped without a marker.
+ assert.match(partialHistoryNotice('opencode',{complete:false,diagnostics:Array.from({length:100},()=>d('unsupported-shape'))}),/at least 100 source records .* Later history may also be unread\.$/);
+ assert.equal(partialHistoryNotice('grok',{complete:false,diagnostics:[d('input-limit','root')]}),'Partial history: the source reader reported incomplete history. Unread records are not included.');
 });

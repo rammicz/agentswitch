@@ -272,7 +272,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       footer = 'Enter use this folder and prepare · Esc cancel override';
     } else if (stage === 'summary') {
       const summary = prepared!.summary;
-      body = wrap([`Source: ${summary.source.agent}/${summary.source.id} (${summary.source.nativeId})`,
+      body = wrap([...(summary.partialHistory ? [summary.partialHistory] : []), `Source: ${summary.source.agent}/${summary.source.id} (${summary.source.nativeId})`,
         `Target: ${summary.target}`, `Mode: ${summary.mode}`, `Workspace: ${summary.workspace}`,
         `Included: ${summary.includedItemIds.join(', ') || '(none)'}`, `Omitted: ${summary.omittedItemIds.join(', ') || '(none)'}`, ...(summary.previewLines ?? [])], width);
       // A long summary must remain inspectable before confirming.
