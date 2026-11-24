@@ -65,3 +65,23 @@ test('Grok native subagent sessions are skipped silently; unknown kinds and brok
  }
  assert.doesNotMatch(JSON.stringify(catalog.notices()),/PRIVATE_/);
 });
+
+test('Grok catalog history reads each get their own byte budget',async t=>{
+ const f=await setup(t);const others=['22345678-1234-4234-8234-123456789abc','32345678-1234-4234-8234-123456789abc'];
+ const files=[f,...await Promise.all(others.map(nativeId=>fixture(f.root,f.cwd,{nativeId})))];
+ const size=async path=>(await stat(path)).size,metadata=(await Promise.all(files.map(x=>size(x.path)))).reduce((a,b)=>a+b);
+ const reads=(await Promise.all(files.map(async x=>await size(x.history)+await size(x.path)))).reduce((a,b)=>a+b);
+ // Discovery and all but the last read fit together; the last read fits only on its own.
+ const adapter=new adapters.GrokSessionAdapter({root:f.root,limits:{maxScanBytes:metadata+reads-1}});
+ const sessions=await adapter.discover();assert.equal(sessions.length,3);
+ for(const session of sessions)assert.deepEqual(await adapter.readCatalogHistoryDetailed(session.nativeId).then(h=>[h.complete,h.diagnostics]),[true,[]],session.nativeId);
+});
+
+test('a Grok catalog history carries only its own diagnostics',async t=>{
+ const f=await setup(t);const torn=await fixture(f.root,f.cwd,{nativeId:'22345678-1234-4234-8234-123456789abc'});
+ await writeFile(torn.history,torn.rows.map(JSON.stringify).join('\n')+'\n{"type":"assistant","content":"unfinished"}');
+ const adapter=new adapters.GrokSessionAdapter({root:f.root});await adapter.discover();
+ const own=await adapter.readCatalogHistoryDetailed(id),sibling=await adapter.readCatalogHistoryDetailed(torn.metadata.info.id),again=await adapter.readCatalogHistoryDetailed(id);
+ assert.deepEqual(sibling.diagnostics,[{code:'partial-record',source:'history'}]);
+ assert.deepEqual([own.diagnostics,again.diagnostics],[[],[]]);
+});

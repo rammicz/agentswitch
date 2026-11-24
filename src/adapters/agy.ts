@@ -51,7 +51,7 @@ export class AgySessionAdapter implements SessionAdapter {
       const canonicalRoot=await realpath(root),path=await realpath(cache);
       const leaf=await lstat(cache);
       if(!contains(canonicalRoot,path)||leaf.isSymbolicLink()||!leaf.isFile())throw new Error('unsafe-path');
-      const data=await this.file(path,canonicalRoot,this.limits.maxBytes,{bytes:0});
+      const data=await this.file(path,canonicalRoot,this.limits.maxBytes);
       const result=await this.parseCache(data.bytes,diagnostics);
       if(await realpath(cache)!==path)throw Error('metadata-unstable');
       return result;
@@ -79,14 +79,14 @@ export class AgySessionAdapter implements SessionAdapter {
       return {sessions:[...sessions.values()].filter(session=>!ambiguous.has(session.nativeId.toLowerCase())).sort((a,b)=>a.id.localeCompare(b.id)),ambiguous:new Set([...ambiguous].map(id=>id.toLowerCase()))};
   }
   private generation:Catalog|undefined;
-  private async file(path:string,root:string,limit:number,budget:{bytes:number}):Promise<{bytes:Buffer;signature:string}> {
+  // Every read is a single file, so its byte budget is that file's size against maxScanBytes.
+  private async file(path:string,root:string,limit:number):Promise<{bytes:Buffer;signature:string}> {
     const leaf=await lstat(path);
     if(!leaf.isFile()||leaf.isSymbolicLink()||await realpath(path)!==path||!contains(root,path))throw Error('unsafe-path');
     const handle=await open(path,constants.O_RDONLY|(constants.O_NOFOLLOW??0)|(constants.O_NONBLOCK??0));
     try {
       const before=await handle.stat();
-      if(identity(before)!==identity(leaf)||!before.isFile()||before.size>limit||before.size>this.limits.maxScanBytes-budget.bytes)throw Error('input-limit');
-      budget.bytes+=before.size;
+      if(identity(before)!==identity(leaf)||!before.isFile()||before.size>Math.min(limit,this.limits.maxScanBytes))throw Error('input-limit');
       const bytes=Buffer.alloc(before.size);let offset=0;
       while(offset<bytes.length){const read=await handle.read(bytes,offset,bytes.length-offset,offset);if(!read.bytesRead)throw Error('metadata-unstable');offset+=read.bytesRead;}
       if(identity(before)!==identity(await handle.stat())||identity(before)!==identity(await lstat(path))||await realpath(path)!==path)throw Error('metadata-unstable');
@@ -128,7 +128,7 @@ export class AgySessionAdapter implements SessionAdapter {
   }
   private async catalog():Promise<Catalog> {
     const diagnostics:CodexDiagnostic[]=[],root=await realpath(agyPaths(this.options).root).catch(()=>agyPaths(this.options).root);
-    const catalog:Catalog={root,records:new Map(),diagnostics,signature:'',cacheSignature:'',budget:{bytes:0},directories:new Map()};
+    const catalog:Catalog={root,records:new Map(),diagnostics,signature:'',cacheSignature:'',directories:new Map()};
     const path=join(root,'conversation_summaries.db');
     let present;
     try {present=await lstat(path);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'){this.failure(diagnostics,error);return catalog;}}
@@ -138,7 +138,7 @@ export class AgySessionAdapter implements SessionAdapter {
       const signature=await this.physical(root,catalog);
       let cached:readonly AgySession[]=[],cacheAmbiguous:ReadonlySet<string>=new Set();
       try {
-        const cache=await this.file(join(root,'cache','last_conversations.json'),root,this.limits.maxBytes,catalog.budget);
+        const cache=await this.file(join(root,'cache','last_conversations.json'),root,this.limits.maxBytes);
         const data=await this.parseCache(cache.bytes,diagnostics);
         catalog.cacheSignature=cache.signature;
         cached=data.sessions;cacheAmbiguous=data.ambiguous;
@@ -212,7 +212,7 @@ export class AgySessionAdapter implements SessionAdapter {
   async readCatalogTitleItems(id:string):Promise<readonly HistoryItem[]> {
     const catalog=this.generation;
     if(!catalog)return [];
-    const history=await this.selected({...catalog,budget:{bytes:0}},id,true);
+    const history=await this.selected(catalog,id,true);
     return history.complete ? history.items : [];
   }
   private async selected(catalog:Catalog,id:string,forTitle=false):Promise<AgyHistory> {
@@ -223,9 +223,9 @@ export class AgySessionAdapter implements SessionAdapter {
       await this.noSidecars(join(catalog.root,'conversations',id+'.db'),catalog);
       const path=join(catalog.root,'brain',id,'.system_generated','logs','transcript.jsonl');
       const limit=forTitle ? Math.min(512*1024,this.limits.maxFileBytes) : this.limits.maxFileBytes;
-      const before=await this.file(path,catalog.root,limit,catalog.budget);
+      const before=await this.file(path,catalog.root,limit);
       const parsed=parseAgyHistory(new TextDecoder('utf-8',{fatal:true}).decode(before.bytes),id,record.stepCount!,this.limits);
-      const after=await this.file(path,catalog.root,limit,catalog.budget);
+      const after=await this.file(path,catalog.root,limit);
       if(before.signature!==after.signature||!before.bytes.equals(after.bytes)||await this.physical(catalog.root,catalog)!==catalog.signature)throw Error('metadata-unstable');
       await this.noSidecars(join(catalog.root,'conversations',id+'.db'),catalog);
       if(catalog.cacheSignature&&identity(await lstat(join(catalog.root,'cache','last_conversations.json')))!==catalog.cacheSignature)throw Error('metadata-unstable');
@@ -239,7 +239,7 @@ export class AgySessionAdapter implements SessionAdapter {
   }
 }
 interface CatalogRecord {session:AgySession;stepCount?:number}
-interface Catalog {root:string;records:Map<string,CatalogRecord>;diagnostics:CodexDiagnostic[];signature:string;cacheSignature:string;budget:{bytes:number};directories:Map<string,{signature:string;names:Set<string>}>}
+interface Catalog {root:string;records:Map<string,CatalogRecord>;diagnostics:CodexDiagnostic[];signature:string;cacheSignature:string;directories:Map<string,{signature:string;names:Set<string>}>}
 // A native subagent row: UUID parent, integer nesting depth of at least 1, and a text or absent agent name.
 const hex='[0-9a-fA-F]',uuidGlob=[8,4,4,4,12].map(n=>hex.repeat(n)).join('-');
 const subagentRow=`typeof(parent_conversation_id)='text' AND parent_conversation_id GLOB '${uuidGlob}' AND typeof(nesting_depth)='integer' AND nesting_depth>=1 AND (agent_name IS NULL OR typeof(agent_name)='text')`;

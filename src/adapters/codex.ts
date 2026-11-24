@@ -211,7 +211,6 @@ export class CodexSessionAdapter implements SessionAdapter {
     const candidates = new Map<string, ParsedRollout[]>();
     for (const file of this.files) {
       signal?.throwIfAborted();
-      if (ctx.bytes > ctx.limits.maxScanBytes) break;
       const header = await historyHeader(file.path, this.root, ctx);
       const parsed = header && parseRollout(file, header, ctx);
       if (parsed) candidates.set(file.owner, [...(candidates.get(file.owner) ?? []), parsed]);

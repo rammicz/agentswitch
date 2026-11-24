@@ -225,3 +225,14 @@ test('agy subagent rows do not count toward the catalog entry limit; listed rows
   await writeFile(f.cache,JSON.stringify({[f.cwd]:f.nativeId}));diagnostics.length=0;
   assert.deepEqual(await limited.discover(),[]);assert.deepEqual(diagnostics.map(d=>d.code),['input-limit']);
 });
+
+test('agy catalog history reads each get their own byte budget and charge the transcript once', async t => {
+  const f = await setup(t);
+  for (const n of [2, 3]) await fixture(f.root, f.cwd, { nativeId: `${n}2345678-1234-4234-8234-123456789abc` });
+  const sizes = await Promise.all((await readdir(join(f.root, 'brain'))).map(async id => (await readFile(join(f.root, 'brain', id, '.system_generated', 'logs', 'transcript.jsonl'))).length));
+  // Each transcript fits on its own, but neither twice nor together with its siblings.
+  const adapter = new AgySessionAdapter({ root: f.root, limits: { maxScanBytes: 2 * Math.min(...sizes) - 1 } });
+  const sessions = await adapter.discover();
+  assert.equal(sessions.length, 3);
+  for (const session of sessions) assert.equal((await adapter.readCatalogHistoryDetailed(session.nativeId)).complete, true, session.nativeId);
+});

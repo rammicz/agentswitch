@@ -98,7 +98,9 @@ export class GrokSessionAdapter implements SessionAdapter {
  async readHistory(id:string):Promise<readonly HistoryItem[]> {return (await this.readHistoryDetailed(id)).items;}
  async readCatalogHistoryDetailed(id:string):Promise<GrokHistory>{return this.readSelected(this.generation??await this.scan(),id);}
  async readHistoryDetailed(id:string):Promise<GrokHistory> {return this.readSelected(await this.scan(),id);}
- private async readSelected(scan:Scan,id:string):Promise<GrokHistory> {
+ private async readSelected(generation:Scan,id:string):Promise<GrokHistory> {
+  // Each read has its own byte budget and diagnostics; only the discovered records are shared.
+  const scan:Scan={...generation,diagnostics:[],bytes:0};
   const record=scan.records.get(id);const items:HistoryItem[]=[];
   // Sibling diagnostics do not make this selected public snapshot incomplete.
   let complete=!!record&&scan.complete;
