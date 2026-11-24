@@ -81,7 +81,6 @@ test('a Grok catalog history carries only its own diagnostics',async t=>{
  const f=await setup(t);const torn=await fixture(f.root,f.cwd,{nativeId:'22345678-1234-4234-8234-123456789abc'});
  await writeFile(torn.history,torn.rows.map(JSON.stringify).join('\n')+'\n{"type":"assistant","content":"unfinished"}');
  const adapter=new adapters.GrokSessionAdapter({root:f.root});await adapter.discover();
- const own=await adapter.readCatalogHistoryDetailed(id),sibling=await adapter.readCatalogHistoryDetailed(torn.metadata.info.id),again=await adapter.readCatalogHistoryDetailed(id);
- assert.deepEqual(sibling.diagnostics,[{code:'partial-record',source:'history'}]);
- assert.deepEqual([own.diagnostics,again.diagnostics],[[],[]]);
+ const sibling=await adapter.readCatalogHistoryDetailed(torn.metadata.info.id),own=await adapter.readCatalogHistoryDetailed(id);
+ assert.deepEqual([sibling.diagnostics,own.diagnostics],[[{code:'partial-record',source:'history'}],[]]);
 });

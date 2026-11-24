@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, readFile, rm, realpath, writeFile, readdir, symlink, chmod } from 'node:fs/promises';
+import { mkdir, readFile, rm, realpath, writeFile, readdir, symlink, chmod, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AgySessionAdapter } from '../dist/adapters/index.js';
 import { fixture, user } from './fixtures/agy/native.mjs';
@@ -228,8 +228,8 @@ test('agy subagent rows do not count toward the catalog entry limit; listed rows
 
 test('agy catalog history reads each get their own byte budget and charge the transcript once', async t => {
   const f = await setup(t);
-  for (const n of [2, 3]) await fixture(f.root, f.cwd, { nativeId: `${n}2345678-1234-4234-8234-123456789abc` });
-  const sizes = await Promise.all((await readdir(join(f.root, 'brain'))).map(async id => (await readFile(join(f.root, 'brain', id, '.system_generated', 'logs', 'transcript.jsonl'))).length));
+  const files = [f, ...await Promise.all([2, 3].map(n => fixture(f.root, f.cwd, { nativeId: `${n}2345678-1234-4234-8234-123456789abc` })))];
+  const sizes = await Promise.all(files.map(async x => (await stat(x.history)).size));
   // Each transcript fits on its own, but neither twice nor together with its siblings.
   const adapter = new AgySessionAdapter({ root: f.root, limits: { maxScanBytes: 2 * Math.min(...sizes) - 1 } });
   const sessions = await adapter.discover();
