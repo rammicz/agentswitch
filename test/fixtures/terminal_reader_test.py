@@ -15,7 +15,7 @@ spec.loader.exec_module(driver)
 class TerminalReaderTest(unittest.TestCase):
  @contextmanager
  def reader(self, chunks):
-  driver.output='';driver.matched_until=0;driver.master=12345
+  driver.output='';driver.visible='';driver.pending='';driver.matched_until=0;driver.master=12345
   driver.p=SimpleNamespace(poll=lambda: None if chunks else 0)
   with patch.object(driver.select,'select',side_effect=lambda *args: ([driver.master],[],[]) if chunks else ([],[],[])), patch.object(driver.os,'read',side_effect=lambda *args: chunks.pop(0).encode()):
    yield
@@ -30,6 +30,12 @@ class TerminalReaderTest(unittest.TestCase):
      self.assertEqual(driver.output,stream)
      self.assertEqual(first+second,stream)
      self.assertEqual(first,stream) # Frames retain whole received/drained output.
+
+ def test_markers_match_text_split_by_colour_sequences_across_reads(self):
+  stream='\x1b[1;38;2;1;2;3m[cl\x1b[0maude]\n'
+  with self.reader([stream[:5],stream[5:17],stream[17:]]):
+   self.assertEqual(driver.read_until('[claude]'),stream)
+   self.assertEqual(driver.output,stream)
 
  def test_waits_cannot_match_markers_before_the_prior_match(self):
   with self.reader(['LATE PREVIEW\nDONE {}\n']):

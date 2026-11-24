@@ -1,7 +1,5 @@
 """Controlled foreground process group; never signals the caller's terminal group."""
-import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess,re
-# Markers read visible text: colour (SGR) sequences are dropped as output arrives.
-SGR=re.compile(r'\x1b\[[0-9;]*m')
+import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess
 
 def main():
  # An interrupted test run sends SIGTERM; exiting through finally still kills the session this driver created.
@@ -13,7 +11,8 @@ def main():
  def own_terminal():
   os.setsid()
   fcntl.ioctl(slave,termios.TIOCSCTTY,0)
- env=os.environ.copy();env.update(config['env'])
+ # Markers read plain text; colour has its own tests in tui.test.mjs.
+ env=os.environ.copy();env['NO_COLOR']='1';env.update(config['env'])
  ack_read,ack_write=os.pipe()
  env['RUNTIME_ACK_FD']=str(ack_read)
  try:
@@ -30,7 +29,7 @@ def main():
     try:data=os.read(master,65536)
     except OSError:break
     if not data:break
-    output=SGR.sub('',output+data.decode('utf8',errors='replace'))
+    output+=data.decode('utf8',errors='replace')
    elif child.poll() is not None:break
   raise Exception('Missing '+repr(marker)+'; output='+repr(output))
  try:

@@ -1,8 +1,5 @@
 """Real CLI entry in isolated foreground PTYs, with only synthetic providers."""
 import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess,codecs
-import re
-# Markers and assertions read visible text: colour (SGR) sequences are dropped as output arrives.
-SGR=re.compile(r'\x1b\[[0-9;]*m')
 
 def until(state,marker,timeout=15,retained=False):
  deadline=time.monotonic()+timeout
@@ -13,7 +10,7 @@ def until(state,marker,timeout=15,retained=False):
    try:data=os.read(state['master'],65536)
    except OSError:break
    if not data:break
-   state['output']=SGR.sub('',state['output']+state['decoder'].decode(data))
+   state['output']+=state['decoder'].decode(data)
   elif state['child'].poll() is not None:break
  raise Exception('Missing '+repr(marker)+'; output='+repr(state['output']))
 
@@ -49,7 +46,8 @@ def main():
   master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',config.get('rows',44),config.get('columns',170),0,0))
   before=termios.tcgetattr(slave);ack_read,ack_write=os.pipe()
   def own_terminal():os.setsid();fcntl.ioctl(slave,termios.TIOCSCTTY,0)
-  env=os.environ.copy();env.update(config['env']);env['CLI_ACK_FD']=str(ack_read)
+  # Markers and assertions read plain text; colour has its own tests in tui.test.mjs.
+  env=os.environ.copy();env['NO_COLOR']='1';env.update(config['env']);env['CLI_ACK_FD']=str(ack_read)
   child=subprocess.Popen([config['node'],config['runner']]+config.get('args',[]),cwd=config['cwd'],stdin=slave,stdout=slave,stderr=slave,env=env,preexec_fn=own_terminal,pass_fds=(ack_read,))
   os.close(ack_read)
   state={'master':master,'slave':slave,'child':child,'output':'','cursor':0,'before':before,'ack':ack_write,'decoder':codecs.getincrementaldecoder('utf8')(),'preview':[]}

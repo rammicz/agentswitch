@@ -87,7 +87,6 @@ const palette = {
   heading: '1;38;2;215;119;87',
   key: '1;38;2;215;119;87',
   title: '1',
-  text: '39',
   muted: '38;2;150;150;162',
   selectedBg: '48;2;52;52;66',
   success: '38;2;135;200;130',
@@ -101,15 +100,17 @@ const palette = {
   grok: '38;2;115;218;202',
 } satisfies Record<string, string>;
 type Tone = keyof typeof palette;
-const styled = (text: string, tone: Tone | readonly Tone[], color: boolean): string => color && text
-  ? `\x1b[${(typeof tone === 'string' ? [tone] : tone).map(name => palette[name]).join(';')}m${text}\x1b[0m` : text;
+function styled(text: string, tone: Tone | readonly Tone[], color: boolean): string {
+  const tones = [tone].flat();
+  return color && text && tones.length ? `\x1b[${tones.map(name => palette[name]).join(';')}m${text}\x1b[0m` : text;
+}
 type Hint = readonly [key: string, action: string];
 /** Key hints as keycaps: the key in bold accent and its action muted, two spaces apart. Hints that do not fit are dropped from the end. */
 function keycaps(hints: readonly Hint[], width: number, color: boolean): string {
-  const plain = (count: number) => hints.slice(0, count).map(([key, action]) => key ? `${key} ${action}` : action).join('  ');
-  let count = hints.length;
-  while (count > 1 && cellCount(plain(count)) > width) count--;
-  if (cellCount(plain(count)) > width) return clipPanel(plain(count), width);
+  const plain = hints.map(([key, action]) => key ? `${key} ${action}` : action);
+  let count = plain.length, cells = plain.reduce((sum, hint) => sum + cellCount(hint) + 2, -2);
+  while (count > 1 && cells > width) cells -= cellCount(plain[--count]!) + 2;
+  if (cells > width) return clipPanel(plain[0]!, width);
   return hints.slice(0, count).map(([key, action]) => key
     ? styled(key, 'key', color) + styled(` ${action}`, 'muted', color) : styled(action, 'muted', color)).join('  ');
 }
@@ -120,11 +121,12 @@ function pair(label: string, value: string, width: number, color: boolean, limit
 }
 /** One input row. Text that does not fit shows its end after `…`, so the typing position stays visible. */
 function inputRow(text: string, width: number): string {
-  const rows = panelWrap(text, width);
-  if (rows.length === 1) return rows[0]!;
-  const segments = Array.from(graphemes.segment(clean(text)), ({ segment }) => segment);
+  const escaped = clean(text);
+  if (cellCount(escaped) <= width) return escaped;
+  // Only the end is shown; a cell is at most a few code units, and the first, possibly cut, grapheme is skipped.
+  const segments = Array.from(graphemes.segment(escaped.slice(-(width * 8 + 16))), ({ segment }) => segment);
   let row = '', cells = 0;
-  for (let index = segments.length - 1; index >= 0; index--) {
+  for (let index = segments.length - 1; index > 0; index--) {
     const size = terminalWidth(segments[index]!);
     if (cells + size > width - 1) break;
     row = segments[index] + row; cells += size;
@@ -180,7 +182,7 @@ function transcriptBlocks(source: SessionHit, items: readonly HistoryItem[], wid
   const matched = source.matches.find(match => match.field === 'message')?.itemId;
   const pattern = queryPattern(query, 'giu');
   const textWidth = Math.max(1, width - 2);
-  const indent = (row: string, tone?: Tone) => rows.push('  ' + highlightRow(row, tone, pattern, color));
+  const pushRow = (row: string, tone?: Tone) => rows.push('  ' + highlightRow(row, tone, pattern, color));
   let focus: number | undefined;
   for (const item of items) {
     rows.push('');
@@ -194,10 +196,10 @@ function transcriptBlocks(source: SessionHit, items: readonly HistoryItem[], wid
     // The status tag keeps at least one label cell beside it; a row too narrow for both clips them together.
     rows.push(width > tag.length ? styled(clipPanel(label, width - tag.length), tone, color) + (tag && styled(tag, item.status === 'failed' ? 'error' : 'warning', color))
       : styled(clipPanel(label + tag, width), tone, color));
-    if (!tool || expandTools) { for (const text of lines) for (const row of wordWrap(text, textWidth)) indent(row, tool ? 'muted' : undefined); continue; }
+    if (!tool || expandTools) { for (const text of lines) for (const row of wordWrap(text, textWidth)) pushRow(row, tool ? 'muted' : undefined); continue; }
     // Collapsed tool output: the first three non-empty lines, one row each.
     const shown = lines.flatMap((text, index) => text.trim() ? [index] : []).slice(0, 3);
-    for (const index of shown) indent(clipPanel(lines[index]!, textWidth), 'muted');
+    for (const index of shown) pushRow(clipPanel(lines[index]!, textWidth), 'muted');
     const rest = lines.length - 1 - (shown.at(-1) ?? -1);
     if (rest > 0) rows.push(styled(clipPanel(`  … ${plural(rest, 'more line')}`, width), 'muted', color));
   }
@@ -227,7 +229,7 @@ function sessionList(hits: readonly SessionHit[], selected: number, text: string
   // Each row fills listWidth: marker, agent, title, then the age right-aligned.
   const list = hits.slice(start, start + listRows).map((hit, i) => {
     const chosen = start + i === selected;
-    const paint = (part: string, ...tones: Tone[]) => styled(part, chosen ? ['selectedBg', ...tones] : tones, color && (chosen || tones.length > 0));
+    const paint = (part: string, ...tones: Tone[]) => styled(part, chosen ? ['selectedBg', ...tones] : tones, color);
     const age = listWidth >= 25 ? lastUsed(hit.lastUsedAt ?? hit.updatedAt, now) : '';
     const marker = chosen ? '›' : hit.subagent ? '↳' : ' ';
     const children = hit.subagentCount ? '  →' : '';
@@ -235,7 +237,7 @@ function sessionList(hits: readonly SessionHit[], selected: number, text: string
     const label = clipPanel(prefix + searchResultLabel(hit, text), Math.max(1, listWidth - (age ? cellCount(age) + 2 : 0) - cellCount(children)));
     const pad = ' '.repeat(Math.max(0, listWidth - cellCount(label + children) - cellCount(age)));
     const title = label.startsWith(prefix)
-      ? paint(marker, chosen ? 'accent' : 'muted') + paint(' ') + paint(hit.agent.padEnd(6), hit.agent) + paint(' ') + paint(label.slice(prefix.length))
+      ? paint(`${marker} `, chosen ? 'accent' : 'muted') + paint(`${hit.agent.padEnd(6)} `, hit.agent) + paint(label.slice(prefix.length))
       : paint(label);
     return title + paint(children, 'muted') + paint(pad) + paint(age, 'muted');
   });
@@ -451,7 +453,8 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       const title = source.title.endsWith(` ${source.nativeId}`) ? `Session …${source.nativeId.slice(-8)}` : source.title;
       const chosen = targets[target]!;
       // The same rule as runtime preparation: the source's own agent resumes natively unless fresh is chosen.
-      const outcome = chosen === source.agent && !fresh ? `Resumes the original ${chosen} session natively.` : `Starts ${chosen} with a handoff of this conversation.`;
+      const native = chosen === source.agent && !fresh;
+      const outcome = native ? `Resumes the original ${chosen} session natively.` : `Starts ${chosen} with a handoff of this conversation.`;
       const selector = targets.map(agent => agent === chosen ? `[${agent}]` : agent).join('  ');
       const lines = [
         section('From'),
@@ -459,7 +462,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
         '', section('To'),
         `  ${cellCount(selector) > inner ? clipPanel(selector, inner)
           : targets.map(agent => agent === chosen ? styled(`[${agent}]`, ['title', agent], color) : styled(agent, 'muted', color)).join('  ')}`,
-        ...indent(panelWrap(outcome, inner).map(row => chosen === source.agent && !fresh ? styled(row, 'success', color) : row)),
+        ...indent(panelWrap(outcome, inner).map(row => native ? styled(row, 'success', color) : row)),
         `  ${keycaps([['← →', 'change target']], inner, color)}`,
         '', section('Workspace'),
         ...indent(panelWrap(`${choice!.path}${choice!.kind === 'override' ? ' (override)' : ''}`, inner)),

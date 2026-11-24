@@ -308,7 +308,7 @@ test('#17 T7: NO_COLOR and TERM=dumb render the coloured rows without any SGR se
   await open(p);const target=await p.send('\r','change target');const summary=await p.send('\r','Enter confirm continuation');await p.stop();return [list,target,summary];};
  const colored=await render({color:true});
  for(const plain of [await render({}),await render({dumb:true})]) {
-  for(const [index,frame] of plain.entries()) {assert.doesNotMatch(frame,/\x1b\[/);assert.equal(frame,colored[index].replace(sgr,'').replace(/(Last used  ).*UTC/,'$1'+frame.match(/Last used  (.*UTC)/)?.[1]));}
+  for(const [index,frame] of plain.entries()) {assert.doesNotMatch(frame,/\x1b\[/);assert.equal(frame,colored[index].replace(sgr,''));}
  }
 });
 test('#17 input rows that do not fit show their end at 80 columns',async()=>{
@@ -324,8 +324,7 @@ test('#17 input rows that do not fit show their end at 80 columns',async()=>{
 });
 for(const [rows,columns,color] of [[24,80,true],[32,130,true],[24,80,false]]) test(`#17 PTY: list, target and summary fit ${columns}x${rows}${color?'':' with NO_COLOR'}`,()=>{
  const r=run([{resize:[rows,columns],wait:'Alpha task'},key('\r','Enter choose target'),key('\r','change target'),key('\r','Enter confirm continuation'),key('\x03','DONE')],'',color?{TERM:'xterm-256color'}:{NO_COLOR:'1'});
- const last=chunk=>chunk.split('\x1b[2J\x1b[H').at(-1);
- const [list,,target,summary]=[r.frames[1],r.frames[2],r.frames[3],r.frames[4]].map(last);
+ const [list,target,summary]=[1,3,4].map(index=>r.frames[index].split('\x1b[2J\x1b[H').at(-1));
  for(const frame of [list,target,summary]) {
   if(color)assert.match(frame,hasSgr);else assert.doesNotMatch(frame,hasSgr);
   for(const row of frame.replace(sgr,'').split(/\r?\n/))assert.ok(Array.from(row.replace(/\x1b\[[0-9;?]*[A-Za-z]/g,'')).length<columns,JSON.stringify(row));
