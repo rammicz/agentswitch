@@ -72,23 +72,22 @@ for (const mode of modes) for (const target of Object.keys(tested)) test(`${targ
   assert.ok(onlyProbes(events));
   assert.equal(events.some(args => args[0] === 'resume'), target === 'codex' && mode === 'native');
 });
-const missing = modes.flatMap(mode => Object.entries(required[mode]).flatMap(([target, flags]) => flags.map(flag => {
+for (const mode of modes) for (const [target, flags] of Object.entries(required[mode])) for (const flag of flags) {
   const key = helpKey(mode, target);
-  return [mode, target, flag, key, { mode, [key]: without(reworded[target][key], flag) }];
-})));
-for (const [mode, target, flag, key, override] of missing) test(`${target} ${mode} fails before launch when ${key === 'resume' ? 'resume ' : ''}help lacks ${flag}`, async t => {
-  const f = await prepare(t, target, override);
-  await assert.rejects(f.run(), e => e instanceof RuntimeError && e.code === 'UNSUPPORTED_CAPABILITY' && e.message.includes(flag));
-  assert.ok(onlyProbes(await f.events()));
-});
+  test(`${target} ${mode} fails before launch when ${key} lacks ${flag}`, async t => {
+    const f = await prepare(t, target, { mode, [key]: without(reworded[target][key], flag) });
+    await assert.rejects(f.run(), e => e instanceof RuntimeError && e.code === 'UNSUPPORTED_CAPABILITY' && e.message.includes(flag));
+    assert.ok(onlyProbes(await f.events()));
+  });
+}
 // A flag only the other mode passes, removed from the help that mode reads, does not block this mode.
-const otherOnly = modes.flatMap(mode => Object.keys(tested).flatMap(target => {
-  const other = modes.find(m => m !== mode), key = helpKey(other, target);
-  const unused = required[other][target].filter(flag => key !== helpKey(mode, target) || !required[mode][target].includes(flag));
-  return unused.length ? [[mode, target, unused, key, { mode, [key]: unused.reduce(without, reworded[target][key]) }]] : [];
-}));
-for (const [mode, target, unused, key, override] of otherOnly) test(`${target} ${mode} prepares when ${key === 'resume' ? 'resume ' : ''}help lacks ${unused.join(', ')} used only by the other mode`, async t => {
-  const f = await prepare(t, target, override);
+const otherOnly = [
+  ['fresh', 'codex', 'resume', ['-C']], ['fresh', 'claude', 'help', ['--resume']], ['fresh', 'opencode', 'help', ['--session']],
+  ['fresh', 'agy', 'help', ['--conversation']], ['fresh', 'grok', 'help', ['--resume']],
+  ['native', 'codex', 'help', ['-C']], ['native', 'opencode', 'help', ['--prompt']], ['native', 'agy', 'help', ['--prompt-interactive']],
+];
+for (const [mode, target, key, unused] of otherOnly) test(`${target} ${mode} prepares when ${key} lacks ${unused.join(', ')} used only by the other mode`, async t => {
+  const f = await prepare(t, target, { mode, [key]: unused.reduce(without, reworded[target][key]) });
   await f.run();
   assert.ok(onlyProbes(await f.events()));
 });

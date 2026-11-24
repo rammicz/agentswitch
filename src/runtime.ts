@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, realpath, stat } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
+import { agentCatalog } from './adapters/index.js';
 import { openCodeNativeId } from './adapters/opencode.js';
 import { windowsConsoleMode, windowsNpmEntry } from './windows-runtime.js';
 import type { AgentId } from './domain.js';
@@ -160,7 +161,6 @@ function probe(executable: string, args: string[], cwd: string, env: NodeJS.Proc
     if (signal?.aborted) abort();
   });
 }
-const agentNames: Record<AgentId, string> = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode', agy: 'Antigravity CLI', grok: 'Grok Build' };
 interface LaunchValues { workspace: string; nativeId: string; prompt: string; hooks: readonly string[] }
 /** The only place each target's argv is built; capability checks derive the required flags from it. */
 function launchArgs(target: AgentId, native: boolean, { workspace, nativeId, prompt, hooks }: LaunchValues): string[] {
@@ -188,7 +188,7 @@ async function capabilities(target: AgentId, native: boolean, executable: string
   // Codex resume flags belong to its resume subcommand, so they are advertised in that subcommand's help.
   const launchHelp = target === 'codex' && native ? await probe(executable, ['resume', '--help'], cwd, env, timeout, signal) : help;
   const absent = launchFlags(target, native).filter(flag => !advertises(launchHelp, flag));
-  if (absent.length) return fail('UNSUPPORTED_CAPABILITY', `${agentNames[target]} capability is missing: help does not advertise ${absent.join(', ')}.`);
+  if (absent.length) return fail('UNSUPPORTED_CAPABILITY', `${agentCatalog.find(agent => agent.id === target)?.label ?? target} capability is missing: help does not advertise ${absent.join(', ')}.`);
   return {version:detected,observer:process.platform!=='win32'&&target==='codex'&&/--config\s+<key=value>/.test(help)};
 }
 function available(guard: OwnedSessionGuard, source: SessionSource): void {
