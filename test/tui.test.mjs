@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
@@ -159,6 +159,11 @@ const transcript=[
 ];
 const sessionHit={id:'codex:sess',nativeId:'sess-native-1',agent:'codex',title:'Fix the flaky upload test',workspace:root,updatedAt:new Date(Date.now()-18*60_000).toISOString()};
 const sgr=/\x1b\[[0-9;]*m/g,hasSgr=/\x1b\[[0-9;]*m/;
+// Pickers a test leaves running, for example after a failed assertion. Stopping one restores the environment it changed,
+// so one failing test cannot change what later tests see.
+const livePickers=new Set();
+async function settlePickers(){for(const stop of [...livePickers])await stop();}
+afterEach(settlePickers);
 async function picker({items=transcript,rows=60,columns=100,color=false,match=false,dumb=false,hits=[sessionHit],...services}={}) {
  const t=terminal();t.output.rows=rows;t.output.columns=columns;
  let written='';t.output.on('data',chunk=>{written+=chunk;});
@@ -171,8 +176,14 @@ async function picker({items=transcript,rows=60,columns=100,color=false,match=fa
  const frame=()=>frames().at(-1)??'';
  const until=async(test,label)=>{for(let i=0;i<200;i++){if(test(frame()))return frame();await new Promise(r=>setTimeout(r,10));}throw Error(`Missing ${label} in ${JSON.stringify(frame())}`);};
  const send=async(data,expect,label=expect)=>{const before=frames().length;t.input.write(data);return until(text=>frames().length>before&&(typeof expect==='function'?expect(text):text.replace(sgr,'').includes(expect)),label);};
- await until(text=>text.replace(sgr,'').includes('Details'),'list');
- return {t,frame,until,send,written:()=>written,stop:async()=>{t.input.write('\x03');await running;for(const [k,v] of Object.entries(saved))if(v===undefined)delete process.env[k];else process.env[k]=v;}};
+ let stopped;
+ const stop=()=>stopped??=(async()=>{
+  livePickers.delete(stop);t.input.write('\x03');
+  try{await running;}finally{for(const [k,v] of Object.entries(saved))if(v===undefined)delete process.env[k];else process.env[k]=v;}
+ })();
+ livePickers.add(stop);
+ try{await until(text=>text.replace(sgr,'').includes('Details'),'list');}catch(error){await stop();throw error;}
+ return {t,frame,until,send,written:()=>written,stop};
 }
 const open=p=>p.send('\r','Enter choose target');
 // Rows without colour and without the one-cell left margin.
@@ -374,6 +385,14 @@ test('#17 a long folder takes one row in the details pane and the preview header
  assert.ok(preview.includes('Folder: /var/…/T/agentswitch-test-run-2185-0JPdUG/agentswitch-picker-Sp0lZX'),JSON.stringify(preview));
 });
 
+test('a picker left running by a failed test is stopped and the environment it changed is restored',async()=>{
+ const before={NO_COLOR:process.env.NO_COLOR,TERM:process.env.TERM};
+ await picker({color:true});assert.equal(process.env.TERM,'xterm-256color');assert.equal(process.env.NO_COLOR,undefined);
+ await settlePickers();
+ assert.deepEqual({NO_COLOR:process.env.NO_COLOR,TERM:process.env.TERM},before);assert.equal(livePickers.size,0);
+ await assert.rejects(picker({color:true,query:()=>new Promise(()=>{})}),/Missing list/);
+ assert.deepEqual({NO_COLOR:process.env.NO_COLOR,TERM:process.env.TERM},before);assert.equal(livePickers.size,0);
+});
 test('#17 a label and a long path start on one row: details Folder at 40, 80 and 130 columns, review Workspace at 80',async()=>{
  for(const columns of [40,80,130]) {
   const p=await picker({...screens,hits:[{...codexHit,workspace:longFolder},claudeHit],rows:30,columns});
