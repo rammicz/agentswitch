@@ -117,7 +117,9 @@ function keycaps(hints: readonly Hint[], width: number, color: boolean): string 
 }
 /** A muted label and its plain value two spaces apart, wrapped to at most `limit` rows. */
 function pair(label: string, value: string, width: number, color: boolean, limit = Infinity): string[] {
-  return wordWrap(`${label}  ${value}`, width).slice(0, limit)
+  // Words wrap whole, but a value with no break that fits after the label (a path, say) starts beside it rather than below.
+  const words = wordWrap(`${label}  ${value}`, width);
+  return (words[0] === label && value ? panelWrap(`${label}  ${value}`, width) : words).slice(0, limit)
     .map((row, index) => index === 0 && row.startsWith(label) ? styled(label, 'muted', color) + row.slice(label.length) : row);
 }
 /** One input row. Text that does not fit shows its end after `…`, so the typing position stays visible. */

@@ -373,3 +373,19 @@ test('#17 a long folder takes one row in the details pane and the preview header
  const preview=plainRows(await open(p));await p.stop();
  assert.ok(preview.includes('Folder: /var/…/T/agentswitch-test-run-2185-0JPdUG/agentswitch-picker-Sp0lZX'),JSON.stringify(preview));
 });
+
+test('#17 a label and a long path start on one row: details Folder at 40, 80 and 130 columns, review Workspace at 80',async()=>{
+ for(const columns of [40,80,130]) {
+  const p=await picker({...screens,hits:[{...codexHit,workspace:longFolder},claudeHit],rows:30,columns});
+  const rows=plainRows(await p.until(text=>text.includes('Session ID'),'details'));await p.stop();
+  const folder=rows.find(row=>/(^|│ )Folder  /.test(row));
+  assert.ok(folder&&/Folder  (\/var\/…\/|…).*agentswitch-picker-Sp0lZX$/.test(folder)&&cells(folder)<=columns-2,`${columns}: ${JSON.stringify(rows)}`);
+  assert.ok(!rows.some(row=>/(^|│ )Folder$/.test(row)),`${columns}: bare label`);
+ }
+ const deep=join(root,'workspace-without-spaces-'+'x'.repeat(70));mkdirSync(deep,{recursive:true});
+ const p=await picker({...screens,hits:[{...codexHit,workspace:deep}],rows:40,columns:80});await open(p);await p.send('\r','change target');
+ const rows=plainRows(await p.send('\r','Enter confirm continuation'));await p.stop();
+ const at=rows.findIndex(row=>row.startsWith('  Workspace  '));
+ assert.ok(at>=0&&deep.startsWith(rows[at].slice('  Workspace  '.length)),JSON.stringify(rows));
+ assert.ok(!rows.includes('  Workspace'));
+});
