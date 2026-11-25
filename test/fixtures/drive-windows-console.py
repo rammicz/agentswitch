@@ -12,6 +12,7 @@ import msvcrt
 
 sys.dont_write_bytecode = True  # Importing the helper must not leave a __pycache__ in the checkout.
 from console_text import visible
+from pty_wait import bound
 
 kernel = c.WinDLL("kernel32", use_last_error=True)
 
@@ -109,7 +110,7 @@ def run(config):
                 continue
             # Waits match the visible text; cursor is a position in it.
             expected = action["wait"]
-            deadline = time.monotonic() + 18
+            deadline = time.monotonic() + bound(18)
             while (found := visible(output.decode(errors="replace")).find(expected, cursor)) < 0:
                 if time.monotonic() >= deadline:
                     raise TimeoutError((action, output.decode(errors="replace")))

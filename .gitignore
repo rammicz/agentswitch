@@ -3,5 +3,6 @@ dist/
 *.tgz
 .serena/
 coverage/
+__pycache__/
 .env
 .env.*

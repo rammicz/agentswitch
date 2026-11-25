@@ -1,6 +1,5 @@
 """Controlled foreground process group; never signals the caller's terminal group."""
 import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess
-sys.dont_write_bytecode=True # The shared helper below must not leave a __pycache__ in the repository.
 from pty_wait import bound,missing
 
 def main():

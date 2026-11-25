@@ -1,6 +1,7 @@
 import { createRuntime, createOwnedSessionGuard } from '../../dist/runtime.js';
 import { runPicker } from '../../dist/tui/app.js';
 import { realpathSync, chmodSync, read, closeSync } from 'node:fs';
+import { scaled } from './timeouts.mjs';
 const ackFd=Number(process.env.RUNTIME_ACK_FD);
 delete process.env.RUNTIME_ACK_FD;
 if(!Number.isInteger(ackFd)||ackFd<3)throw Error('Missing terminal-sampling acknowledgement descriptor');
@@ -44,7 +45,7 @@ try {
 // Keep the controlling session leader alive until the harness samples termios.
 // The acknowledgement is private fixture synchronization, never provider input.
 await new Promise((resolve,reject)=>{
- const timer=setTimeout(()=>{console.error('Terminal-sampling acknowledgement timed out');process.exit(1);},5000);
+ const timer=setTimeout(()=>{console.error('Terminal-sampling acknowledgement timed out');process.exit(1);},scaled(30_000));
  const token=Buffer.alloc(1);
  read(ackFd,token,0,1,null,(error,count)=>{
   clearTimeout(timer);closeSync(ackFd);

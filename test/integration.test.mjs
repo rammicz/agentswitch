@@ -8,7 +8,7 @@ import { rollout, writeRollout, completed, ids as codexIds } from './fixtures/co
 import { entry, encode, ids as claudeIds } from './fixtures/claude/native.mjs';
 import { tempDir } from './fixtures/temp.mjs';
 import { stopHeartbeatChild } from './fixtures/heartbeat.mjs';
-import { scaled } from './fixtures/timeouts.mjs';
+import { assertMissing, scaled } from './fixtures/timeouts.mjs';
 
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
@@ -243,12 +243,9 @@ test('native selection through a true workspace alias launches in its canonical 
 });
 
 test('a CLI marker that never appears fails within its bound and shows the last screen',async()=>{
- const f=await setup(),started=Date.now();
- const child=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',env:{...process.env,AGENTSWITCH_TEST_TIMEOUT_SCALE:'0.1'},
-  input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions:[...list,{wait:'NEVER_SHOWN'}]}),timeout:ptyTimeout});
- assert.notEqual(child.status,0);
- assert.match(child.stderr,/Missing 'NEVER_SHOWN' within 4\.5s; last screen:\n/);
- const screen=child.stderr.slice(child.stderr.indexOf('last screen:'));
- assert.match(screen,/Enter preview/);assert.doesNotMatch(screen,/\x1b/);
- assert.ok(Date.now()-started<scaled(30_000),'the hang fails within the bound');
+ // The spawn limit is the bound on the whole run: a driver that hangs instead is killed without the expected message.
+ const f=await setup();
+ const child=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',timeout:scaled(60_000),
+  input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions:[...list,{wait:'NEVER_SHOWN',timeout:1}]})});
+ assertMissing(child,'NEVER_SHOWN',1,/Enter preview/);
 });

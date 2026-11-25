@@ -6,9 +6,10 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { completed, ids, rollout, writeRollout } from './fixtures/codex/native.mjs';
 import { tempDir } from './fixtures/temp.mjs';
+import { scaled } from './fixtures/timeouts.mjs';
 
 const execute = (program, args, options = {}) => {
-  const result = spawnSync(program, args, { encoding: 'utf8', timeout: 75_000, ...options });
+  const result = spawnSync(program, args, { encoding: 'utf8', timeout: scaled(75_000), ...options });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   return result.stdout;

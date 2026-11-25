@@ -1,9 +1,9 @@
 """Real CLI entry in isolated foreground PTYs, with only synthetic providers."""
 import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess,codecs
-sys.dont_write_bytecode=True # The shared helper below must not leave a __pycache__ in the repository.
 from pty_wait import bound,missing
+WAIT=45 # A CLI screen can follow provider discovery and a capability probe.
 
-def until(state,marker,timeout=45,retained=False):
+def until(state,marker,timeout=WAIT,retained=False):
  timeout=bound(timeout);deadline=time.monotonic()+timeout
  while time.monotonic()<deadline:
   found=state['output'].find(marker,0 if retained else state['cursor'])
@@ -61,7 +61,7 @@ def main():
    if 'append' in action:
     with open(action['append']['path'],'a') as changed:changed.write(action['append']['text'])
    if 'instance' in action:state=instances[action['instance']]
-   if 'wait' in action:until(state,action['wait'])
+   if 'wait' in action:until(state,action['wait'],action.get('timeout',WAIT))
    if 'signal' in action:os.kill(state['child'].pid,getattr(signal,action['signal']))
    if 'send' in action:os.write(state['master'],action['send'].encode())
    if 'waitPrePidBarrier' in action:until(state,'PID_COMMIT_PAUSED',retained=True)

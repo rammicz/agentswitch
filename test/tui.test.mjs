@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileTempDir } from './fixtures/temp.mjs';
-import { scaled } from './fixtures/timeouts.mjs';
+import { assertMissing, scaled } from './fixtures/timeouts.mjs';
 const root=fileTempDir('agentswitch-picker-');
 const other=join(root,'other');mkdirSync(other);
 const run=(actions,scenario='',extra={})=>{
@@ -411,11 +411,7 @@ test('#17 a label and a long path start on one row: details Folder at 40, 80 and
 });
 
 test('a picker marker that never appears fails within its bound and shows the last screen',()=>{
- const started=Date.now();
- const p=spawnSync('python3',['test/fixtures/drive-terminal.py'],{input:JSON.stringify({env:{PICKER_WORKSPACE:root,PICKER_OTHER:other,PICKER_SCENARIO:''},actions:[{send:'x',wait:'NEVER_SHOWN',timeout:2}]}),encoding:'utf8',timeout:scaled(120_000)});
- assert.notEqual(p.status,0);
- assert.match(p.stderr,/Missing 'NEVER_SHOWN' within 2s; last screen:\n/);
- const screen=p.stderr.slice(p.stderr.indexOf('last screen:'));
- assert.match(screen,/Search: x/);assert.doesNotMatch(screen,/\x1b/);
- assert.ok(Date.now()-started<scaled(60_000),'the hang fails within the bound');
+ // The spawn limit is the bound on the whole run: a driver that hangs instead is killed without the expected message.
+ const p=spawnSync('python3',['test/fixtures/drive-terminal.py'],{input:JSON.stringify({env:{PICKER_WORKSPACE:root,PICKER_OTHER:other,PICKER_SCENARIO:''},actions:[key('x','Search: x'),{wait:'NEVER_SHOWN',timeout:1}]}),encoding:'utf8',timeout:scaled(60_000)});
+ assertMissing(p,'NEVER_SHOWN',1,/Search: x/);
 });
