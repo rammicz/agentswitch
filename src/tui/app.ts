@@ -271,15 +271,14 @@ function sessionList(hits: readonly SessionHit[], selected: number, text: string
   }
   // Side by side, the list widens to fit its rows while the details pane keeps at least 40 cells.
   const least = Math.floor(width * 0.43);
-  // Stacked, it ends after its widest row, so the age stays near the title.
-  const listWidth = sideBySide ? Math.min(Math.max(least, width - 43), Math.max(least, needed.width)) : Math.min(width, needed.width);
+  const listWidth = sideBySide ? Math.min(Math.max(least, width - 43), Math.max(least, needed.width)) : width;
   const detailWidth = sideBySide ? width - listWidth - 3 : width;
   const start = Math.max(0, selected - listRows + 1);
   // Each row fills listWidth: marker, agent, title, then the age right-aligned.
   const list = hits.slice(start, start + listRows).map((hit, i) => {
     const chosen = start + i === selected;
     const paint = (part: string, ...tones: Tone[]) => styled(part, chosen ? ['selectedBg', ...tones] : tones, color);
-    const age = width >= 25 ? ageOf(hit) : '';
+    const age = listWidth >= 25 ? ageOf(hit) : '';
     const marker = chosen ? '›' : hit.subagent ? '↳' : ' ';
     const children = childrenOf(hit);
     const prefix = prefixOf(hit, marker);
