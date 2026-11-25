@@ -239,35 +239,47 @@ function lastUsed(timestamp: string, now: number): string {
   return `${Math.floor(minutes / 525_600)}y ago`;
 }
 
+/** Side by side, the details pane keeps at least this many cells; the list takes the rest it needs. */
+const minimumDetailWidth = 40;
 function sessionList(hits: readonly SessionHit[], selected: number, text: string, width: number, height: number,
   details: readonly string[], color: boolean): string[] {
   const sideBySide = selected >= 0 && width >= 96 && height >= 4;
   const detailRows = selected < 0 ? 0 : sideBySide ? height : height >= 8 ? Math.max(5, Math.floor(height * 0.47)) : 0;
   const listRows = Math.max(1, sideBySide ? height : height - detailRows - (detailRows ? 1 : 0));
-  const listWidth = sideBySide ? Math.floor(width * 0.43) : width;
-  const detailWidth = sideBySide ? width - listWidth - 3 : width;
   const now = Date.now();
+  const age = (hit: SessionHit) => lastUsed(hit.lastUsedAt ?? hit.updatedAt, now);
+  // Side by side, the list widens to fit its rows (marker, agent, title, age) while the details keep a readable width.
+  let listWidth = width;
+  if (sideBySide) {
+    const least = Math.floor(width * 0.43), most = Math.max(least, width - 3 - minimumDetailWidth);
+    listWidth = least;
+    for (const hit of hits) {
+      if (listWidth >= most) break;
+      listWidth = Math.max(listWidth, Math.min(most, 3 + Math.max(6, hit.agent.length) + cellCount(searchResultLabel(hit, text)) + (hit.subagentCount ? 3 : 0) + 2 + cellCount(age(hit))));
+    }
+  }
+  const detailWidth = sideBySide ? width - listWidth - 3 : width;
   const start = Math.max(0, selected - listRows + 1);
   // Each row fills listWidth: marker, agent, title, then the age right-aligned.
   const list = hits.slice(start, start + listRows).map((hit, i) => {
     const chosen = start + i === selected;
     const paint = (part: string, ...tones: Tone[]) => styled(part, chosen ? ['selectedBg', ...tones] : tones, color);
-    const age = listWidth >= 25 ? lastUsed(hit.lastUsedAt ?? hit.updatedAt, now) : '';
+    const shownAge = listWidth >= 25 ? age(hit) : '';
     const marker = chosen ? '›' : hit.subagent ? '↳' : ' ';
     const children = hit.subagentCount ? '  →' : '';
     const prefix = `${marker} ${hit.agent.padEnd(6)} `;
-    const label = clipPanel(prefix + searchResultLabel(hit, text), Math.max(1, listWidth - (age ? cellCount(age) + 2 : 0) - cellCount(children)));
-    const pad = ' '.repeat(Math.max(0, listWidth - cellCount(label + children) - cellCount(age)));
+    const label = clipPanel(prefix + searchResultLabel(hit, text), Math.max(1, listWidth - (shownAge ? cellCount(shownAge) + 2 : 0) - cellCount(children)));
+    const pad = ' '.repeat(Math.max(0, listWidth - cellCount(label + children) - cellCount(shownAge)));
     const title = label.startsWith(prefix)
       ? paint(`${marker} `, chosen ? 'accent' : 'muted') + paint(`${hit.agent.padEnd(6)} `, hit.agent) + paint(label.slice(prefix.length))
       : paint(label);
-    return title + paint(children, 'muted') + paint(pad) + paint(age, 'muted');
+    return title + paint(children, 'muted') + paint(pad) + paint(shownAge, 'muted');
   });
   if (!detailRows) return list;
   const hit = hits[selected]!;
   const match = hit.matches.find(item => item.field === 'message');
-  const excerpts = (match ? [`Match (${match.role}): ${match.text.replace(/\s+/gu, ' ')}`] : details).flatMap(line => panelWrap(line, detailWidth)).slice(0, 7);
-  const full = [styled('Details', 'heading', color), ...panelWrap(hit.title, detailWidth).slice(0, 2).map(row => styled(row, 'title', color)), '',
+  const excerpts = (match ? [`Match (${match.role}): ${match.text.replace(/\s+/gu, ' ')}`] : details).flatMap(line => wordWrap(line, detailWidth)).slice(0, 7);
+  const full = [styled('Details', 'heading', color), ...wordWrap(hit.title, detailWidth).slice(0, 2).map(row => styled(row, 'title', color)), '',
     ...pair('Last used', exactTime(hit.lastUsedAt ?? hit.updatedAt), detailWidth, color),
     ...pair('Folder', compactPath(hit.workspace, Math.max(1, detailWidth - 'Folder  '.length)), detailWidth, color),
     ...pair('Session ID', hit.nativeId, detailWidth, color, 2),
@@ -430,7 +442,9 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       body = hits.length ? sessionList(hits, selected, query.text, width, bodyRows, detailLines, color)
         : [styled(clipPanel(busy ? progress : 'No matching sessions. Clear the search or change scope.', width), 'muted', color)];
       const back: Hint = parents.length ? ['←', 'back'] : ['Esc', 'quit'];
-      footer = selected < 0 && hits.length ? [['↓', 'results'], back] : [['↑↓', 'select'], ['Enter', 'preview'], back];
+      // Only keys that do something: with no results there is nothing to select or preview.
+      footer = !hits.length ? [...(query.text ? [['Ctrl+U', 'clear search'] as const] : []), back]
+        : selected < 0 ? [['↓', 'results'], back] : [['↑↓', 'select'], ['Enter', 'preview'], back];
       if (busy) footer = hits.length ? [['↑↓', 'select'], ['Enter', 'open session'], back, ['', progress]] : [back];
     } else if (stage === 'preview') {
       const inputs = [picked, items, width, color, expandTools, query.text];

@@ -147,7 +147,8 @@ test('deliberate recovery is a new confirmed fresh attempt; abort/delete removes
 
 test('real picker folder scope is exact; global message search defaults to the recorded source workspace',async()=>{
  const f=await setup();
- const [result]=pty(f,[...list,...search('other-folder-only'),{send:'\t'},{wait:'Scope: global'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\u001b[C'},{wait:'[claude]'},...finish]);
+ // The folder scope has no match: the empty result offers no Enter preview, so wait for its message instead.
+ const [result]=pty(f,[...list,{send:'other-folder-only'},{wait:'Search: other-folder-only'},{wait:'No matching sessions'},{send:'\t'},{wait:'Scope: global'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\u001b[C'},{wait:'[claude]'},...finish]);
  const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());assert.equal(launch.cwd,await realpath(f.other));
  const initial=result.output.slice(0,result.output.indexOf('other-folder-only'));assert.ok(!initial.includes(codexIds[1]));assert.ok(!initial.includes(codexIds[2]));
  assert.match(result.output,/No matching sessions/);assert.match(result.output,/Scope: global/);assert.equal(JSON.parse(launch.args.at(-1)).history[0].text,'other-folder-only');
