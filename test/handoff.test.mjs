@@ -159,8 +159,9 @@ test('conversation turns outrank tool output; failed tools outrank passing ones;
   ];
   // Room for every small item plus exactly one of the two 2000-character items, measured in v1 terms (the larger format).
   const small = ['u0', 'tf', 'ti', 'u1', 'a1'].map(id => wireBytes(v1Item(items.find(x => x.id === id))) + 1).reduce((a, b) => a + b, 0);
-  const maxBytes = emptyEnvelope + small + wireBytes(v1Item(items[1])) + 200;
-  const result = buildHandoff({ ...base, items, maxBytes });
+  // The archive reference is part of the prompt, so the room is computed for the archive directory in use.
+  const budget = emptyBytes => emptyBytes + small + wireBytes(v1Item(items[1])) + 200;
+  const result = buildHandoff({ ...base, items, maxBytes: budget(emptyEnvelope) });
   assert.deepEqual(result.includedItemIds, ['u0', 'a0', 'tf', 'ti', 'u1', 'a1']);
   assert.deepEqual(result.omittedItemIds, ['ub', 't0', 'tb']);
   const envelope = JSON.parse(result.prompt);
@@ -173,7 +174,10 @@ test('conversation turns outrank tool output; failed tools outrank passing ones;
   assert.equal(JSON.parse(full.prompt).history.find(entry => entry.id === 't0').text, 'T'.repeat(2000));
   // The archive keeps the excluded blank output, marked as not included.
   const directory = await temporary(t);
-  const prepared = await prepareHandoff({ directory, source, items, currentRequest: 'Continue.', maxBytes });
+  const emptyHere = Buffer.byteLength(buildHandoff({ ...base, archive: { ...archive, directory }, currentRequest: 'Continue.', items: [] }).prompt);
+  const prepared = await prepareHandoff({ directory, source, items, currentRequest: 'Continue.', maxBytes: budget(emptyHere) });
+  assert.deepEqual(prepared.omittedItemIds, ['ub', 't0', 'tb']);
+  assert.ok(Buffer.byteLength(prepared.prompt) <= budget(emptyHere));
   const manifest = await listArchive({ ...prepared.archive, limit: 50 });
   assert.deepEqual(manifest.items.map(entry => [entry.id, entry.included]), items.map(x => [x.id, prepared.includedItemIds.includes(x.id)]));
   assert.equal(manifest.items.find(entry => entry.id === 'tb').included, false);
