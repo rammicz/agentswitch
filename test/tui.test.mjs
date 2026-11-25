@@ -415,3 +415,40 @@ test('a picker marker that never appears fails within its bound and shows the la
  const p=spawnSync('python3',['test/fixtures/drive-terminal.py'],{input:JSON.stringify({env:{PICKER_WORKSPACE:root,PICKER_OTHER:other,PICKER_SCENARIO:''},actions:[key('x','Search: x'),{wait:'NEVER_SHOWN',timeout:1}]}),encoding:'utf8',timeout:scaled(60_000)});
  assertMissing(p,'NEVER_SHOWN',1,/Search: x/);
 });
+
+// #37: prose wraps between words on every screen, and scrolling is offered only when the screen scrolls.
+const joined=(rows,first)=>{const start=rows.findIndex(row=>row.includes(first));assert.ok(start>=0,JSON.stringify(rows));return rows.slice(start).map(row=>row.trim()).join(' ');};
+test('#37 the target outcome, partial-history warning and item IDs wrap between words at 40 columns',async()=>{
+ const text='Starts claude with a handoff of this conversation because its native session cannot be resumed here.';
+ const partial='Partial history: at least 3 source records could not be read (unsupported-shape) and are not included.';
+ const included=Array.from({length:9},(_,i)=>`item-${i}-abcdef`);
+ const p=await picker({...screens,rows:40,columns:40,outcome:async()=>({native:false,text}),
+  prepare:async request=>({plan:request,summary:{source:request.source,target:request.target,mode:'fresh-handoff',workspace:request.workspace.path,includedItemIds:included,omittedItemIds:[],partialHistory:partial}})});
+ await open(p);
+ const target=plainRows(await p.send('\r','resumed'));
+ assert.ok(joined(target,'Starts claude').startsWith(text),JSON.stringify(target));
+ const summary=plainRows(await p.send('\r','Enter confirm continuation'));await p.stop();
+ assert.ok(joined(summary,'Partial history').startsWith(partial),JSON.stringify(summary));
+ assert.ok(joined(summary,'Included IDs').startsWith(`Included IDs  ${included.join(', ')}`),JSON.stringify(summary));
+ assert.ok([...target,...summary].every(row=>cells(row)<=38),JSON.stringify([...target,...summary]));
+});
+test('#37 preview and summary offer ↑↓ scroll only when their content is taller than the screen',async()=>{
+ for(const [rows,items,scrolls] of [[40,transcript.slice(0,1),false],[16,transcript,true]]){
+  const p=await picker({...screens,items,rows,columns:80});
+  const preview=plainRows(await p.send('\r','Enter choose target'));
+  assert.equal(preview.some(row=>row.includes('PgUp PgDn scroll')),scrolls,`${rows} rows: ${JSON.stringify(preview)}`);
+  await p.send('\r','change target');
+  const summary=plainRows(await p.send('\r','Enter confirm continuation'));await p.stop();
+  assert.equal(summary.some(row=>row.includes('↑↓ scroll')),scrolls,`${rows} rows: ${JSON.stringify(summary)}`);
+ }
+});
+test('#37 a short list gives the details its rows, and an excerpt the pane cannot hold ends with …',async()=>{
+ const text='Opening request: '+Array.from({length:40},(_,i)=>`word${i}`).join(' ');
+ const p=await picker({...screens,rows:24,columns:40,details:async()=>[{id:'d1',role:'user',status:'complete',text:text.slice(17)}]});
+ const rows=plainRows(await p.until(frame=>frame.includes('Opening request'),'excerpt'));await p.stop();
+ const footer=rows.findIndex(row=>row.startsWith('↑↓ select'));
+ // Two results take two rows; the details fill the rest of the body down to the blank row above the footer.
+ assert.equal(rows[footer-2].endsWith(' …'),true,JSON.stringify(rows));
+ const shown=joined(rows.slice(0,footer-1),'Opening request').replace(/ …$/u,'');
+ assert.ok(text.startsWith(shown)&&shown.length>100,JSON.stringify(rows));
+});

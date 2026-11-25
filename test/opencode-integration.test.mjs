@@ -108,8 +108,8 @@ test('default CLI transfers readable OpenCode history with an unknown part as di
  // Small terminal: the disclosure must be on the first review screen, and Enter confirms without scrolling.
  const result=pty(f,[...select('opencode'),{send:'\r'},{wait:'Partial history:'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}],[],{rows:14,columns:58});
  assert.equal(result.restored,true);assert.equal(result.code,0);
- // The review screen hard-wraps at 58 columns.
- assert.match(result.output.replace(/\r\n /g,''),/Partial history: at least 1 source record could not be read \(unsupported-shape\) and is not included\./);
+ // The review screen wraps prose between words at 58 columns: a row break, then the next row's margin, stands for a space.
+ assert.match(result.output.replace(/\r\n /g,' '),/Partial history: at least 1 source record could not be read \(unsupported-shape\) and is not included\./);
  assert.doesNotMatch(result.output,/UNCLASSIFIED_PUBLIC_TEXT/);
  const [launch]=await launches(f),wire=launch.args.at(-1),prompt=parseHandoffPrompt(wire);
  assert.equal(JSON.parse(wire).completeness,'partial');assert.ok(prompt.history.length>0);assert.ok(prompt.history.some(item=>/OpenCode public/.test(item.text)));assert.doesNotMatch(wire,/UNCLASSIFIED_PUBLIC_TEXT/);
