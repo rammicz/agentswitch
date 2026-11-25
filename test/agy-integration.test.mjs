@@ -26,7 +26,8 @@ async function setup(t) {
  const files=[cache,codexPath,claudePath];return {root,cwd,other,cache,bin,state,env,files,before:await Promise.all(files.map(hash))};
 }
 function pty(f,actions,args=[],all=false) {const r=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,rows:60,columns:210}),timeout:scaled(300_000),maxBuffer:8*1024*1024});assert.equal(r.status,0,r.stderr);return all?JSON.parse(r.stdout):JSON.parse(r.stdout)[0];}
-const select=(source,publicText=false)=>[{wait:'Enter preview'},{send:source==='agy'?(publicText?'Agy public fixture':id):source==='codex'?'Codex fixture':'Claude fixture'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
+// Enter is ignored while a search runs, so wait for the typed query's echo: the first "Enter preview" after it shows that query's results.
+const select=(source,publicText=false,text=source==='agy'?(publicText?'Agy public fixture':id):source==='codex'?'Codex fixture':'Claude fixture')=>[{wait:'Enter preview'},{send:text},{wait:'Search: '+text},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
 const target=[{send:'\x1b[D'},{wait:'[grok]'},{send:'\x1b[D'},{wait:'[agy]'}];
 const clear=[{send:'c'},{wait:'Current request (sent separately'},{send:'\x15\r'},{wait:'Current request  '}];
 const finish=[{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'hello\n'},{wait:'INPUT "hello\\n"'},{send:'quit\n'},{wait:'uncertain — process exited'}];
