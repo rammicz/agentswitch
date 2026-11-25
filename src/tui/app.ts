@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { resolve, sep } from 'node:path';
+import { basename, resolve, sep } from 'node:path';
 import { emitKeypressEvents } from 'node:readline';
 import type { Key } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -106,8 +106,8 @@ function styled(text: string, tone: Tone | readonly Tone[], color: boolean): str
   return color && text && tones.length ? `\x1b[${tones.map(name => palette[name]).join(';')}m${text}\x1b[0m` : text;
 }
 type Hint = readonly [key: string, action: string];
-/** Key hints as keycaps: the key in bold accent and its action muted, two spaces apart. Hints that do not fit are dropped from the end. */
-/** Key hints two cells apart, wrapped onto more rows rather than dropped, so every key a screen accepts stays listed. */
+/** Key hints as keycaps, the key in bold accent and its action muted, two cells apart. Hints that do not fit continue on
+ * another row rather than being dropped, so every key a screen accepts stays listed. */
 function keycaps(hints: readonly Hint[], width: number, color: boolean): string[] {
   const rows: string[] = [];
   let row = '', cells = 0;
@@ -248,24 +248,22 @@ function lastUsed(timestamp: string, now: number): string {
 
 // The widest list row each search result set needs (marker, agent, title, arrow, then the widest age, 8 cells), measured
 // once per set so that a clock redraw neither remeasures nor resizes it.
-const neededWidths = new WeakMap<readonly SessionHit[], { text: string; width: number }>();
-/** The last folder name of a path, which marks a result from another folder in the list. */
-const folderName = (path: string): string => path.split(/[\\/]/u).filter(Boolean).at(-1) ?? path;
+const neededWidths = new WeakMap<readonly SessionHit[], { key: string; width: number }>();
 function sessionList(hits: readonly SessionHit[], selected: number, text: string, width: number, height: number,
   details: readonly string[], color: boolean, workspace: string): string[] {
   const sideBySide = selected >= 0 && width >= 96 && height >= 4;
-  let detailRows = selected < 0 ? 0 : sideBySide ? height : height >= 8 ? Math.max(5, Math.floor(height * 0.47)) : 0;
-  // Stacked, a list shorter than its share gives the spare rows to the details.
-  if (detailRows && !sideBySide) detailRows = height - 1 - Math.max(1, Math.min(hits.length, height - detailRows - 1));
-  const listRows = Math.max(1, sideBySide ? height : height - detailRows - (detailRows ? 1 : 0));
+  const share = selected < 0 || sideBySide || height < 8 ? 0 : Math.max(5, Math.floor(height * 0.47));
+  // Stacked, the details take their share of the rows, and also the rows a shorter list leaves.
+  const listRows = sideBySide ? height : share ? Math.max(1, Math.min(hits.length, height - share - 1)) : Math.max(1, height);
+  const detailRows = selected < 0 ? 0 : sideBySide ? height : share ? height - 1 - listRows : 0;
   const now = Date.now();
   const ageOf = (hit: SessionHit) => lastUsed(hit.lastUsedAt ?? hit.updatedAt, now);
   const prefixOf = (hit: SessionHit, marker: string) => `${marker} ${hit.agent.padEnd(6)} `;
   const childrenOf = (hit: SessionHit) => hit.subagentCount ? '  →' : '';
-  const elsewhereOf = (hit: SessionHit) => hit.workspace === workspace ? '' : `  ${folderName(hit.workspace)}`;
+  const elsewhereOf = (hit: SessionHit) => hit.workspace === workspace ? '' : `  ${basename(hit.workspace) || hit.workspace}`;
   let needed = neededWidths.get(hits);
-  if (needed?.text !== text) {
-    needed = { text, width: hits.reduce((most, hit) => Math.max(most, cellCount(prefixOf(hit, ' ') + searchResultLabel(hit, text) + elsewhereOf(hit) + childrenOf(hit))), 0) + 2 + 8 };
+  if (needed?.key !== `${workspace}\0${text}`) {
+    needed = { key: `${workspace}\0${text}`, width: hits.reduce((most, hit) => Math.max(most, cellCount(prefixOf(hit, ' ') + searchResultLabel(hit, text) + elsewhereOf(hit) + childrenOf(hit))), 0) + 2 + 8 };
     neededWidths.set(hits, needed);
   }
   // Side by side, the list widens to fit its rows while the details pane keeps at least 40 cells.
@@ -297,9 +295,7 @@ function sessionList(hits: readonly SessionHit[], selected: number, text: string
   const hit = hits[selected]!;
   const match = hit.matches.find(item => item.field === 'message');
   const excerptRows = (match ? [`Match (${match.role}): ${match.text.replace(/\s+/gu, ' ')}`] : details).flatMap(line => wordWrap(line, detailWidth));
-  // An excerpt cut short ends with `…`.
-  const more = (row: string) => clipPanel(`${row} …`, detailWidth);
-  const excerpts = excerptRows.length > 7 ? [...excerptRows.slice(0, 6), more(excerptRows[6]!)] : excerptRows;
+  const excerpts = excerptRows.slice(0, 7);
   const full = [styled('Details', 'heading', color), ...wordWrap(hit.title, detailWidth).slice(0, 2).map(row => styled(row, 'title', color)), '',
     ...pair('Last used', exactTime(hit.lastUsedAt ?? hit.updatedAt), detailWidth, color),
     ...pair('Folder', compactPath(hit.workspace, Math.max(1, detailWidth - 'Folder  '.length)), detailWidth, color),
@@ -309,7 +305,9 @@ function sessionList(hits: readonly SessionHit[], selected: number, text: string
   // A short pane gives up its spacing before its content.
   const fitting = full.length > detailRows ? full.filter(Boolean) : full;
   const pane = fitting.slice(0, detailRows);
-  if (fitting.length > pane.length && pane.length > fitting.length - excerpts.length) pane[pane.length - 1] = more(pane.at(-1)!);
+  // An excerpt cut short, by the pane or the seven-row limit, ends with `…`.
+  const cut = fitting.length > pane.length || excerptRows.length > excerpts.length;
+  if (cut && pane.length > fitting.length - excerpts.length) pane[pane.length - 1] = clipPanel(`${pane.at(-1)!} …`, detailWidth);
   if (!sideBySide) return [...list, '', ...pane];
   const blank = ' '.repeat(listWidth);
   return Array.from({ length: Math.max(list.length, pane.length) }, (_, i) => `${list[i] ?? blank} ${styled('│', 'muted', color)} ${pane[i] ?? ''}`);
@@ -449,112 +447,113 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       ...(notice && !showingSources ? notice.split('\n').flatMap(line => wordWrap(line, width)) : []),
       ...keycaps(hints, width, color),
     ].slice(0, Math.max(0, height - header.length - 3));
+    const progress = query.text.trim() ? 'Searching history…' : 'Finding local sessions…';
     const inner = Math.max(1, width - 2);
     const section = (title: string) => styled(title, 'title', color);
-    let body: string[] = [];
+    // A scrolling stage sets `rows`, all of its content, and `scroll`, its offset variable and the hint shown, at
+    // `at` in the footer, while the content is taller than the body. The list instead lays itself out for the body.
+    let rows: string[] = [];
     let footer: Hint[] = [];
-    // Fills body and footer for a body of `bodyRows` rows.
-    const fill = (bodyRows: number): void => {
-      pageRows = bodyRows;
-      if (showingSources) {
-        const lines = wrap(sourceNotices.length ? sourceNotices : ['No source warnings.'], width);
-        sourceOffset = Math.max(0, Math.min(sourceOffset, lines.length - bodyRows));
-        body = lines.slice(sourceOffset, sourceOffset + bodyRows);
-        footer = [...(lines.length > bodyRows ? [['↑↓', 'scroll'] as const] : []), ['Esc', 'back']];
-      } else if (stage === 'list') {
-        const progress = query.text.trim() ? 'Searching history…' : 'Finding local sessions…';
-        body = hits.length ? sessionList(hits, selected, query.text, width, bodyRows, detailLines, color, query.workspace)
-          : [styled(clipPanel(busy ? progress : 'No matching sessions. Clear the search or change scope.', width), 'muted', color)];
-        const back: Hint = parents.length ? ['←', 'back'] : ['Esc', 'quit'];
-        // Only keys that do something: with no results there is nothing to select or preview.
-        footer = hits.length ? selected < 0 ? [['↓', 'results'], back] : [['↑↓', 'select'], ['Enter', 'preview'], back]
-          : query.text ? [['Ctrl+U', 'clear search'], back] : [back];
-        if (busy) footer = hits.length ? [['↑↓', 'select'], ['Enter', 'open session'], back, ['', progress]] : [back];
-      } else if (stage === 'preview') {
-        const inputs = [picked, items, width, color, expandTools, query.text];
-        if (!blocks || inputs.some((input, index) => input !== blocks!.inputs[index])) blocks = { inputs, value: transcriptBlocks(picked!, items, width, color, expandTools, query.text) };
-        const head = sessionHeader(picked!, items, width, color, busy);
-        const rows = [...head, ...blocks.value.rows];
-        if (focusMatch && items.length) {
-          if (blocks.value.focus !== undefined) offset = head.length + blocks.value.focus;
-          focusMatch = false;
-        }
-        offset = Math.max(0, Math.min(offset, Math.max(0, rows.length - bodyRows)));
-        body = rows.slice(offset, offset + bodyRows);
-        footer = [['Enter', 'choose target'], ['Esc', 'back'], ...(rows.length > bodyRows ? [['↑↓ PgUp PgDn', 'scroll'] as const] : []),
-          ...(items.some(item => item.role === 'tool') ? [['T', `${expandTools ? 'hide' : 'show'} tool output`] as const] : [])];
-      } else if (stage === 'request' || stage === 'redaction') {
-        const value = stage === 'request' ? currentRequest : redactionInput;
-        body = [clipPanel(stage === 'request' ? 'Current request (sent separately from historical data):' : 'Literal redaction (replace every match before transfer retention):', width),
-          '', inputRow(value, width), '', ...keycaps([['Enter', 'save'], ['Esc', 'cancel']], width, color)];
-        footer = [['Backspace', 'edit'], ['Ctrl+U', 'clear']];
-      } else if (stage === 'workspace') {
-        body = [clipPanel('Explicit workspace override:', width), '',
-          pathInput ? inputRow(pathInput, width) : styled(clipPanel('Type an absolute or relative directory path', width), 'muted', color)];
-        footer = [['Enter', 'use this folder and prepare'], ['Esc', 'cancel override']];
-      } else if (stage === 'summary') {
-        const summary = prepared!.summary;
-        const included = summary.includedItemIds, omitted = summary.omittedItemIds;
-        const ids = (label: string, list: readonly string[]) => list.length ? indent(wordWrap(`${label}  ${list.join(', ')}`, inner)).map(row => styled(row, 'muted', color)) : [];
-        const rows = [
-          ...(summary.partialHistory ? [...wordWrap(summary.partialHistory, width).map(row => styled(row, 'warning', color)), ''] : []),
-          section('Continuation'),
-          ...indent([...pair('Mode', summary.mode === 'native-resume' ? 'native resume' : 'fresh handoff', inner, color),
-            ...pair('From', `${summary.source.agent}/${summary.source.nativeId}`, inner, color),
-            ...pair('To', summary.target, inner, color), ...pair('Workspace', summary.workspace, inner, color)]),
-          '', section('History'),
-          ...indent([`Included ${included.length} of ${included.length + omitted.length} items`, `Omitted ${omitted.length}`]),
-          ...ids('Included IDs', included), ...ids('Omitted IDs', omitted),
-          // The exact payload keeps its escaping and stays unstyled: it is the consented wire value.
-          ...(summary.previewLines?.length ? ['', styled('Exact payload', 'muted', color), ...wrap(summary.previewLines, width)] : []),
-        ];
-        // A long summary must remain inspectable before confirming.
-        offset = Math.max(0, Math.min(offset, Math.max(0, rows.length - bodyRows)));
-        body = rows.slice(offset, offset + bodyRows);
-        footer = [['Enter', 'confirm continuation'], ['Esc', 'back'], ...(rows.length > bodyRows ? [['↑↓', 'scroll'] as const] : [])];
-      } else {
-        const source = picked!;
-        const title = source.title.endsWith(` ${source.nativeId}`) ? `Session …${source.nativeId.slice(-8)}` : source.title;
-        const chosen = targets[target]!;
-        // The same rule as runtime preparation: the source's own agent resumes natively unless fresh is chosen.
-        const shown = outcome?.shown;
-        const selector = targets.map(agent => agent === chosen ? `[${agent}]` : agent).join('  ');
-        const lines = [
-          section('From'),
-          `  ${styled(source.agent, source.agent, color)}  ${clipPanel(title, Math.max(1, inner - source.agent.length - 2))}`,
-          '', section('To'),
-          `  ${cellCount(selector) > inner ? clipPanel(selector, inner)
-            : targets.map(agent => agent === chosen ? styled(`[${agent}]`, ['title', agent], color) : styled(agent, 'muted', color)).join('  ')}`,
-          ...(!options.outcome ? [] : !shown ? [`  ${styled(clipPanel('Checking what this target will do…', inner), 'muted', color)}`]
-            : indent(wordWrap(shown.text, inner).map(row => styled(row, shown.tone, color)))),
-          ...indent(keycaps([['← →', 'change target']], inner, color)),
-          '', section('Workspace'),
-          ...indent(panelWrap(`${choice!.path}${choice!.kind === 'override' ? ' (override)' : ''}`, inner)),
-          ...(options.compose ? [
-            '', section('Handoff'),
-            ...indent([...pair('Current request', currentRequest || '(empty)', inner, color),
-              ...pair('Redactions', redactions.length ? `${redactions.length} (${redactions.map(() => '•••').join(', ')})` : 'none', inner, color),
-              ...pair('Fresh context', fresh ? 'on' : 'off (automatic)', inner, color)]),
-          ] : []),
-        ];
-        offset = Math.max(0, Math.min(offset, lines.length - bodyRows));
-        body = lines.slice(offset, offset + bodyRows);
-        // Actions live in the footer so they stay visible on short terminals.
-        footer = [['Enter', 'review'], ['Esc', 'back'], ...(options.compose ? [['C', 'edit request'], ['X', 'redact'], ['F', 'toggle fresh']] as const : []),
-          ['W', 'change workspace'], ...(lines.length > bodyRows ? [['↑↓', 'scroll'] as const] : [])];
+    let scroll: { source: boolean; hint: Hint; at: number } | undefined;
+    if (showingSources) {
+      rows = wrap(sourceNotices.length ? sourceNotices : ['No source warnings.'], width);
+      footer = [['Esc', 'back']];
+      scroll = { source: true, hint: ['↑↓', 'scroll'], at: 0 };
+    } else if (stage === 'list') {
+      const back: Hint = parents.length ? ['←', 'back'] : ['Esc', 'quit'];
+      // Only keys that do something: with no results there is nothing to select or preview.
+      footer = hits.length ? selected < 0 ? [['↓', 'results'], back] : [['↑↓', 'select'], ['Enter', 'preview'], back]
+        : query.text ? [['Ctrl+U', 'clear search'], back] : [back];
+      if (busy) footer = hits.length ? [['↑↓', 'select'], ['Enter', 'open session'], back, ['', progress]] : [back];
+    } else if (stage === 'preview') {
+      const inputs = [picked, items, width, color, expandTools, query.text];
+      if (!blocks || inputs.some((input, index) => input !== blocks!.inputs[index])) blocks = { inputs, value: transcriptBlocks(picked!, items, width, color, expandTools, query.text) };
+      const head = sessionHeader(picked!, items, width, color, busy);
+      rows = [...head, ...blocks.value.rows];
+      if (focusMatch && items.length) {
+        if (blocks.value.focus !== undefined) offset = head.length + blocks.value.focus;
+        focusMatch = false;
       }
-      if (busy && !inList && !showingSources) footer = [['', 'Loading…'], ['Esc', 'back']];
-    };
-    // The footer wraps instead of dropping keys; its extra rows come out of the body, which is filled again. A second
-    // pass covers a scroll hint that appears because the body became shorter.
+      footer = [['Enter', 'choose target'], ['Esc', 'back'],
+        ...(items.some(item => item.role === 'tool') ? [['T', `${expandTools ? 'hide' : 'show'} tool output`] as const] : [])];
+      scroll = { source: false, hint: ['↑↓ PgUp PgDn', 'scroll'], at: 2 };
+    } else if (stage === 'request' || stage === 'redaction') {
+      const value = stage === 'request' ? currentRequest : redactionInput;
+      rows = [clipPanel(stage === 'request' ? 'Current request (sent separately from historical data):' : 'Literal redaction (replace every match before transfer retention):', width),
+        '', inputRow(value, width), '', ...keycaps([['Enter', 'save'], ['Esc', 'cancel']], width, color)];
+      footer = [['Backspace', 'edit'], ['Ctrl+U', 'clear']];
+    } else if (stage === 'workspace') {
+      rows = [clipPanel('Explicit workspace override:', width), '',
+        pathInput ? inputRow(pathInput, width) : styled(clipPanel('Type an absolute or relative directory path', width), 'muted', color)];
+      footer = [['Enter', 'use this folder and prepare'], ['Esc', 'cancel override']];
+    } else if (stage === 'summary') {
+      const summary = prepared!.summary;
+      const included = summary.includedItemIds, omitted = summary.omittedItemIds;
+      const ids = (label: string, list: readonly string[]) => list.length ? indent(wordWrap(`${label}  ${list.join(', ')}`, inner)).map(row => styled(row, 'muted', color)) : [];
+      // A long summary must remain inspectable before confirming.
+      rows = [
+        ...(summary.partialHistory ? [...wordWrap(summary.partialHistory, width).map(row => styled(row, 'warning', color)), ''] : []),
+        section('Continuation'),
+        ...indent([...pair('Mode', summary.mode === 'native-resume' ? 'native resume' : 'fresh handoff', inner, color),
+          ...pair('From', `${summary.source.agent}/${summary.source.nativeId}`, inner, color),
+          ...pair('To', summary.target, inner, color), ...pair('Workspace', summary.workspace, inner, color)]),
+        '', section('History'),
+        ...indent([`Included ${included.length} of ${included.length + omitted.length} items`, `Omitted ${omitted.length}`]),
+        ...ids('Included IDs', included), ...ids('Omitted IDs', omitted),
+        // The exact payload keeps its escaping and stays unstyled: it is the consented wire value.
+        ...(summary.previewLines?.length ? ['', styled('Exact payload', 'muted', color), ...wrap(summary.previewLines, width)] : []),
+      ];
+      footer = [['Enter', 'confirm continuation'], ['Esc', 'back']];
+      scroll = { source: false, hint: ['↑↓', 'scroll'], at: 2 };
+    } else {
+      const source = picked!;
+      const title = source.title.endsWith(` ${source.nativeId}`) ? `Session …${source.nativeId.slice(-8)}` : source.title;
+      const chosen = targets[target]!;
+      // The same rule as runtime preparation: the source's own agent resumes natively unless fresh is chosen.
+      const shown = outcome?.shown;
+      const selector = targets.map(agent => agent === chosen ? `[${agent}]` : agent).join('  ');
+      rows = [
+        section('From'),
+        `  ${styled(source.agent, source.agent, color)}  ${clipPanel(title, Math.max(1, inner - source.agent.length - 2))}`,
+        '', section('To'),
+        `  ${cellCount(selector) > inner ? clipPanel(selector, inner)
+          : targets.map(agent => agent === chosen ? styled(`[${agent}]`, ['title', agent], color) : styled(agent, 'muted', color)).join('  ')}`,
+        ...(!options.outcome ? [] : !shown ? [`  ${styled(clipPanel('Checking what this target will do…', inner), 'muted', color)}`]
+          : indent(wordWrap(shown.text, inner).map(row => styled(row, shown.tone, color)))),
+        ...indent(keycaps([['← →', 'change target']], inner, color)),
+        '', section('Workspace'),
+        ...indent(panelWrap(`${choice!.path}${choice!.kind === 'override' ? ' (override)' : ''}`, inner)),
+        ...(options.compose ? [
+          '', section('Handoff'),
+          ...indent([...pair('Current request', currentRequest || '(empty)', inner, color),
+            ...pair('Redactions', redactions.length ? `${redactions.length} (${redactions.map(() => '•••').join(', ')})` : 'none', inner, color),
+            ...pair('Fresh context', fresh ? 'on' : 'off (automatic)', inner, color)]),
+        ] : []),
+      ];
+      // Actions live in the footer so they stay visible on short terminals.
+      footer = [['Enter', 'review'], ['Esc', 'back'], ...(options.compose ? [['C', 'edit request'], ['X', 'redact'], ['F', 'toggle fresh']] as const : []),
+        ['W', 'change workspace']];
+      scroll = { source: false, hint: ['↑↓', 'scroll'], at: footer.length };
+    }
+    if (busy && !inList && !showingSources) footer = [['', 'Loading…'], ['Esc', 'back']];
+    // Key hints wrap rather than drop; their extra rows come out of the body. The scroll hint is added, and may take a
+    // row of its own, only when the content is taller than the body left without it.
     const most = Math.max(1, height - header.length - status.length - 2);
-    let bodyRows = most;
-    fill(bodyRows);
     let keys = keycaps(footer, width, color);
-    for (let pass = 0; pass < 2 && bodyRows !== Math.max(1, most - keys.length + 1); pass++) {
+    let bodyRows = Math.max(1, most - keys.length + 1);
+    if (scroll && !busy && rows.length > bodyRows) {
+      keys = keycaps([...footer.slice(0, scroll.at), scroll.hint, ...footer.slice(scroll.at)], width, color);
       bodyRows = Math.max(1, most - keys.length + 1);
-      fill(bodyRows);
-      keys = keycaps(footer, width, color);
+    }
+    pageRows = bodyRows;
+    let body = rows;
+    if (stage === 'list' && !showingSources) {
+      body = hits.length ? sessionList(hits, selected, query.text, width, bodyRows, detailLines, color, query.workspace)
+        : [styled(clipPanel(busy ? progress : 'No matching sessions. Clear the search or change scope.', width), 'muted', color)];
+    } else if (scroll) {
+      const top = Math.max(0, Math.min(scroll.source ? sourceOffset : offset, rows.length - bodyRows));
+      if (scroll.source) sourceOffset = top; else offset = top;
+      body = rows.slice(top, top + bodyRows);
     }
     const frame = [...header, ...body, '', ...keys, ...status].slice(0, height);
     output.write('\x1b[2J\x1b[H' + frame.map(line => line && ` ${line}`).join('\n'));
