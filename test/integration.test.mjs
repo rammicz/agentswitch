@@ -57,7 +57,8 @@ test('main sessions hide subagents until opened by parent or enabled with F3',as
  await writeRollout(f.codex,rollout(f.cwd,codexIds[3],[],spawn(codexIds[0],'Cedar')));
  await writeRollout(f.codex,rollout(f.other,codexIds[4],[],spawn(codexIds[0],'Willow')));
  await writeRollout(f.codex,rollout(f.cwd,codexIds[5],[],spawn(codexIds[9],'Orphan')));
- const [result]=pty(f,[...list,{send:'public source'},{wait:'Subagents  2'},
+ // The echo comes first: the initial list's details pane also shows 'Subagents  2', and Right opens subagents only once this query's results are listed.
+ const [result]=pty(f,[...list,{send:'public source'},{wait:'Search: public source'},{wait:'Subagents  2'},
   {send:'\x1b[C'},{wait:'Subagents of'},{wait:'Cedar (worker)'},
   {send:'\x1b[D'},{wait:'Search: public source'},{wait:'Subagents  2'},{send:'\x15'},{wait:'Enter preview'},
   {send:'\x1bOR'},{wait:'Orphan (worker)'},{wait:'F3 hide subagents'},{send:'\x03'}]);
