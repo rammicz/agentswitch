@@ -39,7 +39,8 @@ const noRowWider = (frames, columns) => { for (const row of frames.flat()) asser
 for (const [columns, rows] of [[40, 24], [80, 24], [100, 30]]) {
   test(`#37 demo at ${columns} columns: whole titles, whole words, working and visible keys, one session ID, other folders marked`, async () => {
     const frames = await demo(columns, rows, [{ wait: 'Opening request: Build' }, { send: '\x1b[B' }, { wait: 'Opening request: Preserve' },
-      { send: 'zzz' }, { wait: 'Search: zzz' }, { wait: 'No matching sessions' },
+      // The demo also searches folder paths; a long test folder can contain any letters, but not this '#'.
+      { send: 'none #37' }, { wait: 'Search: none #37' }, { wait: 'No matching sessions' },
       { send: '\x15\t' }, { wait: 'Scope: global' }, { wait: 'Fix Unicod' }, { wait: 'Enter preview' },
       { send: '\r' }, { wait: 'Enter choose target' }, { send: '\r' }, { wait: 'Enter review' }, { send: '\r' }, { wait: 'Enter confirm continuation' },
       { send: '\x1b' }, { wait: 'Enter review' }, { send: 'w' }, { wait: 'Explicit workspace override' }]);
@@ -83,6 +84,7 @@ for (const [columns, rows] of [[40, 24], [80, 24], [100, 30]]) {
     for (const key of ['Enter review', 'Esc back', 'W change workspace']) assert.ok(target.some(row => row.includes(key)), `${key}: ${JSON.stringify(target)}`);
     const summary = lastWith(frames, 'Enter confirm continuation');
     assert.ok(summary.includes('  From  codex/demo-codex'), JSON.stringify(summary));
-    assert.ok(!summary.some(row => row.includes('scroll') || row.includes('(demo-codex)')), JSON.stringify(summary));
+    // The summary holds the test folder's full path, which can make it scroll; tui.test.mjs covers its scroll hint.
+    assert.ok(!summary.some(row => row.includes('(demo-codex)')), JSON.stringify(summary));
   });
 }
