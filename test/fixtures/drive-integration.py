@@ -82,6 +82,8 @@ def main():
      previous=body();os.write(state['master'],b'\x1b[B');until(state,'Enter confirm continuation')
      current=body()
      if current==previous:break
+     # One ↓ moves the review screen by exactly one row; anything else would splice rows from different places.
+     if current[:-1]!=previous[1:]:raise Exception('Review screen did not scroll by one row:\n'+json.dumps({'before':previous,'after':current},indent=1))
      state['preview'].append(current[-1])
     else:raise Exception('Preview did not reach its final row')
    if 'assertLiveChild' in action:
