@@ -143,7 +143,9 @@ test('hostile public history is serialized as user data without executing comman
 const ctx = character => character.repeat(64);
 const wireBytes = value => Buffer.byteLength(JSON.stringify(value));
 const v1Item = item => ({ id: item.id, role: item.role, text: item.text, status: item.status });
-const emptyEnvelope = Buffer.byteLength(buildHandoff({ ...base, items: [] }).prompt);
+// Bytes of a prompt without history; the archive folder and current request are part of it.
+const emptyBytes = (overrides = {}) => Buffer.byteLength(buildHandoff({ ...base, ...overrides, items: [] }).prompt);
+const emptyEnvelope = emptyBytes();
 
 test('conversation turns outrank tool output; failed tools outrank passing ones; blank tool output is never sent', async t => {
   const items = [
@@ -159,11 +161,12 @@ test('conversation turns outrank tool output; failed tools outrank passing ones;
   ];
   // Room for every small item plus exactly one of the two 2000-character items, measured in v1 terms (the larger format).
   const small = ['u0', 'tf', 'ti', 'u1', 'a1'].map(id => wireBytes(v1Item(items.find(x => x.id === id))) + 1).reduce((a, b) => a + b, 0);
-  // The archive reference is part of the prompt, so the room is computed for the archive directory in use.
-  const budget = emptyBytes => emptyBytes + small + wireBytes(v1Item(items[1])) + 200;
-  const result = buildHandoff({ ...base, items, maxBytes: budget(emptyEnvelope) });
+  // The room is computed for the archive folder in use, since its reference is part of the prompt.
+  const maxBytesFor = overrides => emptyBytes(overrides) + small + wireBytes(v1Item(items[1])) + 200;
+  const omitted = ['ub', 't0', 'tb'];
+  const result = buildHandoff({ ...base, items, maxBytes: maxBytesFor() });
   assert.deepEqual(result.includedItemIds, ['u0', 'a0', 'tf', 'ti', 'u1', 'a1']);
-  assert.deepEqual(result.omittedItemIds, ['ub', 't0', 'tb']);
+  assert.deepEqual(result.omittedItemIds, omitted);
   const envelope = JSON.parse(result.prompt);
   assert.deepEqual(envelope.history.map(entry => entry.id), result.includedItemIds);
   assert.equal(envelope.history.find(entry => entry.id === 'ub'), undefined);
@@ -174,10 +177,11 @@ test('conversation turns outrank tool output; failed tools outrank passing ones;
   assert.equal(JSON.parse(full.prompt).history.find(entry => entry.id === 't0').text, 'T'.repeat(2000));
   // The archive keeps the excluded blank output, marked as not included.
   const directory = await temporary(t);
-  const emptyHere = Buffer.byteLength(buildHandoff({ ...base, archive: { ...archive, directory }, currentRequest: 'Continue.', items: [] }).prompt);
-  const prepared = await prepareHandoff({ directory, source, items, currentRequest: 'Continue.', maxBytes: budget(emptyHere) });
-  assert.deepEqual(prepared.omittedItemIds, ['ub', 't0', 'tb']);
-  assert.ok(Buffer.byteLength(prepared.prompt) <= budget(emptyHere));
+  const currentRequest = 'Continue.';
+  const maxBytes = maxBytesFor({ archive: { ...archive, directory }, currentRequest });
+  const prepared = await prepareHandoff({ directory, source, items, currentRequest, maxBytes });
+  assert.deepEqual(prepared.omittedItemIds, omitted);
+  assert.ok(Buffer.byteLength(prepared.prompt) <= maxBytes);
   const manifest = await listArchive({ ...prepared.archive, limit: 50 });
   assert.deepEqual(manifest.items.map(entry => [entry.id, entry.included]), items.map(x => [x.id, prepared.includedItemIds.includes(x.id)]));
   assert.equal(manifest.items.find(entry => entry.id === 'tb').included, false);
