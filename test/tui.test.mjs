@@ -452,3 +452,14 @@ test('#37 a short list gives the details its rows, and an excerpt the pane canno
  const shown=joined(rows.slice(0,footer-1),'Opening request').replace(/ …$/u,'');
  assert.ok(text.startsWith(shown)&&shown.length>100,JSON.stringify(rows));
 });
+test('#37 at 30 columns the target and request screens wrap their text and list every key',async()=>{
+ const p=await picker({...screens,rows:40,columns:30});await open(p);
+ const target=plainRows(await p.send('\r','Outcome for codex'));
+ for(const key of ['Enter review','Esc back','C edit request','X redact','F toggle fresh','W change workspace'])assert.ok(target.some(row=>row.includes(key)),`${key}: ${JSON.stringify(target)}`);
+ assert.ok(joined(target,'[codex]').replace(/ +/gu,' ').startsWith('[codex] claude opencode agy grok'),JSON.stringify(target));
+ assert.ok(joined(target,'codex  Fix').startsWith('codex  Fix the flaky upload test'),JSON.stringify(target));
+ const request=plainRows(await p.send('c','Backspace edit'));await p.stop();
+ assert.ok(joined(request,'Current request').startsWith('Current request (sent separately from historical data):'),JSON.stringify(request));
+ // The request input shows its end after …, where the typing is.
+ for(const row of [...target,...request])assert.ok(cells(row)<=28&&!row.replace(/^…|Checking what this target will do…/gu,'').includes('…'),JSON.stringify(row));
+});

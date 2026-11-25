@@ -194,9 +194,9 @@ function highlightRow(row: string, tone: Tone | undefined, pattern: RegExp | und
 function sessionHeader(source: SessionHit, items: readonly HistoryItem[], width: number, color: boolean, loading: boolean): string[] {
   const time = source.lastUsedAt ?? source.updatedAt;
   const counts = (['user', 'assistant', 'tool'] as const).map(role => `${items.filter(item => item.role === role).length} ${role}`);
-  const rows = [styled(clipPanel(source.title, width), 'title', color), ...[`Agent: ${source.agent}`, `Folder: ${compactPath(source.workspace, Math.max(1, width - 'Folder: '.length))}`,
+  const rows = [...wordWrap(source.title, width).map(row => styled(row, 'title', color)), ...[`Agent: ${source.agent}`, `Folder: ${compactPath(source.workspace, Math.max(1, width - 'Folder: '.length))}`,
     `Last used: ${lastUsed(time, Date.now())} (${exactTime(time)})`, `Session ID: ${source.nativeId}`,
-    [plural(items.length, 'item'), ...counts].join(' · ')].map(label => styled(clipPanel(label, width), 'muted', color))];
+    [plural(items.length, 'item'), ...counts].join(' · ')].flatMap(label => wordWrap(label, width).map(row => styled(row, 'muted', color)))];
   if (!items.length && !loading) rows.push('', ...wordWrap('No readable conversation in this session (metadata only).', width).map(row => styled(row, 'muted', color)));
   return rows;
 }
@@ -268,14 +268,15 @@ function sessionList(hits: readonly SessionHit[], selected: number, text: string
   }
   // Side by side, the list widens to fit its rows while the details pane keeps at least 40 cells.
   const least = Math.floor(width * 0.43);
-  const listWidth = sideBySide ? Math.min(Math.max(least, width - 43), Math.max(least, needed.width)) : width;
+  // Stacked, it ends after its widest row, so the age stays near the title.
+  const listWidth = sideBySide ? Math.min(Math.max(least, width - 43), Math.max(least, needed.width)) : Math.min(width, needed.width);
   const detailWidth = sideBySide ? width - listWidth - 3 : width;
   const start = Math.max(0, selected - listRows + 1);
   // Each row fills listWidth: marker, agent, title, then the age right-aligned.
   const list = hits.slice(start, start + listRows).map((hit, i) => {
     const chosen = start + i === selected;
     const paint = (part: string, ...tones: Tone[]) => styled(part, chosen ? ['selectedBg', ...tones] : tones, color);
-    const age = listWidth >= 25 ? ageOf(hit) : '';
+    const age = width >= 25 ? ageOf(hit) : '';
     const marker = chosen ? '›' : hit.subagent ? '↳' : ' ';
     const children = childrenOf(hit);
     const prefix = prefixOf(hit, marker);
@@ -427,14 +428,14 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     const sourceNotices = options.notices?.() ?? [];
     const parent = parents.at(-1);
     const searchFocused = selected < 0 || !hits.length;
-    const heading = styled(clipPanel(showingSources ? 'Source status' : stage === 'target' ? 'Choose target'
-      : inList && parent ? `Subagents of ${parent.title}` : options.label ?? 'agentswitch', width), 'heading', color);
+    const heading = wordWrap(showingSources ? 'Source status' : stage === 'target' ? 'Choose target'
+      : inList && parent ? `Subagents of ${parent.title}` : options.label ?? 'agentswitch', width).map(row => styled(row, 'heading', color));
     // Every row below is built to fit `width` and escaped by its stage; the frame only adds the margin.
-    let header = [heading, ''];
+    let header = [...heading, ''];
     if (inList) {
       const prompt = `${searchFocused ? '›' : ' '} Search: `;
       const search = prompt + (query.text ? inputRow(query.text, Math.max(1, width - prompt.length)) : 'type to search history…');
-      header = [heading, ...keycaps(parent ? [['←', 'Back to parent']] : [['Shift+←/→', `Agent: ${query.agent}`], ['Tab', `Scope: ${query.scope}`]], width, color),
+      header = [...heading, ...keycaps(parent ? [['←', 'Back to parent']] : [['Shift+←/→', `Agent: ${query.agent}`], ['Tab', `Scope: ${query.scope}`]], width, color),
         '', searchFocused ? styled(clipPanel(search, width), 'selectedBg', color) : clipPanel(search, width), ''];
     }
     const hints: Hint[] = inList ? [
@@ -479,12 +480,12 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       scroll = { source: false, hint: ['↑↓ PgUp PgDn', 'scroll'], at: 2 };
     } else if (stage === 'request' || stage === 'redaction') {
       const value = stage === 'request' ? currentRequest : redactionInput;
-      rows = [clipPanel(stage === 'request' ? 'Current request (sent separately from historical data):' : 'Literal redaction (replace every match before transfer retention):', width),
+      rows = [...wordWrap(stage === 'request' ? 'Current request (sent separately from historical data):' : 'Literal redaction (replace every match before transfer retention):', width),
         '', inputRow(value, width), '', ...keycaps([['Enter', 'save'], ['Esc', 'cancel']], width, color)];
       footer = [['Backspace', 'edit'], ['Ctrl+U', 'clear']];
     } else if (stage === 'workspace') {
-      rows = [clipPanel('Explicit workspace override:', width), '',
-        pathInput ? inputRow(pathInput, width) : styled(clipPanel('Type an absolute or relative directory path', width), 'muted', color)];
+      rows = [...wordWrap('Explicit workspace override:', width), '',
+        ...(pathInput ? [inputRow(pathInput, width)] : wordWrap('Type an absolute or relative directory path', width).map(row => styled(row, 'muted', color)))];
       footer = [['Enter', 'use this folder and prepare'], ['Esc', 'cancel override']];
     } else if (stage === 'summary') {
       const summary = prepared!.summary;
@@ -514,11 +515,11 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       const selector = targets.map(agent => agent === chosen ? `[${agent}]` : agent).join('  ');
       rows = [
         section('From'),
-        `  ${styled(source.agent, source.agent, color)}  ${clipPanel(title, Math.max(1, inner - source.agent.length - 2))}`,
+        ...indent(wordWrap(`${source.agent}  ${title}`, inner).map((row, index) => index ? row : styled(source.agent, source.agent, color) + row.slice(source.agent.length))),
         '', section('To'),
-        `  ${cellCount(selector) > inner ? clipPanel(selector, inner)
-          : targets.map(agent => agent === chosen ? styled(`[${agent}]`, ['title', agent], color) : styled(agent, 'muted', color)).join('  ')}`,
-        ...(!options.outcome ? [] : !shown ? [`  ${styled(clipPanel('Checking what this target will do…', inner), 'muted', color)}`]
+        // Targets that do not fit on one row continue on the next; each keeps its colour.
+        ...indent(wordWrap(selector, inner).map(row => row.split('  ').map(name => name === `[${chosen}]` ? styled(name, ['title', chosen], color) : styled(name, 'muted', color)).join('  '))),
+        ...(!options.outcome ? [] : !shown ? indent(wordWrap('Checking what this target will do…', inner).map(row => styled(row, 'muted', color)))
           : indent(wordWrap(shown.text, inner).map(row => styled(row, shown.tone, color)))),
         ...indent(keycaps([['← →', 'change target']], inner, color)),
         '', section('Workspace'),
@@ -549,7 +550,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     let body = rows;
     if (stage === 'list' && !showingSources) {
       body = hits.length ? sessionList(hits, selected, query.text, width, bodyRows, detailLines, color, query.workspace)
-        : [styled(clipPanel(busy ? progress : 'No matching sessions. Clear the search or change scope.', width), 'muted', color)];
+        : wordWrap(busy ? progress : 'No matching sessions. Clear the search or change scope.', width).map(row => styled(row, 'muted', color));
     } else if (scroll) {
       const top = Math.max(0, Math.min(scroll.source ? sourceOffset : offset, rows.length - bodyRows));
       if (scroll.source) sourceOffset = top; else offset = top;

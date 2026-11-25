@@ -24,6 +24,8 @@ async function demo(columns, rows, actions) {
   return output.split('\x1b[2J\x1b[H').slice(1).map(frame => frame.split(/\r?\n/).map(row => row.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '').slice(1).trimEnd()));
 }
 const lastWith = (frames, text) => frames.findLast(rows => rows.some(row => row.includes(text)));
+// Rows from the one holding `first` on, joined by spaces as word-wrapped rows read.
+const joined = (rows, first) => rows.slice(rows.findIndex(row => row.includes(first))).join(' ');
 // The details text from the excerpt to the end of the pane, its rows joined by spaces: a word cut across rows breaks it.
 function excerptText(rows) {
   const start = rows.findIndex(row => row.includes('Opening request:'));
@@ -39,8 +41,15 @@ for (const [columns, rows] of [[40, 24], [80, 24], [100, 30]]) {
     const frames = await demo(columns, rows, [{ wait: 'Opening request: Build' }, { send: '\x1b[B' }, { wait: 'Opening request: Preserve' },
       { send: 'zzz' }, { wait: 'Search: zzz' }, { wait: 'No matching sessions' },
       { send: '\x15\t' }, { wait: 'Scope: global' }, { wait: 'Fix Unicod' }, { wait: 'Enter preview' },
-      { send: '\r' }, { wait: 'Enter choose target' }, { send: '\r' }, { wait: 'Enter review' }, { send: '\r' }, { wait: 'Enter confirm continuation' }]);
+      { send: '\r' }, { wait: 'Enter choose target' }, { send: '\r' }, { wait: 'Enter review' }, { send: '\r' }, { wait: 'Enter confirm continuation' },
+      { send: '\x1b' }, { wait: 'Enter review' }, { send: 'w' }, { wait: 'Explicit workspace override' }]);
     noRowWider(frames, columns);
+    // Text wraps instead of being cut. Only a one-row result and the one-row folder are shortened with …; the other …
+    // belong to the search placeholder and progress messages.
+    for (const part of frames.flat().flatMap(row => row.split(' │ '))) {
+      if (/^[›↳ ] (codex|claude) |^Folder:? /u.test(part)) continue;
+      assert.ok(!part.replace(/(type to search history|Finding local sessions|Searching history|Loading)…/gu, '').includes('…'), JSON.stringify(part));
+    }
     for (const [title, excerpt] of [['Finish the session picker', 'Opening request: Build a quiet session picker with keyboard navigation.'],
       ['Investigate context handoff', 'Opening request: Preserve constraints and show omitted history during transfer.']]) {
       const screen = lastWith(frames, excerpt.slice(0, 22));
@@ -57,6 +66,8 @@ for (const [columns, rows] of [[40, 24], [80, 24], [100, 30]]) {
       if (divider) assert.ok(columns - 2 - (Array.from(divider).indexOf('│') + 2) >= 40, divider);
     }
     const empty = lastWith(frames, 'No matching sessions');
+    assert.ok(joined(empty, 'No matching sessions').startsWith('No matching sessions. Clear the search or change scope.'), JSON.stringify(empty));
+    assert.ok(joined(empty, 'agentswitch').startsWith('agentswitch / DEMO — synthetic sessions'), JSON.stringify(empty));
     assert.equal(empty.find(row => row.endsWith('Esc quit')), 'Ctrl+U clear search  Esc quit', JSON.stringify(empty));
     assert.ok(!empty.some(row => /Enter preview|↑↓ select/.test(row)), JSON.stringify(empty));
     // Global scope: only the result from another folder names that folder in its row.
@@ -66,6 +77,7 @@ for (const [columns, rows] of [[40, 24], [80, 24], [100, 30]]) {
     assert.ok(global.filter(row => /^. (codex|claude) /u.test(row) && row.includes('another')).length === 1, JSON.stringify(global));
     // Short screens offer no scrolling.
     const preview = lastWith(frames, 'Enter choose target');
+    for (const text of ['Last used: 4d ago (2026-11-21 10:00 UTC)', '2 items · 1 user · 1 assistant · 0 tool']) assert.ok(joined(preview, text.slice(0, 10)).startsWith(text), JSON.stringify(preview));
     assert.ok(!preview.some(row => row.includes('scroll')), JSON.stringify(preview));
     const target = lastWith(frames, 'Enter review');
     for (const key of ['Enter review', 'Esc back', 'W change workspace']) assert.ok(target.some(row => row.includes(key)), `${key}: ${JSON.stringify(target)}`);
