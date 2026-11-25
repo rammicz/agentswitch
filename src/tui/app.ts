@@ -78,6 +78,9 @@ function wordWrap(text: string, width: number): string[] {
   }
   return [...rows, row.trimEnd()];
 }
+/** Prose wrapped between words, every row in one tone. */
+const prose = (text: string, width: number, tone: Tone | readonly Tone[], color: boolean): string[] =>
+  wordWrap(text, width).map(row => styled(row, tone, color));
 function clipPanel(text: string, width: number): string {
   const lines = panelWrap(text, width);
   return lines.length === 1 ? lines[0]! : `${panelWrap(lines[0]!, width - 1)[0]!.trimEnd()}…`;
@@ -194,10 +197,10 @@ function highlightRow(row: string, tone: Tone | undefined, pattern: RegExp | und
 function sessionHeader(source: SessionHit, items: readonly HistoryItem[], width: number, color: boolean, loading: boolean): string[] {
   const time = source.lastUsedAt ?? source.updatedAt;
   const counts = (['user', 'assistant', 'tool'] as const).map(role => `${items.filter(item => item.role === role).length} ${role}`);
-  const rows = [...wordWrap(source.title, width).map(row => styled(row, 'title', color)), ...[`Agent: ${source.agent}`, `Folder: ${compactPath(source.workspace, Math.max(1, width - 'Folder: '.length))}`,
+  const rows = [...prose(source.title, width, 'title', color), ...[`Agent: ${source.agent}`, `Folder: ${compactPath(source.workspace, Math.max(1, width - 'Folder: '.length))}`,
     `Last used: ${lastUsed(time, Date.now())} (${exactTime(time)})`, `Session ID: ${source.nativeId}`,
-    [plural(items.length, 'item'), ...counts].join(' · ')].flatMap(label => wordWrap(label, width).map(row => styled(row, 'muted', color)))];
-  if (!items.length && !loading) rows.push('', ...wordWrap('No readable conversation in this session (metadata only).', width).map(row => styled(row, 'muted', color)));
+    [plural(items.length, 'item'), ...counts].join(' · ')].flatMap(label => prose(label, width, 'muted', color))];
+  if (!items.length && !loading) rows.push('', ...prose('No readable conversation in this session (metadata only).', width, 'muted', color));
   return rows;
 }
 /**
@@ -428,8 +431,8 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     const sourceNotices = options.notices?.() ?? [];
     const parent = parents.at(-1);
     const searchFocused = selected < 0 || !hits.length;
-    const heading = wordWrap(showingSources ? 'Source status' : stage === 'target' ? 'Choose target'
-      : inList && parent ? `Subagents of ${parent.title}` : options.label ?? 'agentswitch', width).map(row => styled(row, 'heading', color));
+    const heading = prose(showingSources ? 'Source status' : stage === 'target' ? 'Choose target'
+      : inList && parent ? `Subagents of ${parent.title}` : options.label ?? 'agentswitch', width, 'heading', color);
     // Every row below is built to fit `width` and escaped by its stage; the frame only adds the margin.
     let header = [...heading, ''];
     if (inList) {
@@ -485,7 +488,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       footer = [['Backspace', 'edit'], ['Ctrl+U', 'clear']];
     } else if (stage === 'workspace') {
       rows = [...wordWrap('Explicit workspace override:', width), '',
-        ...(pathInput ? [inputRow(pathInput, width)] : wordWrap('Type an absolute or relative directory path', width).map(row => styled(row, 'muted', color)))];
+        ...(pathInput ? [inputRow(pathInput, width)] : prose('Type an absolute or relative directory path', width, 'muted', color))];
       footer = [['Enter', 'use this folder and prepare'], ['Esc', 'cancel override']];
     } else if (stage === 'summary') {
       const summary = prepared!.summary;
@@ -493,7 +496,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
       const ids = (label: string, list: readonly string[]) => list.length ? indent(wordWrap(`${label}  ${list.join(', ')}`, inner)).map(row => styled(row, 'muted', color)) : [];
       // A long summary must remain inspectable before confirming.
       rows = [
-        ...(summary.partialHistory ? [...wordWrap(summary.partialHistory, width).map(row => styled(row, 'warning', color)), ''] : []),
+        ...(summary.partialHistory ? [...prose(summary.partialHistory, width, 'warning', color), ''] : []),
         section('Continuation'),
         ...indent([...pair('Mode', summary.mode === 'native-resume' ? 'native resume' : 'fresh handoff', inner, color),
           ...pair('From', `${summary.source.agent}/${summary.source.nativeId}`, inner, color),
@@ -519,8 +522,8 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
         '', section('To'),
         // Targets that do not fit on one row continue on the next; each keeps its colour.
         ...indent(wordWrap(selector, inner).map(row => row.split('  ').map(name => name === `[${chosen}]` ? styled(name, ['title', chosen], color) : styled(name, 'muted', color)).join('  '))),
-        ...(!options.outcome ? [] : !shown ? indent(wordWrap('Checking what this target will do…', inner).map(row => styled(row, 'muted', color)))
-          : indent(wordWrap(shown.text, inner).map(row => styled(row, shown.tone, color)))),
+        ...(!options.outcome ? [] : !shown ? indent(prose('Checking what this target will do…', inner, 'muted', color))
+          : indent(prose(shown.text, inner, shown.tone, color))),
         ...indent(keycaps([['← →', 'change target']], inner, color)),
         '', section('Workspace'),
         ...indent(panelWrap(`${choice!.path}${choice!.kind === 'override' ? ' (override)' : ''}`, inner)),
@@ -550,7 +553,7 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
     let body = rows;
     if (stage === 'list' && !showingSources) {
       body = hits.length ? sessionList(hits, selected, query.text, width, bodyRows, detailLines, color, query.workspace)
-        : wordWrap(busy ? progress : 'No matching sessions. Clear the search or change scope.', width).map(row => styled(row, 'muted', color));
+        : prose(busy ? progress : 'No matching sessions. Clear the search or change scope.', width, 'muted', color);
     } else if (scroll) {
       const top = Math.max(0, Math.min(scroll.source ? sourceOffset : offset, rows.length - bodyRows));
       if (scroll.source) sourceOffset = top; else offset = top;
