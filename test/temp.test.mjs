@@ -33,28 +33,39 @@ test('the test runner fails when a run leaves agentswitch directories and remove
 });
 
 const posix = { skip: process.platform === 'win32' && 'POSIX signals', timeout: 120_000 };
-// Starts the runner, waits until `ready()` returns a PID, interrupts the run and reports how it ended.
-async function interrupt(root, args, extra, ready, signal = 'SIGTERM') {
-  let stderr = '';
-  const runner = spawn(process.execPath, ['scripts/test.mjs', ...args], { stdio: ['ignore', 'ignore', 'pipe'], env: environment(root, extra) });
-  runner.stderr.on('data', data => { stderr += data; });
-  const exited = new Promise(resolve => runner.on('close', (code, signal) => resolve({ code, signal })));
+// Starts the runner, waits until `ready()` returns a PID, interrupts the run and reports how it ended. A run that ends
+// first, a failing `ready()` and the test's timeout stop the wait, so a broken run cannot keep the test file alive.
+async function interrupt(t, root, args, extra, ready, signal = 'SIGTERM') {
+  let stderr = '', output = '', ended = false;
+  const runner = spawn(process.execPath, ['scripts/test.mjs', ...args], { stdio: ['ignore', 'pipe', 'pipe'], env: environment(root, extra) });
+  runner.stdout.on('data', data => { output += data; });
+  runner.stderr.on('data', data => { stderr += data; output += data; });
+  const exited = new Promise(resolve => runner.on('close', (code, signal) => { ended = true; resolve({ code, signal }); }));
   let pid;
-  while (!(pid = ready())) await delay(20);
+  try {
+    while (!(pid = ready())) {
+      if (ended) assert.fail(`The run ended before it was ready:\n${output.slice(-4000)}`);
+      await delay(20, undefined, { signal: t.signal });
+    }
+  } catch (error) {
+    runner.kill(signal);
+    await exited;
+    throw error;
+  }
   runner.kill(signal);
   return { ...await exited, stderr, pid };
 }
 const stopped = async pid => { for (let i = 0; i < 100 && alive(pid); i++) await delay(50); return !alive(pid); };
 
-test('an interrupted run stops its test processes and removes its temp root', posix, async () => {
+test('an interrupted run stops its test processes and removes its temp root', posix, async (t) => {
   const root = tempDir('agentswitch-temp-signal-'), ready = join(tempDir('agentswitch-temp-ready-'), 'pid');
-  const run = await interrupt(root, ['test/fixtures/temp/hang.mjs'], { HANG_READY: ready }, () => existsSync(ready) && Number(readFileSync(ready, 'utf8')));
+  const run = await interrupt(t, root, ['test/fixtures/temp/hang.mjs'], { HANG_READY: ready }, () => existsSync(ready) && Number(readFileSync(ready, 'utf8')));
   assert.deepEqual([run.code, run.signal], [143, null]);
   assert.deepEqual(await readdir(root), []);
   assert.equal(await stopped(run.pid), true, 'the test process tree is stopped');
 });
 
-test('an interrupted PTY crash test leaves no live provider child and no temp root', posix, async () => {
+test('an interrupted PTY crash test leaves no live provider child and no temp root', posix, async (t) => {
   const root = tempDir('agentswitch-temp-pty-');
   // The fake provider writes its heartbeat into the crash test's directory under the run root.
   const heartbeat = () => {
@@ -65,16 +76,16 @@ test('an interrupted PTY crash test leaves no live provider child and no temp ro
     } catch {}
   };
   for (const signal of ['SIGTERM', 'SIGINT']) {
-    const run = await interrupt(root, ['--test-name-pattern', 'wrapper death after READY \\(committed-first\\)', 'test/integration.test.mjs'], {}, heartbeat, signal);
+    const run = await interrupt(t, root, ['--test-name-pattern', 'wrapper death after READY \\(committed-first\\)', 'test/integration.test.mjs'], {}, heartbeat, signal);
     assert.deepEqual([run.code, run.signal], [128 + constants.signals[signal], null], run.stderr);
     assert.equal(await stopped(run.pid), true, 'the provider child is stopped');
     assert.deepEqual(await readdir(root), []);
   }
 });
 
-test('a run root that cannot be removed is left to the next run without failing the interrupted run', { ...posix, skip: posix.skip || (process.getuid?.() === 0 && 'root ignores permissions') }, async () => {
+test('a run root that cannot be removed is left to the next run without failing the interrupted run', { ...posix, skip: posix.skip || (process.getuid?.() === 0 && 'root ignores permissions') }, async (t) => {
   const root = tempDir('agentswitch-temp-locked-'), ready = join(tempDir('agentswitch-temp-ready-'), 'pid');
-  const result = await interrupt(root, ['test/fixtures/temp/hang.mjs'], { HANG_READY: ready, HANG_LOCK: '1' }, () => existsSync(ready) && Number(readFileSync(ready, 'utf8')));
+  const result = await interrupt(t, root, ['test/fixtures/temp/hang.mjs'], { HANG_READY: ready, HANG_LOCK: '1' }, () => existsSync(ready) && Number(readFileSync(ready, 'utf8')));
   assert.deepEqual([result.code, result.signal], [143, null]);
   assert.match(result.stderr, /Could not remove .*agentswitch-test-run-\d+-\w{6}; the next test run removes it\./);
   assert.equal(await stopped(result.pid), true, 'the test process tree is stopped');
@@ -91,4 +102,32 @@ test('a run removes run roots left by runners that no longer exist, and nothing 
   for (const name of [`agentswitch-test-run-${dead}-AbC123`, ...kept]) mkdirSync(join(root, name));
   run(root, ['scripts/test.mjs', 'test/fixtures/temp/leak.mjs']);
   assert.deepEqual((await readdir(root)).sort(), kept.sort());
+});
+
+test('a run that ends before its interrupt point fails the waiting test instead of keeping it alive', posix, async (t) => {
+  const root = tempDir('agentswitch-temp-early-');
+  await assert.rejects(interrupt(t, root, ['test/fixtures/temp/leak.mjs'], {}, () => undefined),
+    /The run ended before it was ready:\n[\s\S]*left 1 temporary directory/);
+  assert.deepEqual(await readdir(root), []);
+});
+
+test('a run leaves the root and test directories of a concurrent live run alone', posix, async (t) => {
+  const root = tempDir('agentswitch-temp-concurrent-'), ready = join(tempDir('agentswitch-temp-ready-'), 'pid');
+  let during;
+  const first = await interrupt(t, root, ['test/fixtures/temp/hang.mjs'], { HANG_READY: ready }, () => {
+    if (!existsSync(ready)) return;
+    const [live] = readdirSync(root), tests = () => readdirSync(join(root, live));
+    const before = tests();
+    // The second run sweeps the same temporary directory, runs a leaking test and removes only its own root.
+    const second = run(root, ['scripts/test.mjs', 'test/fixtures/temp/leak.mjs']);
+    during = { status: second.status, roots: readdirSync(root), tests: tests(), before, live };
+    return Number(readFileSync(ready, 'utf8'));
+  });
+  assert.equal(during.status, 1);
+  assert.deepEqual(during.roots, [during.live]);
+  assert.deepEqual(during.tests, during.before);
+  assert.match(during.before.join(), /agentswitch-hang-/);
+  assert.deepEqual([first.code, first.signal], [143, null]);
+  assert.deepEqual(await readdir(root), []);
+  assert.equal(await stopped(first.pid), true, 'the first run\'s test process tree is stopped');
 });
