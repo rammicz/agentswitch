@@ -92,9 +92,10 @@ process.once('beforeExit', () => {
 await import(${JSON.stringify(pathToFileURL(cli).href)});
 `);
   try {
-    driver([{ wait: 'Enter preview' }, { send: 'Windows fixture' }, { wait: 'Enter preview' }, { send: '\r' },
-      { wait: 'Enter choose target' }, { send: '\r' }, { wait: 'Target: codex' },
-      { send: '\x1b[C' }, { wait: 'Target: claude' }, { send: '\r' }, { wait: 'Enter confirm continuation' },
+    // Waits match visible text (the driver drops colour); the query echo shows the typed text reached the search.
+    driver([{ wait: 'Enter preview' }, { send: 'Windows fixture' }, { wait: 'Search: Windows fixture' }, { wait: 'Enter preview' }, { send: '\r' },
+      { wait: 'Enter choose target' }, { send: '\r' }, { wait: '[codex]' },
+      { send: '\x1b[C' }, { wait: '[claude]' }, { send: '\r' }, { wait: 'Enter confirm continuation' },
       { send: '\r' }, { wait: 'READY' }, { send: 'quit\r' }, { wait: 'uncertain' }, { wait: 'CONSOLE_RESTORED' }],
       [process.execPath, runner]);
   } catch (error) {

@@ -10,6 +10,9 @@ import threading
 import time
 import msvcrt
 
+sys.dont_write_bytecode = True  # Importing the helper must not leave a __pycache__ in the checkout.
+from console_text import visible
+
 kernel = c.WinDLL("kernel32", use_last_error=True)
 
 def bind(name, result, *args):
@@ -104,9 +107,10 @@ def run(config):
             if "send" in action:
                 os.write(input_fd, action["send"].encode())
                 continue
-            expected = action["wait"].encode()
+            # Waits match the visible text; cursor is a position in it.
+            expected = action["wait"]
             deadline = time.monotonic() + 18
-            while (found := output.find(expected, cursor)) < 0:
+            while (found := visible(output.decode(errors="replace")).find(expected, cursor)) < 0:
                 if time.monotonic() >= deadline:
                     raise TimeoutError((action, output.decode(errors="replace")))
                 try:

@@ -112,4 +112,27 @@ class IntegrationCleanupTest(unittest.TestCase):
   with patch.object(integration.os,'getpgid',side_effect=ProcessLookupError),patch.object(integration.os,'kill') as kill:
    integration.cleanup_processes(self.state());kill.assert_not_called()
 
+from console_text import visible
+
+class ConsoleTextTest(unittest.TestCase):
+ # Output captured from the Windows ConPTY smoke run of the #17 list screen (CI, 8dc35ac).
+ captured=('\x1b]0;Administrator: Windows PowerShell\x07\x1b[?25l\x1b[2J\x1b[H \x1b[38;2;215;119;87m\x1b[1magentswitch / local native sessions\x1b[m\x1b[K\r\n'
+  ' \x1b[38;2;215;119;87m\x1b[48;2;52;52;66m> \x1b[38;2;125;174;250mcodex  \x1b[39mWindows fixture\x1b[18X\x1b[38;2;150;150;162m\x1b[18Cjust now\x1b[m\r\n'
+  ' \x1b[38;2;215;119;87m\x1b[1m\u2191\u2193\x1b[38;2;150;150;162m\x1b[22m select  \x1b[38;2;215;119;87m\x1b[1mEnter\x1b[38;2;150;150;162m\x1b[22m preview  '
+  '\x1b[38;2;215;119;87m\x1b[1mEsc\x1b[38;2;150;150;162m\x1b[22m quit\x1b[K\x1b[m\r\n')
+
+ def test_colour_erase_and_title_sequences_leave_the_visible_text(self):
+  text=visible(self.captured)
+  self.assertNotIn('Enter preview',self.captured)
+  self.assertIn('\u2191\u2193 select  Enter preview  Esc quit\r\n',text)
+  self.assertIn('agentswitch / local native sessions\r\n',text)
+  self.assertNotIn('Windows PowerShell',text)
+
+ def test_cursor_forward_becomes_the_spaces_it_skips(self):
+  self.assertIn('Windows fixture'+' '*18+'just now',visible(self.captured))
+  self.assertEqual(visible('a\x1b[Cb'),'a b')
+
+ def test_other_cursor_sequences_are_kept(self):
+  self.assertEqual(visible('\x1b[2J\x1b[H\x1b[?25lx'),'\x1b[2J\x1b[H\x1b[?25lx')
+
 if __name__ == '__main__': unittest.main()
