@@ -68,7 +68,8 @@ test('main sessions hide subagents until opened by parent or enabled with F3',as
 
 for(const [source,target]of [['codex','claude'],['claude','codex']]) test(`real CLI ${source}→${target}: exact consented redacted payload, cwd, disclosure and unchanged native bytes`,async()=>{
  const f=await setup(target);
- const actions=[...list,...select(source),...(target==='claude'?[{send:'\u001b[C'},{wait:'[claude]'}]:[]),...request,...redact,...finish];
+ // The review screen is scrolled to its end: a long archive folder makes the exact prompt taller than the screen.
+ const actions=[...list,...select(source),...(target==='claude'?[{send:'\u001b[C'},{wait:'[claude]'}]:[]),...request,...redact,...finish.slice(0,2),{collectPreview:true},...finish.slice(2)];
  const [result]=pty(f,actions);
  assert.equal(result.code,0);assert.equal(result.restored,true);assert.equal(result.sampledWhileAlive,true);
  assert.match(result.output,/under its own account and data policies/);
@@ -76,8 +77,9 @@ for(const [source,target]of [['codex','claude'],['claude','codex']]) test(`real 
  assert.equal(launch.cwd,await realpath(f.cwd));assert.deepEqual(launch.tty,[true,true,true]);
  const prompt=launch.args.at(-1);const parsed=JSON.parse(prompt);
  assert.equal(parsed.currentRequest,'Do next [REDACTED]');assert.equal(parsed.history.length,2);assert.match(parsed.history[0].text,/\[REDACTED\]/);assert.doesNotMatch(prompt,/NEEDLE_SECRET/);
- // With a tall PTY the compact exact JSON prompt is on the final preview screen.
- assert.ok(result.output.replace(/\r?\n /g,'').includes(JSON.stringify(prompt)),'target receives the exact previewed JSON');
+ const begin=result.preview.indexOf('BEGIN EXACT PROMPT JSON STRING'),end=result.preview.indexOf('END EXACT PROMPT JSON STRING');
+ assert.ok(begin>=0&&end>begin,'the review screen shows the whole encoded prompt');
+ assert.equal(JSON.parse(result.preview.slice(begin+1,end).join('')),prompt,'target receives the exact previewed JSON');
  assert.deepEqual(await Promise.all(f.files.map(hash)),f.before);
  const records=JSON.parse(spawnSync(process.execPath,[join(repo,'dist/cli.js'),'transfers','list'],{env:{...process.env,...f.env},encoding:'utf8'}).stdout);
  assert.equal(records.length,1);assert.equal(records[0].state,'uncertain');assert.equal(records[0].targetNativeId,null);assert.equal(records[0].writer,'stopped');

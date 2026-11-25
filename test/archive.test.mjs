@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdir, writeFile, readFile, readdir, symlink, stat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { publishArchive, listArchive, readArchiveItem, deleteArchive } from '../dist/archive.js';
-import { prepareHandoff } from '../dist/handoff.js';
+import { buildHandoff, prepareHandoff } from '../dist/handoff.js';
 import { tempDir } from './fixtures/temp.mjs';
 
 const source = { agent: 'claude', id: 'session', nativeId: 'native' };
@@ -16,7 +16,10 @@ const flags = ref => ['--directory', ref.directory, '--archive', ref.id];
 
 test('fresh CLI processes retrieve all omitted text with bounded UTF-8 pages and delete references', async t => {
   const { directory } = await temporary(t);
-  const prepared = await prepareHandoff({ directory, source, items: snapshot.items, currentRequest: 'continue', maxBytes: 1800, completeness: 'partial' });
+  const input = { source, currentRequest: 'continue', completeness: 'partial' };
+  // The archive reference is part of the prompt, so the budget is the empty prompt for this folder plus room the item does not fit in.
+  const empty = buildHandoff({ ...input, archive: { directory, id: '11111111-1111-4111-8111-111111111111' }, items: [] }).prompt;
+  const prepared = await prepareHandoff({ directory, ...input, items: snapshot.items, maxBytes: Buffer.byteLength(empty) + 600 });
   const ref = prepared.archive;
   const manifest = cli('list', ...flags(ref), '--max-bytes', '512', '--limit', '1');
   assert.equal(manifest.status, 0, manifest.stderr);

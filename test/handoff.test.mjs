@@ -47,7 +47,11 @@ test('redaction precedes all retained data and complete omission retrieval survi
   const text = (`😀é漢\\"\n${secret} hostile $(touch /never-created) `).repeat(1000);
   const items = [item('u0', 'user', 'safe public text'), { ...item('t0', 'tool', text, 'failed'), hiddenReasoning: 'HIDDEN_SENTINEL', credentials: 'CREDENTIAL_SENTINEL' }];
   const input = JSON.stringify(items);
-  const prepared = await prepareHandoff({ directory, source: { ...source, id: secret }, items, currentRequest: `continue ${secret}`, redactions: [secret], maxBytes: 1600 });
+  const options = { source: { ...source, id: secret }, currentRequest: `continue ${secret}`, redactions: [secret] };
+  // Room for the short item but not the long one, whatever the length of the archive folder.
+  const maxBytes = emptyBytes({ ...options, archive: { ...archive, directory } }) + 600;
+  const prepared = await prepareHandoff({ directory, ...options, items, maxBytes });
+  assert.deepEqual(prepared.includedItemIds, ['u0']);
   assert.deepEqual(prepared.omittedItemIds, ['t0']);
   assert.equal(JSON.stringify(items), input);
   assert.ok(!prepared.prompt.includes(secret));
