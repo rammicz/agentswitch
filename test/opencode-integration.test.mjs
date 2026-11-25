@@ -14,6 +14,7 @@ import { parseHandoffPrompt } from '../dist/handoff.js';
 import { listArchive } from '../dist/archive.js';
 import { tempDir } from './fixtures/temp.mjs';
 import { scaled } from './fixtures/timeouts.mjs';
+import { open } from './fixtures/picker-actions.mjs';
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(target='opencode') {
@@ -27,8 +28,7 @@ async function setup(target='opencode') {
 }
 function pty(f,actions,args=[],size={rows:60,columns:210}) {const result=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args,...size}),timeout:scaled(300_000),maxBuffer:8*1024*1024});assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout)[0];}
 const needle={opencode:'OpenCode public',codex:'Codex fixture',claude:'Claude fixture'};
-// Enter is ignored while a search runs, so wait for the typed query's echo: the first "Enter preview" after it shows that query's results.
-const select=source=>[{wait:'Enter preview'},{send:needle[source]},{wait:'Search: '+needle[source]},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
+const select=source=>[{wait:'Enter preview'},...open(needle[source])];
 const target=agent=>Array.from({length:['codex','claude','opencode'].indexOf(agent)},(_,i)=>[{send:'\x1b[C'},{wait:'['+['claude','opencode'][i]+']'}]).flat();
 const request=[{send:'c'},{wait:'Current request (sent separately'},{send:'\x15--literal $(touch sentinel); `echo no` NEEDLE_SECRET\r'},{wait:'Current request  --literal'}];
 const redact=[{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions  1'}];
@@ -136,13 +136,13 @@ test('complete OpenCode history shows no partial-history line',async()=>{
 test('OpenCode source with only unreadable parts refuses before archive, journal or launch',async()=>{
  const f=await setup('codex');pty(f,[...select('opencode'),{send:'\x03'}]);
  const db=new DatabaseSync(f.path);db.prepare('UPDATE part SET data=?').run(JSON.stringify({type:'future-public-shape',text:'UNCLASSIFIED_PUBLIC_TEXT'}));db.close();
- const result=pty(f,[{wait:'Enter preview'},{send:'OpenCode synthetic'},{wait:'Search: OpenCode synthetic'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\r'},{wait:'no readable items'},{send:'\x03'}]);
+ const result=pty(f,[{wait:'Enter preview'},...open('OpenCode synthetic'),{send:'\r'},{wait:'no readable items'},{send:'\x03'}]);
  assert.equal(result.restored,true);assert.match(result.output,/Selected public history is incomplete/);assert.doesNotMatch(result.output,/UNCLASSIFIED_PUBLIC_TEXT/);
  await assert.rejects(access(f.env.RUNTIME_LOG));await assert.rejects(access(join(f.state,'archives')));assert.equal((await records(f)).length,0);
 });
 test('a 2.x OpenCode session is offered only a fresh handoff, even to OpenCode',async()=>{
  const f=await setup('opencode');f.env.OPENCODE_DB=await fixtureV2(join(f.root,'opencode2','opencode.db'),f.cwd);
- const result=pty(f,[{wait:'Enter preview'},{send:'V2 public'},{wait:'Search: V2 public'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},...target('opencode'),{send:'\r'},{wait:'Mode  fresh handoff'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ const result=pty(f,[{wait:'Enter preview'},...open('V2 public'),...target('opencode'),{send:'\r'},{wait:'Mode  fresh handoff'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
  assert.equal(result.restored,true);assert.doesNotMatch(result.output,/PRIVATE_/);
  const [launch]=await launches(f);assert.ok(launch.args[1].startsWith('--prompt='));assert.ok(!launch.args.some(arg=>arg.startsWith('--session')));
  const prompt=parseHandoffPrompt(launch.args[1].slice('--prompt='.length));assert.deepEqual(prompt.history.map(item=>item.text).slice(0,3),['V2 public question','Part one','Tool output']);

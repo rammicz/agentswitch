@@ -9,6 +9,7 @@ import { entry, encode, ids as claudeIds } from './fixtures/claude/native.mjs';
 import { tempDir } from './fixtures/temp.mjs';
 import { stopHeartbeatChild } from './fixtures/heartbeat.mjs';
 import { assertMissing, scaled } from './fixtures/timeouts.mjs';
+import { open, search } from './fixtures/picker-actions.mjs';
 
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
@@ -35,8 +36,7 @@ function pty(f,actions,args=[],terminal={}) {
  assert.equal(child.status,0,`PTY driver exited status=${child.status}; signal=${child.signal??'none'}\n${child.stderr}`);return JSON.parse(child.stdout);
 }
 const list=[{wait:'Enter preview'}];
-// Enter is ignored while a search runs, so wait for the typed query's echo: the first "Enter preview" after it shows that query's results.
-const select=(provider,text=provider==='codex'?'public source':'Claude public')=>[{send:text},{wait:'Search: '+text},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
+const select=(provider)=>open(provider==='codex'?'public source':'Claude public');
 const redact=[{send:'x'},{wait:'Literal redaction'},{send:'NEEDLE_SECRET\r'},{wait:'Redactions  1'}];
 const request=[{send:'c'},{wait:'Current request (sent separately'},{send:'\u0015Do next NEEDLE_SECRET\r'},{wait:'Current request  Do next'}];
 const finish=[{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}];
@@ -146,7 +146,7 @@ test('deliberate recovery is a new confirmed fresh attempt; abort/delete removes
 
 test('real picker folder scope is exact; global message search defaults to the recorded source workspace',async()=>{
  const f=await setup();
- const [result]=pty(f,[...list,{send:'other-folder-only'},{wait:'Enter preview'},{send:'\t'},{wait:'Scope: global'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\u001b[C'},{wait:'[claude]'},...finish]);
+ const [result]=pty(f,[...list,...search('other-folder-only'),{send:'\t'},{wait:'Scope: global'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\u001b[C'},{wait:'[claude]'},...finish]);
  const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());assert.equal(launch.cwd,await realpath(f.other));
  const initial=result.output.slice(0,result.output.indexOf('other-folder-only'));assert.ok(!initial.includes(codexIds[1]));assert.ok(!initial.includes(codexIds[2]));
  assert.match(result.output,/No matching sessions/);assert.match(result.output,/Scope: global/);assert.equal(JSON.parse(launch.args.at(-1)).history[0].text,'other-folder-only');
@@ -155,7 +155,7 @@ test('real picker folder scope is exact; global message search defaults to the r
 test('source filter and missing recorded workspace require an explicit valid override',async()=>{
  const f=await setup('codex');const missing=join(f.root,'missing-workspace');
  await writeRollout(f.codex,rollout(missing,codexIds[3],[completed('UserMessage','u','missing source workspace',1)]));
- const [result]=pty(f,[...list,{send:'\u001b[C'},{wait:'Enter preview'},{send:'\t'},{wait:'Enter preview'},{send:'missing source workspace'},{wait:'Search: missing source workspace'},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'},{send:'\r'},{wait:'Workspace unavailable:'},{send:'w'},{wait:'Explicit workspace override'},{send:f.cwd+'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
+ const [result]=pty(f,[...list,{send:'\u001b[C'},{wait:'Enter preview'},{send:'\t'},{wait:'Enter preview'},...open('missing source workspace'),{send:'\r'},{wait:'Workspace unavailable:'},{send:'w'},{wait:'Explicit workspace override'},{send:f.cwd+'\r'},{wait:'Exact current request'},{send:'\r'},{wait:'READY'},{send:'quit\n'},{wait:'uncertain — process exited'}]);
  assert.match(result.output,/Agent: codex/);const launch=JSON.parse((await readFile(f.env.RUNTIME_LOG,'utf8')).trim());assert.equal(launch.cwd,await realpath(f.cwd));assert.ok(launch.args.includes(codexIds[3]));
 });
 

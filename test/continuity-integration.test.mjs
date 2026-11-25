@@ -10,6 +10,7 @@ import { digest, TransferJournal } from '../dist/transfer-journal.js';
 import { DEFAULT_CURRENT_REQUEST, parseHandoffPrompt } from '../dist/handoff.js';
 import { tempDir } from './fixtures/temp.mjs';
 import { scaled } from './fixtures/timeouts.mjs';
+import { open } from './fixtures/picker-actions.mjs';
 const repo=resolve('.');
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
 async function setup(mode='valid') {
@@ -24,8 +25,7 @@ function pty(f,actions,args=[]) {
  const result=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions,args}),timeout:scaled(300_000),maxBuffer:8*1024*1024});
  assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout)[0];
 }
-// Enter is ignored while a search runs, so wait for the typed query's echo: the first "Enter preview" after it shows that query's results.
-const select=(text)=>[{wait:'Enter preview'},{send:text},{wait:'Search: '+text},{wait:'Enter preview'},{send:'\r'},{wait:'Enter choose target'},{send:'\r'},{wait:'C edit request'}];
+const select=(text)=>[{wait:'Enter preview'},...open(text)];
 const confirm=[{send:'\r'},{wait:'Exact initial user prompt'},{send:'\r'},{wait:'READY'},{send:'quit\n'}];
 async function record(f) {const journal=await TransferJournal.open(join(f.state,'transfers'));try{return journal.list();}finally{journal.close();}}
 async function switchToB(f) {

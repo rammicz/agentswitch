@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { completed, ids, rollout, writeRollout } from './fixtures/codex/native.mjs';
 import { tempDir } from './fixtures/temp.mjs';
 import { scaled } from './fixtures/timeouts.mjs';
+import { search } from './fixtures/picker-actions.mjs';
 
 const execute = (program, args, options = {}) => {
   const result = spawnSync(program, args, { encoding: 'utf8', timeout: scaled(75_000), ...options });
@@ -93,8 +94,8 @@ process.once('beforeExit', () => {
 await import(${JSON.stringify(pathToFileURL(cli).href)});
 `);
   try {
-    // Waits match visible text (the driver drops colour); the query echo shows the typed text reached the search.
-    driver([{ wait: 'Enter preview' }, { send: 'Windows fixture' }, { wait: 'Search: Windows fixture' }, { wait: 'Enter preview' }, { send: '\r' },
+    // Waits match visible text (the driver drops colour).
+    driver([{ wait: 'Enter preview' }, ...search('Windows fixture'), { send: '\r' },
       { wait: 'Enter choose target' }, { send: '\r' }, { wait: '[codex]' },
       { send: '\x1b[C' }, { wait: '[claude]' }, { send: '\r' }, { wait: 'Enter confirm continuation' },
       { send: '\r' }, { wait: 'READY' }, { send: 'quit\r' }, { wait: 'uncertain' }, { wait: 'CONSOLE_RESTORED' }],
