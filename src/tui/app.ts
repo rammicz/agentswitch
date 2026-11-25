@@ -239,41 +239,42 @@ function lastUsed(timestamp: string, now: number): string {
   return `${Math.floor(minutes / 525_600)}y ago`;
 }
 
-/** Side by side, the details pane keeps at least this many cells; the list takes the rest it needs. */
-const minimumDetailWidth = 40;
+// The widest list row each search result set needs (marker, agent, title, arrow, then the widest age, 8 cells), measured
+// once per set so that a clock redraw neither remeasures nor resizes it.
+const neededWidths = new WeakMap<readonly SessionHit[], { text: string; width: number }>();
 function sessionList(hits: readonly SessionHit[], selected: number, text: string, width: number, height: number,
   details: readonly string[], color: boolean): string[] {
   const sideBySide = selected >= 0 && width >= 96 && height >= 4;
   const detailRows = selected < 0 ? 0 : sideBySide ? height : height >= 8 ? Math.max(5, Math.floor(height * 0.47)) : 0;
   const listRows = Math.max(1, sideBySide ? height : height - detailRows - (detailRows ? 1 : 0));
   const now = Date.now();
-  const age = (hit: SessionHit) => lastUsed(hit.lastUsedAt ?? hit.updatedAt, now);
-  // Side by side, the list widens to fit its rows (marker, agent, title, age) while the details keep a readable width.
-  let listWidth = width;
-  if (sideBySide) {
-    const least = Math.floor(width * 0.43), most = Math.max(least, width - 3 - minimumDetailWidth);
-    listWidth = least;
-    for (const hit of hits) {
-      if (listWidth >= most) break;
-      listWidth = Math.max(listWidth, Math.min(most, 3 + Math.max(6, hit.agent.length) + cellCount(searchResultLabel(hit, text)) + (hit.subagentCount ? 3 : 0) + 2 + cellCount(age(hit))));
-    }
+  const ageOf = (hit: SessionHit) => lastUsed(hit.lastUsedAt ?? hit.updatedAt, now);
+  const prefixOf = (hit: SessionHit, marker: string) => `${marker} ${hit.agent.padEnd(6)} `;
+  const childrenOf = (hit: SessionHit) => hit.subagentCount ? '  →' : '';
+  let needed = neededWidths.get(hits);
+  if (needed?.text !== text) {
+    needed = { text, width: hits.reduce((most, hit) => Math.max(most, cellCount(prefixOf(hit, ' ') + searchResultLabel(hit, text) + childrenOf(hit))), 0) + 2 + 8 };
+    neededWidths.set(hits, needed);
   }
+  // Side by side, the list widens to fit its rows while the details pane keeps at least 40 cells.
+  const least = Math.floor(width * 0.43);
+  const listWidth = sideBySide ? Math.min(Math.max(least, width - 43), Math.max(least, needed.width)) : width;
   const detailWidth = sideBySide ? width - listWidth - 3 : width;
   const start = Math.max(0, selected - listRows + 1);
   // Each row fills listWidth: marker, agent, title, then the age right-aligned.
   const list = hits.slice(start, start + listRows).map((hit, i) => {
     const chosen = start + i === selected;
     const paint = (part: string, ...tones: Tone[]) => styled(part, chosen ? ['selectedBg', ...tones] : tones, color);
-    const shownAge = listWidth >= 25 ? age(hit) : '';
+    const age = listWidth >= 25 ? ageOf(hit) : '';
     const marker = chosen ? '›' : hit.subagent ? '↳' : ' ';
-    const children = hit.subagentCount ? '  →' : '';
-    const prefix = `${marker} ${hit.agent.padEnd(6)} `;
-    const label = clipPanel(prefix + searchResultLabel(hit, text), Math.max(1, listWidth - (shownAge ? cellCount(shownAge) + 2 : 0) - cellCount(children)));
-    const pad = ' '.repeat(Math.max(0, listWidth - cellCount(label + children) - cellCount(shownAge)));
+    const children = childrenOf(hit);
+    const prefix = prefixOf(hit, marker);
+    const label = clipPanel(prefix + searchResultLabel(hit, text), Math.max(1, listWidth - (age ? cellCount(age) + 2 : 0) - cellCount(children)));
+    const pad = ' '.repeat(Math.max(0, listWidth - cellCount(label + children) - cellCount(age)));
     const title = label.startsWith(prefix)
       ? paint(`${marker} `, chosen ? 'accent' : 'muted') + paint(`${hit.agent.padEnd(6)} `, hit.agent) + paint(label.slice(prefix.length))
       : paint(label);
-    return title + paint(children, 'muted') + paint(pad) + paint(shownAge, 'muted');
+    return title + paint(children, 'muted') + paint(pad) + paint(age, 'muted');
   });
   if (!detailRows) return list;
   const hit = hits[selected]!;
@@ -443,8 +444,8 @@ export async function runPicker<Plan>(options: PickerOptions<Plan>): Promise<voi
         : [styled(clipPanel(busy ? progress : 'No matching sessions. Clear the search or change scope.', width), 'muted', color)];
       const back: Hint = parents.length ? ['←', 'back'] : ['Esc', 'quit'];
       // Only keys that do something: with no results there is nothing to select or preview.
-      footer = !hits.length ? [...(query.text ? [['Ctrl+U', 'clear search'] as const] : []), back]
-        : selected < 0 ? [['↓', 'results'], back] : [['↑↓', 'select'], ['Enter', 'preview'], back];
+      footer = hits.length ? selected < 0 ? [['↓', 'results'], back] : [['↑↓', 'select'], ['Enter', 'preview'], back]
+        : query.text ? [['Ctrl+U', 'clear search'], back] : [back];
       if (busy) footer = hits.length ? [['↑↓', 'select'], ['Enter', 'open session'], back, ['', progress]] : [back];
     } else if (stage === 'preview') {
       const inputs = [picked, items, width, color, expandTools, query.text];
