@@ -27,4 +27,11 @@ if(process.env.CLI_CRASH_POINT==='spawn-before-pid') {
  };
 }
 
+if(process.env.CLI_WRITE_LOG) {
+ // Record the bytes this process hands to its terminal, before the terminal's output processing (ONLCR) sees them.
+ const {appendFileSync}=await import('node:fs');
+ const write=process.stdout.write.bind(process.stdout);
+ process.stdout.write=(chunk,...rest)=>{appendFileSync(process.env.CLI_WRITE_LOG,chunk);return write(chunk,...rest);};
+}
+
 await import(process.env.CLI_ENTRY_MODULE??'../../dist/cli.js');

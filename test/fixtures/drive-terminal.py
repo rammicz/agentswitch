@@ -1,6 +1,7 @@
 import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess
 import re
 from pty_wait import bound,missing
+from console_text import line_ends
 WAIT=20
 # Markers match visible text; frames and output keep their colour (SGR) sequences for colour assertions.
 SGR=re.compile(r'\x1b\[[0-9;]*m')
@@ -62,7 +63,7 @@ def main():
   p.wait(timeout=bound(WAIT))
   read_until(timeout=.1)
   after=termios.tcgetattr(slave)
-  print(json.dumps({'frames':frames,'output':output,'code':p.returncode,'restored':before==after}))
+  print(json.dumps({'frames':[line_ends(frame) for frame in frames],'output':line_ends(output),'code':p.returncode,'restored':before==after}))
  finally:
   if p.poll() is None: p.kill();p.wait()
   os.close(master);os.close(slave)

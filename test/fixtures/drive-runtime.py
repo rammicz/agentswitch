@@ -1,6 +1,7 @@
 """Controlled foreground process group; never signals the caller's terminal group."""
 import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess
 from pty_wait import bound,missing
+from console_text import line_ends
 
 def main():
  # An interrupted test run sends SIGTERM; exiting through finally still kills the session this driver created.
@@ -52,7 +53,7 @@ def main():
   if not sampled_while_alive:raise Exception('Session leader exited during terminal sampling')
   os.write(ack_write,b'T');os.close(ack_write);ack_write=None
   child.wait(timeout=bound(20))
-  print(json.dumps({'output':output,'code':child.returncode,'restored':before==after,'sampledWhileAlive':sampled_while_alive}))
+  print(json.dumps({'output':line_ends(output),'code':child.returncode,'restored':before==after,'sampledWhileAlive':sampled_while_alive}))
  finally:
   if ack_write is not None:os.close(ack_write)
   # This process owns the synthetic group, including a failed test's fake child.

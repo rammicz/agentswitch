@@ -70,8 +70,8 @@ test('main sessions hide subagents until opened by parent or enabled with F3',as
  assert.equal(result.restored,true);
 });
 
-for(const [source,target]of [['codex','claude'],['claude','codex']]) test(`real CLI ${source}→${target}: exact consented redacted payload, cwd, disclosure and unchanged native bytes`,async()=>{
- const f=await setup(target);
+for(const [source,target]of [['codex','claude'],['claude','codex']]) test(`real CLI ${source}→${target}: exact consented redacted payload, cwd, disclosure and unchanged native bytes`,async t=>{
+ const f=await setup(target);f.env.CLI_WRITE_LOG=join(f.root,'cli-writes.log');
  // The review screen is scrolled to its end: a long archive folder makes the exact prompt taller than the screen.
  const actions=[...list,...select(source),...(target==='claude'?[{send:'\u001b[C'},{wait:'[claude]'}]:[]),...request,...redact,...finish.slice(0,2),{collectPreview:true},...finish.slice(2)];
  const [result]=pty(f,actions);
@@ -83,6 +83,11 @@ for(const [source,target]of [['codex','claude'],['claude','codex']]) test(`real 
  assert.equal(parsed.currentRequest,'Do next [REDACTED]');assert.equal(parsed.history.length,2);assert.match(parsed.history[0].text,/\[REDACTED\]/);assert.doesNotMatch(prompt,/NEEDLE_SECRET/);
  const begin=result.preview.indexOf('BEGIN EXACT PROMPT JSON STRING'),end=result.preview.indexOf('END EXACT PROMPT JSON STRING');
  assert.ok(begin>=0&&end>begin,'the review screen shows the whole encoded prompt');
+ // The picker ends each row with a bare LF; any CR before it comes from the terminal's output processing, which a
+ // terminal shows as the same row end (macOS CI with Node 22.15.0 delivered one row as "\r\r\n").
+ const written=await readFile(f.env.CLI_WRITE_LOG,'utf8'),picker=written.slice(0,written.lastIndexOf('Enter confirm continuation'));
+ assert.ok(picker.includes('BEGIN EXACT PROMPT JSON STRING'));assert.doesNotMatch(picker,/\r/u,'the picker writes no CR');
+ t.diagnostic(`PTY line ends with a doubled CR: ${result.strayCarriageReturns}`);
  const encoded=result.preview.slice(begin+1,end).join('');let decoded;
  // A failure shows the encoded rows around the position JSON.parse names, as code points.
  try{decoded=JSON.parse(encoded);}catch(error){const at=Number(/position (\d+)/.exec(error.message)?.[1]??0);throw new Error(`${error.message}; around it: ${JSON.stringify(encoded.slice(Math.max(0,at-80),at+80))}; rows: ${JSON.stringify(result.preview)}`);}
@@ -253,4 +258,8 @@ test('a CLI marker that never appears fails within its bound and shows the last 
  const child=spawnSync('python3',['test/fixtures/drive-integration.py'],{encoding:'utf8',timeout:scaled(60_000),
   input:JSON.stringify({node:process.execPath,runner:join(repo,'test/fixtures/integration-runner.mjs'),cwd:f.cwd,env:f.env,actions:[...list,{wait:'NEVER_SHOWN',timeout:1}]})});
  assertMissing(child,'NEVER_SHOWN',1,/Enter preview/);
+});
+test('PTY driver reads review rows as a terminal shows them, whatever CRs precede a line feed',()=>{
+ const result=spawnSync('python3',['test/fixtures/review_rows_test.py'],{encoding:'utf8',timeout:scaled(30_000)});
+ assert.equal(result.status,0,result.stderr);
 });

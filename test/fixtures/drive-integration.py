@@ -1,6 +1,7 @@
 """Real CLI entry in isolated foreground PTYs, with only synthetic providers."""
 import os,sys,json,pty,select,time,termios,fcntl,struct,signal,subprocess,codecs
 from pty_wait import bound,missing
+from console_text import line_ends,rows
 WAIT=45 # A CLI screen can follow provider discovery and a capability probe.
 
 def until(state,marker,timeout=WAIT,retained=False):
@@ -15,6 +16,12 @@ def until(state,marker,timeout=WAIT,retained=False):
    state['output']+=state['decoder'].decode(data)
   elif state['child'].poll() is not None:break
  raise missing(marker,state['output'],timeout)
+
+def review_body(output):
+ # The body rows of the last review screen: skip the heading, the blank rows around the body and the left margin.
+ screen=rows(output.rsplit('\x1b[2J\x1b[H',1)[-1])
+ footer=next(i for i,row in enumerate(screen) if 'Enter confirm continuation' in row)
+ return [row[1:] for row in screen[2:footer-1]]
 
 def remember_provider(state,env):
  # The private fake-provider log is controlled by this test. Resolve ownership
@@ -72,10 +79,7 @@ def main():
     remember_provider(state,config['env']);state['child'].kill();state['child'].wait(timeout=bound(20))
    if 'collectPreview' in action:
     until(state,'Enter confirm continuation')
-    def body():
-     rows=state['output'].rsplit('\x1b[2J\x1b[H',1)[-1].split('\r\n')
-     footer=next(i for i,row in enumerate(rows) if 'Enter confirm continuation' in row)
-     return [row[1:] for row in rows[2:footer-1]] # Skip the heading, the blank lines around the body and the left margin.
+    def body():return review_body(state['output'])
     state['preview']=body()
     for step in range(1000):
      if any('END EXACT PROMPT JSON STRING' in row for row in body()):break
@@ -107,8 +111,8 @@ def main():
    if state['child'].poll() is None:
     until(state,'CLI_DONE');after=termios.tcgetattr(state['slave']);alive=state['child'].poll() is None
     os.write(state['ack'],b'T');os.close(state['ack']);state['ack']=None;state['child'].wait(timeout=bound(20))
-    results.append({'output':state['output'],'code':state['child'].returncode,'restored':after==state['before'],'sampledWhileAlive':alive,'preview':state['preview'],'liveChildChecks':state.get('liveChildChecks',[])})
-   else:results.append({'output':state['output'],'code':state['child'].returncode,'liveChildChecks':state.get('liveChildChecks',[])})
+    results.append({'output':line_ends(state['output']),'strayCarriageReturns':state['output'].count('\r\r\n'),'code':state['child'].returncode,'restored':after==state['before'],'sampledWhileAlive':alive,'preview':state['preview'],'liveChildChecks':state.get('liveChildChecks',[])})
+   else:results.append({'output':line_ends(state['output']),'code':state['child'].returncode,'liveChildChecks':state.get('liveChildChecks',[])})
   print(json.dumps(results))
  finally:
   cleanup_errors=[]
